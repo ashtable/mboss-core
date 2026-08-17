@@ -7,9 +7,12 @@ const KEY_A = 'a'.repeat(64);
 const KEY_B = 'b'.repeat(64);
 
 /**
- * Returns the message of the error `fn` throws. Asserting on the message needs this rather than
- * `toThrow(expect.not.stringContaining(…))`, which matches the asymmetric matcher against the
- * Error object rather than its message and so can never fail.
+ * Returns the message of the error `fn` throws.
+ * Asserting on the message needs this rather than
+ * `toThrow(expect.not.stringContaining(…))`,
+ * which matches the asymmetric matcher against
+ * the Error object rather than its message and so
+ * can never fail.
  */
 function messageThrownBy(fn: () => unknown): string {
   try {
@@ -61,8 +64,11 @@ describe('parseKeyRing', () => {
 
   it.each([
     ['a duplicate kid', `k1:${KEY_A},k1:${KEY_B}`],
-    // A 64-hex string is a valid kid, so a transposed entry makes the key itself the kid — the
-    // one input that could put the secret into a message headed for deploy logs.
+    // A 64-hex string is a valid kid, so a
+    // transposed entry makes the key itself the
+    // kid — the one input that could put the
+    // secret into a message headed for deploy
+    // logs.
     ['a kid and key written the wrong way round', `${KEY_A}:k1`],
   ])('never puts key material in the error message, given %s', (_why, env) => {
     expect(() => parseKeyRing(env)).toThrow();
@@ -75,8 +81,10 @@ describe('mint and verify round trip', () => {
   const IAT = 1_755_212_345;
   const EXP = IAT + 3600;
 
-  // The fixtures use fixed timestamps, so the clock is pinned to them; otherwise the real clock
-  // runs past `exp` and these tokens verify as expired rather than as round trips.
+  // The fixtures use fixed timestamps, so the
+  // clock is pinned to them; otherwise the real
+  // clock runs past `exp` and these tokens verify
+  // as expired rather than as round trips.
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(IAT * 1000);
@@ -86,11 +94,23 @@ describe('mint and verify round trip', () => {
   });
 
   it('carries a manage token through unchanged', () => {
-    const token = mintLink(ring, { t: 'wl.manage', sub: 'ckv1', tv: 1, iat: IAT });
+    const token = mintLink(ring, {
+      t: 'wl.manage',
+      sub: 'ckv1',
+      tv: 1,
+      iat: IAT,
+    });
     const result = verifyLink(ring, token, 'wl.manage');
     expect(result).toEqual({
       ok: true,
-      payload: { v: 1, t: 'wl.manage', kid: 'k1', sub: 'ckv1', tv: 1, iat: IAT },
+      payload: {
+        v: 1,
+        t: 'wl.manage',
+        kid: 'k1',
+        sub: 'ckv1',
+        tv: 1,
+        iat: IAT,
+      },
     });
   });
 
@@ -104,17 +124,34 @@ describe('mint and verify round trip', () => {
       exp: EXP,
     } as const;
     const result = verifyLink(ring, mintLink(ring, claims), 'app.form');
-    expect(result).toEqual({ ok: true, payload: { v: 1, kid: 'k1', ...claims } });
+    expect(result).toEqual({
+      ok: true,
+      payload: { v: 1, kid: 'k1', ...claims },
+    });
   });
 
   it('carries an artifact token through unchanged', () => {
-    const claims = { t: 'app.artifact', art: 'art1', sub: 'ckv1', iat: IAT, exp: EXP } as const;
+    const claims = {
+      t: 'app.artifact',
+      art: 'art1',
+      sub: 'ckv1',
+      iat: IAT,
+      exp: EXP,
+    } as const;
     const result = verifyLink(ring, mintLink(ring, claims), 'app.artifact');
-    expect(result).toEqual({ ok: true, payload: { v: 1, kid: 'k1', ...claims } });
+    expect(result).toEqual({
+      ok: true,
+      payload: { v: 1, kid: 'k1', ...claims },
+    });
   });
 
   it('mints two base64url halves separated by a single dot, the second 32 bytes', () => {
-    const token = mintLink(ring, { t: 'wl.manage', sub: 'ckv1', tv: 1, iat: IAT });
+    const token = mintLink(ring, {
+      t: 'wl.manage',
+      sub: 'ckv1',
+      tv: 1,
+      iat: IAT,
+    });
     expect(token).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     expect(token.split('.')).toHaveLength(2);
     expect(Buffer.from(token.split('.')[1]!, 'base64url')).toHaveLength(32);
@@ -127,7 +164,12 @@ describe('mint and verify round trip', () => {
   });
 
   it('starts the payload with the version claim', () => {
-    const token = mintLink(ring, { t: 'wl.manage', sub: 'ckv1', tv: 1, iat: IAT });
+    const token = mintLink(ring, {
+      t: 'wl.manage',
+      sub: 'ckv1',
+      tv: 1,
+      iat: IAT,
+    });
     expect(token.startsWith('eyJ2Ijox')).toBe(true);
     expect(Buffer.from('eyJ2Ijox', 'base64url').toString()).toBe('{"v":1');
   });
@@ -138,10 +180,26 @@ describe('minting claims that could never verify', () => {
   const IAT = 1_755_212_345;
   const EXP = IAT + 3600;
   const manage = { t: 'wl.manage', sub: 'ckv1', tv: 1, iat: IAT } as const;
-  const form = { t: 'app.form', run: 'r', node: 'n', sub: 'ckv1', iat: IAT, exp: EXP } as const;
-  const artifact = { t: 'app.artifact', art: 'a', sub: 'ckv1', iat: IAT, exp: EXP } as const;
+  const form = {
+    t: 'app.form',
+    run: 'r',
+    node: 'n',
+    sub: 'ckv1',
+    iat: IAT,
+    exp: EXP,
+  } as const;
+  const artifact = {
+    t: 'app.artifact',
+    art: 'a',
+    sub: 'ckv1',
+    iat: IAT,
+    exp: EXP,
+  } as const;
 
-  /** Each case pairs a description with the claim the error is expected to name. */
+  /**
+   * Each case pairs a description with the claim
+   * the error is expected to name.
+   */
   const cases: [string, string, LinkClaims][] = [
     [
       'a fractional iat, which is what a forgotten Math.floor leaves',
@@ -154,11 +212,22 @@ describe('minting claims that could never verify', () => {
     ['an infinite tv', 'tv', { ...manage, tv: Infinity }],
     ['a fractional exp on a form link', 'exp', { ...form, exp: EXP + 0.5 }],
     ['an infinite exp on a form link', 'exp', { ...form, exp: Infinity }],
-    ['a fractional exp on an artifact link', 'exp', { ...artifact, exp: EXP + 0.5 }],
-    ['an infinite exp on an artifact link', 'exp', { ...artifact, exp: Infinity }],
-    // The types rule this one out at every call site in this repo, but it is the case with the
-    // worst outcome if it ever gets through: a non-numeric exp compares false against the clock,
-    // so a link that should last 30 days would last forever.
+    [
+      'a fractional exp on an artifact link',
+      'exp',
+      { ...artifact, exp: EXP + 0.5 },
+    ],
+    [
+      'an infinite exp on an artifact link',
+      'exp',
+      { ...artifact, exp: Infinity },
+    ],
+    // The types rule this one out at every call
+    // site in this repo, but it is the case with
+    // the worst outcome if it ever gets through:
+    // a non-numeric exp compares false against
+    // the clock, so a link that should last 30
+    // days would last forever.
     [
       'an exp that is not a number at all',
       'exp',
@@ -172,7 +241,9 @@ describe('minting claims that could never verify', () => {
   });
 
   it('still mints the same claims once they are whole numbers', () => {
-    expect(() => mintLink(ring, { ...manage, iat: Math.floor(IAT + 0.5) })).not.toThrow();
+    expect(() =>
+      mintLink(ring, { ...manage, iat: Math.floor(IAT + 0.5) }),
+    ).not.toThrow();
   });
 });
 
@@ -181,8 +252,10 @@ describe('rejecting tampered and mismatched tokens', () => {
   const IAT = 1_755_212_345;
   const manage = { t: 'wl.manage', sub: 'ckv1', tv: 1, iat: IAT } as const;
 
-  // Pinned so that the form and artifact fixtures below are unexpired, isolating the reason under
-  // test: expiry is checked before type, so a stale clock would report 'expired' instead.
+  // Pinned so that the form and artifact fixtures
+  // below are unexpired, isolating the reason
+  // under test: expiry is checked before type, so
+  // a stale clock would report 'expired' instead.
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(IAT * 1000);
@@ -205,7 +278,10 @@ describe('rejecting tampered and mismatched tokens', () => {
     const one = mintLink(ring, { ...manage, tv: 1 });
     const two = mintLink(ring, { ...manage, tv: 2 });
     const forged = `${two.split('.')[0]}.${one.split('.')[1]}`;
-    expect(verifyLink(ring, forged, 'wl.manage')).toEqual({ ok: false, reason: 'signature' });
+    expect(verifyLink(ring, forged, 'wl.manage')).toEqual({
+      ok: false,
+      reason: 'signature',
+    });
   });
 
   it('rejects a token signed with a different secret under the same kid', () => {
@@ -226,15 +302,36 @@ describe('rejecting tampered and mismatched tokens', () => {
 
   it.each([
     ['wl.manage', { t: 'wl.manage', sub: 'ckv1', tv: 1, iat: IAT }],
-    ['app.form', { t: 'app.form', run: 'r', node: 'n', sub: 'ckv1', iat: IAT, exp: IAT + 60 }],
-    ['app.artifact', { t: 'app.artifact', art: 'a', sub: 'ckv1', iat: IAT, exp: IAT + 60 }],
-  ] as const)('rejects a %s token asked for as either other type', (type, claims) => {
-    const token = mintLink(ring, claims);
-    const others = (['wl.manage', 'app.form', 'app.artifact'] as const).filter((t) => t !== type);
-    for (const other of others) {
-      expect(verifyLink(ring, token, other)).toEqual({ ok: false, reason: 'wrong-type' });
-    }
-  });
+    [
+      'app.form',
+      {
+        t: 'app.form',
+        run: 'r',
+        node: 'n',
+        sub: 'ckv1',
+        iat: IAT,
+        exp: IAT + 60,
+      },
+    ],
+    [
+      'app.artifact',
+      { t: 'app.artifact', art: 'a', sub: 'ckv1', iat: IAT, exp: IAT + 60 },
+    ],
+  ] as const)(
+    'rejects a %s token asked for as either other type',
+    (type, claims) => {
+      const token = mintLink(ring, claims);
+      const others = (
+        ['wl.manage', 'app.form', 'app.artifact'] as const
+      ).filter((t) => t !== type);
+      for (const other of others) {
+        expect(verifyLink(ring, token, other)).toEqual({
+          ok: false,
+          reason: 'wrong-type',
+        });
+      }
+    },
+  );
 });
 
 describe('the token version claim', () => {
@@ -242,8 +339,18 @@ describe('the token version claim', () => {
   const IAT = 1_755_212_345;
 
   it('carries the version faithfully so the caller can compare it against the subscriber', () => {
-    const first = mintLink(ring, { t: 'wl.manage', sub: 'ckv1', tv: 1, iat: IAT });
-    const seventh = mintLink(ring, { t: 'wl.manage', sub: 'ckv1', tv: 7, iat: IAT });
+    const first = mintLink(ring, {
+      t: 'wl.manage',
+      sub: 'ckv1',
+      tv: 1,
+      iat: IAT,
+    });
+    const seventh = mintLink(ring, {
+      t: 'wl.manage',
+      sub: 'ckv1',
+      tv: 7,
+      iat: IAT,
+    });
     expect(first).not.toBe(seventh);
 
     const a = verifyLink(ring, first, 'wl.manage');
@@ -259,12 +366,18 @@ describe('the token version claim', () => {
       'app.form',
     );
     if (!result.ok) {
-      // Assigned this way round on purpose. Assigning the union to a 'wrong-tv' variable would
-      // error whether or not the union holds that member, so the directive would be satisfied
-      // forever and could never notice the union growing.
+      // Assigned this way round on purpose.
+      // Assigning the union to a 'wrong-tv'
+      // variable would error whether or not the
+      // union holds that member, so the directive
+      // would be satisfied forever and could
+      // never notice the union growing.
       const notAReason = 'wrong-tv';
-      // @ts-expect-error the reason union has no 'wrong-tv': comparing against the stored version
-      // is the caller's job, since this module has no idea what that version currently is.
+      // @ts-expect-error the reason union has no
+      // 'wrong-tv': comparing against the stored
+      // version is the caller's job, since this
+      // module has no idea what that version
+      // currently is.
       const reason: typeof result.reason = notAReason;
       void reason;
     }
@@ -280,30 +393,54 @@ describe('expiry', () => {
     vi.useRealTimers();
   });
 
-  /** Moves the clock to `at` (epoch seconds) and verifies the given token. */
-  function verifyAt(token: string, at: number, type: 'app.form' | 'app.artifact') {
+  /**
+   * Moves the clock to `at` (epoch seconds) and
+   * verifies the given token.
+   */
+  function verifyAt(
+    token: string,
+    at: number,
+    type: 'app.form' | 'app.artifact',
+  ) {
     vi.useFakeTimers();
     vi.setSystemTime(at * 1000);
     return verifyLink(ring, token, type);
   }
 
   it.each([
-    ['app.form', { t: 'app.form', run: 'r', node: 'n', sub: 'ckv1', iat: IAT, exp: EXP }],
-    ['app.artifact', { t: 'app.artifact', art: 'a', sub: 'ckv1', iat: IAT, exp: EXP }],
-  ] as const)('accepts a %s token up to and including its exp second', (type, claims) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(IAT * 1000);
-    const token = mintLink(ring, claims);
+    [
+      'app.form',
+      { t: 'app.form', run: 'r', node: 'n', sub: 'ckv1', iat: IAT, exp: EXP },
+    ],
+    [
+      'app.artifact',
+      { t: 'app.artifact', art: 'a', sub: 'ckv1', iat: IAT, exp: EXP },
+    ],
+  ] as const)(
+    'accepts a %s token up to and including its exp second',
+    (type, claims) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(IAT * 1000);
+      const token = mintLink(ring, claims);
 
-    expect(verifyAt(token, EXP - 1, type).ok).toBe(true);
-    expect(verifyAt(token, EXP, type).ok).toBe(true);
-    expect(verifyAt(token, EXP + 1, type)).toEqual({ ok: false, reason: 'expired' });
-  });
+      expect(verifyAt(token, EXP - 1, type).ok).toBe(true);
+      expect(verifyAt(token, EXP, type).ok).toBe(true);
+      expect(verifyAt(token, EXP + 1, type)).toEqual({
+        ok: false,
+        reason: 'expired',
+      });
+    },
+  );
 
   it('never expires a manage token, which carries no exp at all', () => {
     vi.useFakeTimers();
     vi.setSystemTime(IAT * 1000);
-    const token = mintLink(ring, { t: 'wl.manage', sub: 'ckv1', tv: 1, iat: IAT });
+    const token = mintLink(ring, {
+      t: 'wl.manage',
+      sub: 'ckv1',
+      tv: 1,
+      iat: IAT,
+    });
 
     vi.setSystemTime((IAT + 10 * 365 * 24 * 3600) * 1000);
     expect(verifyLink(ring, token, 'wl.manage').ok).toBe(true);
@@ -314,14 +451,22 @@ describe('malformed tokens', () => {
   const ring = parseKeyRing(`k1:${KEY_A}`);
   const IAT = 1_755_212_345;
 
-  /** Re-encodes an arbitrary claim object as the payload half, with a valid-length dummy signature. */
+  /**
+   * Re-encodes an arbitrary claim object as the
+   * payload half, with a valid-length dummy
+   * signature.
+   */
   function payloadToken(claims: unknown): string {
     const bytes = Buffer.from(JSON.stringify(claims), 'utf8');
     return `${bytes.toString('base64url')}.${Buffer.alloc(32).toString('base64url')}`;
   }
 
-  /** Re-spells base64url in the standard alphabet: the same bytes written a different way. */
-  const toStandardBase64 = (part: string): string => part.replace(/-/g, '+').replace(/_/g, '/');
+  /**
+   * Re-spells base64url in the standard alphabet:
+   * the same bytes written a different way.
+   */
+  const toStandardBase64 = (part: string): string =>
+    part.replace(/-/g, '+').replace(/_/g, '/');
 
   const cases: [string, string][] = [
     ['an empty string', ''],
@@ -338,20 +483,44 @@ describe('malformed tokens', () => {
     ['a payload that is JSON null', payloadToken(null)],
     [
       'an unknown format version',
-      payloadToken({ v: 2, t: 'wl.manage', kid: 'k1', sub: 's', tv: 1, iat: IAT }),
+      payloadToken({
+        v: 2,
+        t: 'wl.manage',
+        kid: 'k1',
+        sub: 's',
+        tv: 1,
+        iat: IAT,
+      }),
     ],
-    ['an unknown link type', payloadToken({ v: 1, t: 'nope', kid: 'k1', sub: 's', iat: IAT })],
+    [
+      'an unknown link type',
+      payloadToken({ v: 1, t: 'nope', kid: 'k1', sub: 's', iat: IAT }),
+    ],
     [
       'a manage payload with no tv',
       payloadToken({ v: 1, t: 'wl.manage', kid: 'k1', sub: 's', iat: IAT }),
     ],
     [
       'a tv that is a string',
-      payloadToken({ v: 1, t: 'wl.manage', kid: 'k1', sub: 's', tv: '1', iat: IAT }),
+      payloadToken({
+        v: 1,
+        t: 'wl.manage',
+        kid: 'k1',
+        sub: 's',
+        tv: '1',
+        iat: IAT,
+      }),
     ],
     [
       'an iat that is not an integer',
-      payloadToken({ v: 1, t: 'wl.manage', kid: 'k1', sub: 's', tv: 1, iat: 1.5 }),
+      payloadToken({
+        v: 1,
+        t: 'wl.manage',
+        kid: 'k1',
+        sub: 's',
+        tv: 1,
+        iat: 1.5,
+      }),
     ],
     [
       'a form payload with no run',
@@ -367,11 +536,21 @@ describe('malformed tokens', () => {
     ],
     [
       'a form payload with no node',
-      payloadToken({ v: 1, t: 'app.form', kid: 'k1', run: 'r', sub: 's', iat: IAT, exp: IAT + 60 }),
+      payloadToken({
+        v: 1,
+        t: 'app.form',
+        kid: 'k1',
+        run: 'r',
+        sub: 's',
+        iat: IAT,
+        exp: IAT + 60,
+      }),
     ],
     [
-      // Left unchecked this is the worst of the lot: 'never' compares false against the clock, so
-      // the token would outlive its expiry rather than fail closed.
+      // Left unchecked this is the worst of the
+      // lot: 'never' compares false against the
+      // clock, so the token would outlive its
+      // expiry rather than fail closed.
       'a form payload whose exp is a string',
       payloadToken({
         v: 1,
@@ -399,11 +578,26 @@ describe('malformed tokens', () => {
     ],
     [
       'an artifact payload with no art',
-      payloadToken({ v: 1, t: 'app.artifact', kid: 'k1', sub: 's', iat: IAT, exp: IAT + 60 }),
+      payloadToken({
+        v: 1,
+        t: 'app.artifact',
+        kid: 'k1',
+        sub: 's',
+        iat: IAT,
+        exp: IAT + 60,
+      }),
     ],
     [
       'an artifact payload whose exp is a string',
-      payloadToken({ v: 1, t: 'app.artifact', kid: 'k1', art: 'a', sub: 's', iat: IAT, exp: '1' }),
+      payloadToken({
+        v: 1,
+        t: 'app.artifact',
+        kid: 'k1',
+        art: 'a',
+        sub: 's',
+        iat: IAT,
+        exp: '1',
+      }),
     ],
     [
       'a kid that is not a string',
@@ -411,7 +605,14 @@ describe('malformed tokens', () => {
     ],
     [
       'a sub that is not a string',
-      payloadToken({ v: 1, t: 'wl.manage', kid: 'k1', sub: 1, tv: 1, iat: IAT }),
+      payloadToken({
+        v: 1,
+        t: 'wl.manage',
+        kid: 'k1',
+        sub: 1,
+        tv: 1,
+        iat: IAT,
+      }),
     ],
     [
       'a signature that is not 32 bytes',
@@ -420,7 +621,10 @@ describe('malformed tokens', () => {
   ];
 
   it.each(cases)('rejects %s', (_why, token) => {
-    expect(verifyLink(ring, token, 'wl.manage')).toEqual({ ok: false, reason: 'malformed' });
+    expect(verifyLink(ring, token, 'wl.manage')).toEqual({
+      ok: false,
+      reason: 'malformed',
+    });
   });
 
   it('never throws on any of them, whatever the input', () => {
@@ -430,7 +634,12 @@ describe('malformed tokens', () => {
   });
 
   it('rejects a payload half that is padded rather than canonical base64url', () => {
-    const token = mintLink(ring, { t: 'wl.manage', sub: 'ckv1', tv: 1, iat: IAT });
+    const token = mintLink(ring, {
+      t: 'wl.manage',
+      sub: 'ckv1',
+      tv: 1,
+      iat: IAT,
+    });
     const [payload, sig] = token.split('.') as [string, string];
     expect(verifyLink(ring, `${payload}=.${sig}`, 'wl.manage')).toEqual({
       ok: false,
@@ -438,27 +647,46 @@ describe('malformed tokens', () => {
     });
   });
 
-  // The two alphabets differ only in '-' and '_' (standard base64's '+' and '/'), and Node decodes
-  // both spellings to identical bytes. Each half gets its own case because a strict decoder applied
-  // to only one of them would still let the other token spelling through.
+  // The two alphabets differ only in '-' and '_'
+  // (standard base64's '+' and '/'), and Node
+  // decodes both spellings to identical bytes.
+  // Each half gets its own case because a strict
+  // decoder applied to only one of them would
+  // still let the other token spelling through.
 
   it('rejects a payload half spelled in the standard base64 alphabet', () => {
-    // The '~' is what forces a '-' into the encoding: base64url's two distinguishing characters
-    // never come out of encoding an ordinary alphanumeric id.
-    const token = mintLink(ring, { t: 'wl.manage', sub: 'ckv~1', tv: 1, iat: IAT });
+    // The '~' is what forces a '-' into the
+    // encoding: base64url's two distinguishing
+    // characters never come out of encoding an
+    // ordinary alphanumeric id.
+    const token = mintLink(ring, {
+      t: 'wl.manage',
+      sub: 'ckv~1',
+      tv: 1,
+      iat: IAT,
+    });
     const [payload, sig] = token.split('.') as [string, string];
     expect(payload).toMatch(/[-_]/);
-    expect(verifyLink(ring, `${toStandardBase64(payload)}.${sig}`, 'wl.manage')).toEqual({
+    expect(
+      verifyLink(ring, `${toStandardBase64(payload)}.${sig}`, 'wl.manage'),
+    ).toEqual({
       ok: false,
       reason: 'malformed',
     });
   });
 
   it('rejects a signature half spelled in the standard base64 alphabet', () => {
-    const token = mintLink(ring, { t: 'wl.manage', sub: 'ckv1', tv: 1, iat: IAT });
+    const token = mintLink(ring, {
+      t: 'wl.manage',
+      sub: 'ckv1',
+      tv: 1,
+      iat: IAT,
+    });
     const [payload, sig] = token.split('.') as [string, string];
     expect(sig).toMatch(/[-_]/);
-    expect(verifyLink(ring, `${payload}.${toStandardBase64(sig)}`, 'wl.manage')).toEqual({
+    expect(
+      verifyLink(ring, `${payload}.${toStandardBase64(sig)}`, 'wl.manage'),
+    ).toEqual({
       ok: false,
       reason: 'malformed',
     });
