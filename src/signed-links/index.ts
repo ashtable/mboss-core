@@ -93,8 +93,10 @@ export function parseKeyRing(env: string): LinkKeyRing {
     const hex = entry.slice(separator + 1).trim();
 
     if (!KID.test(kid)) throw new Error(`link key ring entry ${index} has a malformed kid`);
+    // Reported by position, not by kid: a 64-hex string is itself a valid kid, so an entry written
+    // the wrong way round would name the secret here and put it in whatever reads the boot logs.
     if (!KEY.test(hex))
-      throw new Error(`link key ring entry "${kid}" is not a 64-character hex key`);
+      throw new Error(`link key ring entry ${index} is not a 64-character hex key`);
     if (all.has(kid)) throw new Error(`link key ring has a duplicate kid "${kid}"`);
 
     const key = Buffer.from(hex, 'hex');
@@ -109,15 +111,32 @@ export function parseKeyRing(env: string): LinkKeyRing {
 }
 
 /**
+ * Rejects a numeric claim that `verifyLink` would refuse. Minting is the only place this mistake
+ * can still be pointed at its cause: a fractional `iat` (a forgotten `Math.floor`) or a non-finite
+ * `exp` mints a perfectly well-formed token that no service can ever accept, and the failure then
+ * surfaces somewhere else entirely as `malformed`, which reads like tampering rather than a bug at
+ * the call site.
+ */
+function requireInteger(claim: string, value: number): void {
+  if (!Number.isInteger(value)) {
+    throw new Error(`link claim "${claim}" must be an integer, got ${String(value)}`);
+  }
+}
+
+/**
  * Builds the payload with its keys in one fixed order per type, so minting the same claims twice
  * always produces byte-identical JSON and therefore an identical token. The switch is exhaustive
  * so that a fourth link type cannot be added without deciding its key order here.
  */
 function canonical(kid: string, claims: LinkClaims): LinkPayload {
+  requireInteger('iat', claims.iat);
+
   switch (claims.t) {
     case 'wl.manage':
+      requireInteger('tv', claims.tv);
       return { v: 1, t: 'wl.manage', kid, sub: claims.sub, tv: claims.tv, iat: claims.iat };
     case 'app.form':
+      requireInteger('exp', claims.exp);
       return {
         v: 1,
         t: 'app.form',
@@ -129,6 +148,7 @@ function canonical(kid: string, claims: LinkClaims): LinkPayload {
         exp: claims.exp,
       };
     case 'app.artifact':
+      requireInteger('exp', claims.exp);
       return {
         v: 1,
         t: 'app.artifact',

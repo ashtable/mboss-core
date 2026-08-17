@@ -1,9 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { LinkClaims } from './index.js';
 import { mintLink, parseKeyRing, verifyLink } from './index.js';
 
 const KEY_A = 'a'.repeat(64);
 const KEY_B = 'b'.repeat(64);
+
+/**
+ * Returns the message of the error `fn` throws. Asserting on the message needs this rather than
+ * `toThrow(expect.not.stringContaining(…))`, which matches the asymmetric matcher against the
+ * Error object rather than its message and so can never fail.
+ */
+function messageThrownBy(fn: () => unknown): string {
+  try {
+    fn();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return expect.fail('expected the call to throw, but it returned');
+}
 
 describe('parseKeyRing', () => {
   it('parses a single entry into an active key and a one-entry ring', () => {
@@ -39,14 +54,19 @@ describe('parseKeyRing', () => {
     ['a kid with punctuation', `k1:$$`],
     ['a duplicate kid', `k1:${KEY_A},k1:${KEY_B}`],
     ['a kid with a space in it', `bad kid:${KEY_A}`],
+    ['a kid and key written the wrong way round', `${KEY_A}:k1`],
   ])('throws on %s', (_why, env) => {
     expect(() => parseKeyRing(env)).toThrow();
   });
 
-  it('never puts key material in the error message', () => {
-    expect(() => parseKeyRing(`k1:${KEY_A},k1:${KEY_B}`)).toThrow(
-      expect.not.stringContaining(KEY_A),
-    );
+  it.each([
+    ['a duplicate kid', `k1:${KEY_A},k1:${KEY_B}`],
+    // A 64-hex string is a valid kid, so a transposed entry makes the key itself the kid — the
+    // one input that could put the secret into a message headed for deploy logs.
+    ['a kid and key written the wrong way round', `${KEY_A}:k1`],
+  ])('never puts key material in the error message, given %s', (_why, env) => {
+    expect(() => parseKeyRing(env)).toThrow();
+    expect(messageThrownBy(() => parseKeyRing(env))).not.toContain(KEY_A);
   });
 });
 
@@ -110,6 +130,49 @@ describe('mint and verify round trip', () => {
     const token = mintLink(ring, { t: 'wl.manage', sub: 'ckv1', tv: 1, iat: IAT });
     expect(token.startsWith('eyJ2Ijox')).toBe(true);
     expect(Buffer.from('eyJ2Ijox', 'base64url').toString()).toBe('{"v":1');
+  });
+});
+
+describe('minting claims that could never verify', () => {
+  const ring = parseKeyRing(`k1:${KEY_A}`);
+  const IAT = 1_755_212_345;
+  const EXP = IAT + 3600;
+  const manage = { t: 'wl.manage', sub: 'ckv1', tv: 1, iat: IAT } as const;
+  const form = { t: 'app.form', run: 'r', node: 'n', sub: 'ckv1', iat: IAT, exp: EXP } as const;
+  const artifact = { t: 'app.artifact', art: 'a', sub: 'ckv1', iat: IAT, exp: EXP } as const;
+
+  /** Each case pairs a description with the claim the error is expected to name. */
+  const cases: [string, string, LinkClaims][] = [
+    [
+      'a fractional iat, which is what a forgotten Math.floor leaves',
+      'iat',
+      { ...manage, iat: IAT + 0.5 },
+    ],
+    ['an infinite iat', 'iat', { ...manage, iat: Infinity }],
+    ['an iat that is NaN', 'iat', { ...manage, iat: Number.NaN }],
+    ['a fractional tv', 'tv', { ...manage, tv: 1.5 }],
+    ['an infinite tv', 'tv', { ...manage, tv: Infinity }],
+    ['a fractional exp on a form link', 'exp', { ...form, exp: EXP + 0.5 }],
+    ['an infinite exp on a form link', 'exp', { ...form, exp: Infinity }],
+    ['a fractional exp on an artifact link', 'exp', { ...artifact, exp: EXP + 0.5 }],
+    ['an infinite exp on an artifact link', 'exp', { ...artifact, exp: Infinity }],
+    // The types rule this one out at every call site in this repo, but it is the case with the
+    // worst outcome if it ever gets through: a non-numeric exp compares false against the clock,
+    // so a link that should last 30 days would last forever.
+    [
+      'an exp that is not a number at all',
+      'exp',
+      { ...form, exp: 'never' } as unknown as LinkClaims,
+    ],
+  ];
+
+  it.each(cases)('refuses to mint %s', (_why, claim, claims) => {
+    expect(() => mintLink(ring, claims)).toThrow();
+    expect(messageThrownBy(() => mintLink(ring, claims))).toContain(claim);
+  });
+
+  it('still mints the same claims once they are whole numbers', () => {
+    expect(() => mintLink(ring, { ...manage, iat: Math.floor(IAT + 0.5) })).not.toThrow();
   });
 });
 
@@ -196,9 +259,13 @@ describe('the token version claim', () => {
       'app.form',
     );
     if (!result.ok) {
+      // Assigned this way round on purpose. Assigning the union to a 'wrong-tv' variable would
+      // error whether or not the union holds that member, so the directive would be satisfied
+      // forever and could never notice the union growing.
+      const notAReason = 'wrong-tv';
       // @ts-expect-error the reason union has no 'wrong-tv': comparing against the stored version
       // is the caller's job, since this module has no idea what that version currently is.
-      const reason: 'wrong-tv' = result.reason;
+      const reason: typeof result.reason = notAReason;
       void reason;
     }
   });
@@ -253,6 +320,9 @@ describe('malformed tokens', () => {
     return `${bytes.toString('base64url')}.${Buffer.alloc(32).toString('base64url')}`;
   }
 
+  /** Re-spells base64url in the standard alphabet: the same bytes written a different way. */
+  const toStandardBase64 = (part: string): string => part.replace(/-/g, '+').replace(/_/g, '/');
+
   const cases: [string, string][] = [
     ['an empty string', ''],
     ['no separator at all', 'garbage'],
@@ -284,6 +354,66 @@ describe('malformed tokens', () => {
       payloadToken({ v: 1, t: 'wl.manage', kid: 'k1', sub: 's', tv: 1, iat: 1.5 }),
     ],
     [
+      'a form payload with no run',
+      payloadToken({
+        v: 1,
+        t: 'app.form',
+        kid: 'k1',
+        node: 'n',
+        sub: 's',
+        iat: IAT,
+        exp: IAT + 60,
+      }),
+    ],
+    [
+      'a form payload with no node',
+      payloadToken({ v: 1, t: 'app.form', kid: 'k1', run: 'r', sub: 's', iat: IAT, exp: IAT + 60 }),
+    ],
+    [
+      // Left unchecked this is the worst of the lot: 'never' compares false against the clock, so
+      // the token would outlive its expiry rather than fail closed.
+      'a form payload whose exp is a string',
+      payloadToken({
+        v: 1,
+        t: 'app.form',
+        kid: 'k1',
+        run: 'r',
+        node: 'n',
+        sub: 's',
+        iat: IAT,
+        exp: 'never',
+      }),
+    ],
+    [
+      'a form payload whose exp is fractional',
+      payloadToken({
+        v: 1,
+        t: 'app.form',
+        kid: 'k1',
+        run: 'r',
+        node: 'n',
+        sub: 's',
+        iat: IAT,
+        exp: IAT + 0.5,
+      }),
+    ],
+    [
+      'an artifact payload with no art',
+      payloadToken({ v: 1, t: 'app.artifact', kid: 'k1', sub: 's', iat: IAT, exp: IAT + 60 }),
+    ],
+    [
+      'an artifact payload whose exp is a string',
+      payloadToken({ v: 1, t: 'app.artifact', kid: 'k1', art: 'a', sub: 's', iat: IAT, exp: '1' }),
+    ],
+    [
+      'a kid that is not a string',
+      payloadToken({ v: 1, t: 'wl.manage', kid: 1, sub: 's', tv: 1, iat: IAT }),
+    ],
+    [
+      'a sub that is not a string',
+      payloadToken({ v: 1, t: 'wl.manage', kid: 'k1', sub: 1, tv: 1, iat: IAT }),
+    ],
+    [
       'a signature that is not 32 bytes',
       `${Buffer.from('{}').toString('base64url')}.${Buffer.alloc(31).toString('base64url')}`,
     ],
@@ -308,12 +438,27 @@ describe('malformed tokens', () => {
     });
   });
 
-  it('rejects a payload half carrying standard-base64 characters', () => {
+  // The two alphabets differ only in '-' and '_' (standard base64's '+' and '/'), and Node decodes
+  // both spellings to identical bytes. Each half gets its own case because a strict decoder applied
+  // to only one of them would still let the other token spelling through.
+
+  it('rejects a payload half spelled in the standard base64 alphabet', () => {
+    // The '~' is what forces a '-' into the encoding: base64url's two distinguishing characters
+    // never come out of encoding an ordinary alphanumeric id.
+    const token = mintLink(ring, { t: 'wl.manage', sub: 'ckv~1', tv: 1, iat: IAT });
+    const [payload, sig] = token.split('.') as [string, string];
+    expect(payload).toMatch(/[-_]/);
+    expect(verifyLink(ring, `${toStandardBase64(payload)}.${sig}`, 'wl.manage')).toEqual({
+      ok: false,
+      reason: 'malformed',
+    });
+  });
+
+  it('rejects a signature half spelled in the standard base64 alphabet', () => {
     const token = mintLink(ring, { t: 'wl.manage', sub: 'ckv1', tv: 1, iat: IAT });
     const [payload, sig] = token.split('.') as [string, string];
-    expect(
-      verifyLink(ring, `${payload.replace(/-/g, '+').replace(/_/g, '/')}+.${sig}`, 'wl.manage'),
-    ).toEqual({
+    expect(sig).toMatch(/[-_]/);
+    expect(verifyLink(ring, `${payload}.${toStandardBase64(sig)}`, 'wl.manage')).toEqual({
       ok: false,
       reason: 'malformed',
     });
