@@ -15,3 +15,18 @@ the deprecation window has passed.
 
 Mint **inside a durable step, never in a workflow function body** — `iat` and `exp` come from the
 clock, so minting during replay would produce a different token than the original run.
+
+## email
+
+`src/email/` renders both mBoss emails — the waitlist confirmation and the admin broadcast — from
+the shell card down to the small Markdown dialect a broadcast body is written in. The worker sends
+these messages and the admin console previews them live as they are composed, so there is one
+implementation here rather than two that drift. Sending itself stays in the worker: it needs a
+provider key and a network.
+
+It imports **nothing at all**, not even a `node:` builtin, and a test enforces that. The preview
+runs in a browser, where a builtin would break the bundle. Alias `@mboss/core/email` directly; the
+package barrel stays signed-links only.
+
+The four `.html` file snapshots beside the tests are the whole rendered cards, kept as files so an
+email can be opened and looked at — the only way to review one.

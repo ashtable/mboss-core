@@ -4,8 +4,7 @@ import { join, resolve, sep } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-const MODULE_ROOT = import.meta.dirname;
-const ENTRY = join(MODULE_ROOT, 'index.ts');
+const SRC = import.meta.dirname;
 
 /**
  * Every module specifier in one file: static
@@ -74,10 +73,13 @@ function resolveRelative(from: string, specifier: string): string | null {
  * Walks everything reachable from `entry`,
  * following relative imports only. External
  * specifiers are collected rather than followed;
- * a relative import that resolves outside this
- * module's directory is recorded as an escape.
+ * a relative import that resolves outside
+ * `boundary` is recorded as an escape.
  */
-function walk(entry: string): {
+function walk(
+  entry: string,
+  boundary: string,
+): {
   external: string[];
   escaped: string[];
   visited: string[];
@@ -104,7 +106,7 @@ function walk(entry: string): {
       // walk failed to see part of it.
       if (!resolved)
         throw new Error(`cannot resolve ${specifier} from ${file}`);
-      if (!resolved.startsWith(MODULE_ROOT + sep)) escaped.push(resolved);
+      if (!resolved.startsWith(boundary + sep)) escaped.push(resolved);
       queue.push(resolved);
     }
   }
@@ -116,21 +118,44 @@ function walk(entry: string): {
   };
 }
 
-describe('the signed-links import graph', () => {
-  it('reaches nothing outside node:crypto', () => {
-    expect(walk(ENTRY).external).toEqual(['node:crypto']);
+/**
+ * A consumer aliases each of these directories on
+ * its own, so what a directory can reach is the
+ * promise it makes about the cost of nesting this
+ * library.
+ *
+ * The email subpath's empty surface is the
+ * strictest of the two and the one that is
+ * load-bearing rather than tidy: the admin console
+ * renders these templates live in the browser as
+ * the author types, and a single `node:` import
+ * anywhere in the graph would break that bundle.
+ */
+const SUBPATHS = [
+  { name: 'signed-links', external: ['node:crypto'] },
+  { name: 'email', external: [] },
+];
+
+describe.each(SUBPATHS)('the $name import graph', ({ name, external }) => {
+  const dir = join(SRC, name);
+  const entry = join(dir, 'index.ts');
+
+  it('reaches nothing outside its declared external surface', () => {
+    expect(walk(entry, dir).external).toEqual(external);
   });
 
-  it('never leaves this directory by a relative import', () => {
-    expect(walk(ENTRY).escaped).toEqual([]);
+  it('never leaves its directory by a relative import', () => {
+    expect(walk(entry, dir).escaped).toEqual([]);
   });
 
   it('actually visited the entry point, so an empty result means clean rather than skipped', () => {
-    const { visited } = walk(ENTRY);
-    expect(visited).toContain(ENTRY);
+    const { visited } = walk(entry, dir);
+    expect(visited).toContain(entry);
     expect(visited.length).toBeGreaterThan(0);
   });
+});
 
+describe('the walker', () => {
   it('finds every form of import, which is what makes the assertions above trustworthy', () => {
     const fixture = [
       "import a from 'static-import';",
