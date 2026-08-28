@@ -10,7 +10,13 @@ import {
 } from '../test-support/project.js';
 
 import type { Failure } from './errors.js';
-import { applySpec, readWorkflow, type ApplyOutcome } from './index.js';
+import {
+  applySpec,
+  proposeSpec,
+  readWorkflow,
+  undo,
+  type ApplyOutcome,
+} from './index.js';
 import { lockFile, workflowFile } from './paths.js';
 
 describe('readWorkflow', () => {
@@ -51,6 +57,61 @@ describe('readWorkflow', () => {
       ok: false,
       error: { code: 'NOT_AN_MBOSS_PROJECT', path: project.mbossDir },
     });
+  });
+});
+
+/**
+ * Capitals and a hyphen are the two names an agent
+ * reaches for first, and neither is a name a
+ * workflow file can carry. That is a well-formed
+ * request for something that is not there, which is
+ * the one shape of answer this module promises —
+ * not a parse error thrown out from under a tool
+ * call.
+ */
+describe('a workflow name no file could carry', () => {
+  let project: TestProject;
+
+  beforeEach(async () => {
+    project = await makeProject();
+  });
+
+  afterEach(async () => {
+    await removeProject(project);
+  });
+
+  const notFound = { ok: false, error: { code: 'WORKFLOW_NOT_FOUND' } };
+
+  it('is reported by readWorkflow', async () => {
+    expect(await readWorkflow(project.mbossDir, 'Booking')).toMatchObject({
+      ok: false,
+      error: { code: 'WORKFLOW_NOT_FOUND', name: 'Booking' },
+    });
+  });
+
+  it('is reported by applySpec', async () => {
+    expect(
+      await applySpec(project.mbossDir, {
+        name: 'booking-flow',
+        spec: { nodes: [], edges: [] },
+        baseRevision: null,
+      }),
+    ).toMatchObject(notFound);
+  });
+
+  it('is reported by proposeSpec', async () => {
+    expect(
+      await proposeSpec(project.mbossDir, {
+        name: 'my workflow',
+        spec: { nodes: [], edges: [] },
+        baseRevision: null,
+        proposedBy: 'claude code',
+      }),
+    ).toMatchObject(notFound);
+  });
+
+  it('is reported by undo', async () => {
+    expect(await undo(project.mbossDir, '../escape')).toMatchObject(notFound);
   });
 });
 
@@ -98,6 +159,58 @@ describe('applySpec', () => {
     });
 
     expect(second).toMatchObject({ ok: true, ir: { revision: 2 } });
+  });
+
+  /**
+   * The obvious way to write "this document with
+   * one more block" is to spread the document that
+   * was just read. A `WorkflowIR` is structurally a
+   * `WorkflowSpec` carrying extra fields, so
+   * nothing stops that spec arriving with the
+   * revision it was read at — and a counter that
+   * takes it would stop counting, leaving every
+   * later base revision matching and the conflict
+   * check dead.
+   */
+  it('sets the revision itself even when the spec carries one', async () => {
+    await create('booking');
+    const read = await readWorkflow(project.mbossDir, 'booking');
+    if (!read.ok) throw new Error('the workflow was not written');
+
+    const second = await applySpec(project.mbossDir, {
+      name: 'booking',
+      spec: { ...read.ir, title: 'Booking again' },
+      baseRevision: read.ir.revision,
+    });
+
+    expect(second).toMatchObject({ ok: true, ir: { revision: 2 } });
+    expect(await revisionOnDisk('booking')).toBe(2);
+  });
+
+  /**
+   * The name argument is authoritative: a spec is
+   * agent-authored JSON, and one carrying its own
+   * name would redirect an approved edit to a
+   * different workflow than the one being written.
+   */
+  it('writes the workflow it was asked for, not the one the spec names', async () => {
+    await create('booking');
+    await create('payments');
+
+    const other = await readWorkflow(project.mbossDir, 'payments');
+    if (!other.ok) throw new Error('the workflow was not written');
+
+    const outcome = await applySpec(project.mbossDir, {
+      name: 'booking',
+      spec: { ...other.ir, title: 'Booking again' },
+      baseRevision: 1,
+    });
+
+    expect(outcome).toMatchObject({ ok: true, ir: { name: 'booking' } });
+    expect(await readWorkflow(project.mbossDir, 'booking')).toMatchObject({
+      ok: true,
+      ir: { name: 'booking', title: 'Booking again' },
+    });
   });
 
   it('refuses a project with no control directory', async () => {

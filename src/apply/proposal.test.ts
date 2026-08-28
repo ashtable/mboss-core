@@ -13,6 +13,7 @@ import {
   applySpec,
   proposeSpec,
   readProposal,
+  readWorkflow,
   type ProposeOutcome,
 } from './index.js';
 import { workflowFile } from './paths.js';
@@ -115,6 +116,43 @@ describe('proposals', () => {
 
     expect(await readProposal(project.mbossDir, other)).toMatchObject({
       status: 'proposed',
+    });
+  });
+
+  /**
+   * A spec is agent-authored JSON crossing the MCP
+   * boundary, so the name it carries is not a name
+   * a person approved. Were the spec's own name to
+   * win, approving "an edit to booking" would edit
+   * whatever workflow the spec happened to name.
+   */
+  it('proposes against the workflow it was asked for, not the one the spec names', async () => {
+    await applySpec(project.mbossDir, {
+      name: 'payments',
+      spec: { title: 'Payments', nodes: [], edges: [] },
+      baseRevision: null,
+    });
+
+    const payments = await readWorkflow(project.mbossDir, 'payments');
+    if (!payments.ok) throw new Error('the workflow was not written');
+
+    const outcome = await proposeSpec(project.mbossDir, {
+      name: 'booking',
+      spec: { ...payments.ir, title: 'Proposed' },
+      baseRevision: 1,
+      proposedBy: 'claude code',
+    });
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      proposal: { workflow: 'booking' },
+    });
+
+    await applyProposal(project.mbossDir, idOf(outcome));
+
+    expect(await readWorkflow(project.mbossDir, 'payments')).toMatchObject({
+      ok: true,
+      ir: { revision: 1, title: 'Payments' },
     });
   });
 

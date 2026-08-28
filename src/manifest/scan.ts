@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { dirname, join, relative } from 'node:path';
 
 import type {
@@ -17,6 +18,26 @@ import {
 
 import { readLibSources, sourceHashOf, toPosix } from './hash.js';
 import type { LibFunction, LibManifest, ManifestError } from './types.js';
+
+/**
+ * Where Node's global declarations are read from.
+ *
+ * Handlers are the code that calls services, and a
+ * service credential comes out of `process.env` —
+ * so without these, the ordinary handler scans as a
+ * type error the project's own `tsc` never reports,
+ * and whoever reads the manifest goes off to fix
+ * working code.
+ *
+ * They are taken from this library rather than
+ * found by walking up from wherever the process
+ * happens to be running: the scan has to mean the
+ * same thing on every machine, including in a
+ * project whose dependencies are not installed yet.
+ */
+const NODE_TYPE_ROOT = dirname(
+  dirname(createRequire(import.meta.url).resolve('@types/node/package.json')),
+);
 
 /**
  * Scans a project's code-behind into the manifest
@@ -41,9 +62,11 @@ export function scanLib(libDir: string): LibManifest {
   const project = new Project({
     // No tsconfig is read: the scan must mean the
     // same thing whatever the project it is
-    // pointed at has configured, and an empty
-    // `types` keeps whatever @types packages
-    // happen to be installed out of the result.
+    // pointed at has configured. Naming the one
+    // type root keeps every other @types package
+    // that happens to be installed out of the
+    // result, while still giving handlers the Node
+    // globals they are written against.
     skipAddingFilesFromTsConfig: true,
     compilerOptions: {
       target: ScriptTarget.ES2023,
@@ -52,7 +75,8 @@ export function scanLib(libDir: string): LibManifest {
       strict: true,
       noEmit: true,
       skipLibCheck: true,
-      types: [],
+      types: ['node'],
+      typeRoots: [NODE_TYPE_ROOT],
     },
   });
 
@@ -99,10 +123,13 @@ function handlerOf(
 ): LibFunction | undefined {
   const name = declaration.getName();
 
-  // An overload signature repeats a name the
-  // implementation already carries; taking both
-  // would offer the same block twice.
-  if (!name || !declaration.isExported() || declaration.isOverload()) {
+  // A default export has a name here but not at
+  // the import site, so offering it would compile
+  // into a named import of something the module
+  // does not name. An overload signature repeats a
+  // name the implementation already carries;
+  // taking both would offer the same block twice.
+  if (!name || !declaration.isNamedExport() || declaration.isOverload()) {
     return undefined;
   }
 

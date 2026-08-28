@@ -107,11 +107,33 @@ export const BranchCaseSchema = z.object({
  * else leaves by `elsePort`. At least one case is
  * required — a branch with none is just an edge
  * drawn with extra steps.
+ *
+ * Every port is distinct, fall-through included,
+ * because a port is how an edge says which outcome
+ * it belongs to. Two cases sharing one leaves
+ * nothing able to decide which edge carries which
+ * case, and an `elsePort` equal to a case port
+ * leaves the fall-through no way out of its own.
  */
-export const BranchConfigSchema = z.object({
-  cases: z.array(BranchCaseSchema).min(1),
-  elsePort: z.string(),
-});
+export const BranchConfigSchema = z
+  .object({
+    cases: z.array(BranchCaseSchema).min(1),
+    elsePort: z.string(),
+  })
+  .refine(
+    (config) => {
+      const ports = [
+        ...config.cases.map((branchCase) => branchCase.port),
+        config.elsePort,
+      ];
+
+      return new Set(ports).size === ports.length;
+    },
+    {
+      message: 'every case and the fall-through need a port of their own',
+      path: ['cases'],
+    },
+  );
 
 /**
  * A bounded repeat over a contiguous run of

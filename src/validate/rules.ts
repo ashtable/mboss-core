@@ -291,7 +291,16 @@ export function v05BackEdges(ctx: RuleContext): Diagnostic[] {
 
     if (doms === undefined) continue;
 
-    if (doms.get(from.id)?.has(edge.to.node) !== true) {
+    const passedThrough = doms.get(from.id);
+
+    // A branch no run reaches has no dominators
+    // rather than too few: an island being wired up
+    // is what V03 reports, and there is nothing
+    // true to say here about a run that never
+    // arrives.
+    if (passedThrough === undefined) continue;
+
+    if (!passedThrough.has(edge.to.node)) {
       found.push(
         diagnostic(
           'V05',
@@ -322,11 +331,33 @@ export function v06EdgeTypes(ctx: RuleContext): Diagnostic[] {
   const found: Diagnostic[] = [];
 
   for (const edge of ctx.ir.edges) {
-    const edgeType = edge.type;
-    if (edgeType === undefined) continue;
-
     const producer = ctx.graph.nodes.get(edge.from.node);
     const consumer = ctx.graph.nodes.get(edge.to.node);
+    const edgeType = edge.type;
+
+    // A wire carries a type whether or not it names
+    // one, and here both ends have already said
+    // what that type is. Leaving the wire
+    // undeclared does not settle a disagreement
+    // between them.
+    if (edgeType === undefined) {
+      if (
+        producer?.out !== undefined &&
+        consumer?.in !== undefined &&
+        producer.out !== consumer.in
+      ) {
+        found.push(
+          diagnostic(
+            'V06',
+            `\`${producer.id}\` produces \`${producer.out}\`, but ` +
+              `\`${consumer.id}\` takes \`${consumer.in}\`.`,
+            { nodeId: consumer.id, edgeId: edge.id },
+          ),
+        );
+      }
+
+      continue;
+    }
 
     if (producer?.out !== undefined && producer.out !== edgeType) {
       found.push(
@@ -626,11 +657,20 @@ function sameGuard(a: Predicate, b: Predicate): boolean {
  * declares. A manual or scheduled run has no such
  * event, and an event trigger that declares no
  * path has nowhere to read it from.
+ *
+ * A draft with no trigger yet is left alone, the
+ * way V03 and V05 leave it alone: adding the
+ * trigger last is an ordinary order of work, and
+ * this rule's error would stop that draft being
+ * saved over a trigger that is not there to be
+ * wrong. V01's warning is the finding that fits.
  */
 export function v11RequesterAddress(ctx: RuleContext): Diagnostic[] {
   const trigger = triggersOf(ctx.ir)[0];
+  if (trigger === undefined) return [];
+
   const declared =
-    trigger?.config.mode === 'event' &&
+    trigger.config.mode === 'event' &&
     trigger.config.requesterEmailPath !== undefined;
 
   if (declared) return [];

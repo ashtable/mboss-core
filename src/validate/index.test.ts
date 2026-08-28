@@ -52,6 +52,35 @@ describe('validateWorkflow', () => {
     ]);
     expect(hasErrors(found)).toBe(false);
   });
+
+  /**
+   * The apply gate is deliberately looser than the
+   * compile gate: a draft with no trigger yet
+   * saves and draws, and only fails to compile.
+   * Adding the trigger last is an ordinary order
+   * of work, so nothing in a trigger-less draft
+   * may become an error.
+   */
+  it('keeps a trigger-less draft saveable even when it writes to the requester', () => {
+    const ir = makeIR({
+      nodes: [
+        {
+          id: 'confirm',
+          kind: 'emailSend',
+          config: {
+            to: 'requestingUser',
+            subject: 'Confirmed',
+            bodyMarkdown: 'Done',
+            attach: { type: 'none' },
+          },
+        },
+      ],
+    });
+    const found = validateWorkflow(ir);
+
+    expect(found.map((diagnostic) => diagnostic.code)).toEqual(['V01']);
+    expect(hasErrors(found)).toBe(false);
+  });
 });
 
 describe('canCompile', () => {

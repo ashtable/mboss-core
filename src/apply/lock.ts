@@ -1,4 +1,5 @@
-import { open, rm, stat } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { open, readFile, rm, stat } from 'node:fs/promises';
 
 import { hasCode } from './fs-error.js';
 import { lockFile } from './paths.js';
@@ -61,18 +62,19 @@ export async function withLock<T>(
 ): Promise<T> {
   const path = lockFile(mbossDir);
 
-  await acquire(path);
+  const token = await acquire(path);
 
   try {
     return await fn();
   } finally {
-    await rm(path, { force: true });
+    await release(path, token);
   }
 }
 
-async function acquire(path: string): Promise<void> {
+async function acquire(path: string): Promise<string> {
   for (let attempt = 0; ; attempt += 1) {
-    if (await create(path)) return;
+    const token = await create(path);
+    if (token !== undefined) return token;
 
     // A lock that was stale is gone now, so try
     // for it again rather than sleeping first.
@@ -88,25 +90,63 @@ async function acquire(path: string): Promise<void> {
  * in the filesystem, so two processes calling this
  * at the same instant cannot both succeed.
  *
- * The pid goes in the file for whoever finds one
- * left behind and wants to know who to blame.
+ * The file's contents say which hold this is. The
+ * pid leads, for whoever finds a lock left behind
+ * and wants to know who to blame; the random tail
+ * is what tells two holds in the same process
+ * apart, which is what release needs.
  */
-async function create(path: string): Promise<boolean> {
+async function create(path: string): Promise<string | undefined> {
   let handle;
   try {
     handle = await open(path, 'wx');
   } catch (error) {
-    if (hasCode(error, 'EEXIST')) return false;
+    if (hasCode(error, 'EEXIST')) return undefined;
     throw error;
   }
 
+  const token = `${process.pid}:${randomBytes(6).toString('hex')}`;
+
   try {
-    await handle.writeFile(String(process.pid), 'utf8');
+    await handle.writeFile(token, 'utf8');
   } finally {
     await handle.close();
   }
 
-  return true;
+  return token;
+}
+
+/**
+ * Gives the lock up, but only while it is still
+ * this hold's.
+ *
+ * A holder whose critical section outlives the
+ * stale budget has its lock broken open and taken
+ * by the next caller. That costs one overlap, and
+ * is the price of never waiting on a crash
+ * forever. Removing whatever file happens to be
+ * there on the way out would make it unbounded
+ * instead: the caller after that would find no
+ * lock at all, take the `wx` path straight
+ * through, and run beside a holder with nothing
+ * excluding either of them.
+ *
+ * Reading and removing are two steps, so a
+ * takeover landing between them is still possible.
+ * It is a window of microseconds behind a wait of
+ * ten seconds, where the unconditional remove was
+ * a certainty.
+ */
+async function release(path: string, token: string): Promise<void> {
+  let held: string;
+  try {
+    held = await readFile(path, 'utf8');
+  } catch (error) {
+    if (hasCode(error, 'ENOENT')) return;
+    throw error;
+  }
+
+  if (held === token) await rm(path, { force: true });
 }
 
 /**

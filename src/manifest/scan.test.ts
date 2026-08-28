@@ -54,6 +54,13 @@ describe('scanLib', () => {
     expect(manifest.functions.map((fn) => fn.export)).not.toContain('slotKey');
   });
 
+  it('skips a default export, which no generated import could name', () => {
+    expect(manifest.functions.map((fn) => fn.export)).not.toContain('notify');
+    expect(manifest.functions.map((fn) => fn.file)).not.toContain(
+      'lib/notify.ts',
+    );
+  });
+
   it('records where each handler lives, project-relative and posix', () => {
     expect(exported('findSlot').file).toBe('lib/findSlot.ts');
   });
@@ -103,6 +110,17 @@ describe('scanLib', () => {
 
   it('reports no errors for code that compiles', () => {
     expect(manifest.errors).toEqual([]);
+  });
+
+  it('knows the Node globals a handler is written against', () => {
+    // `twilioChat` reads its credential out of the
+    // environment, which the project's own tsc
+    // compiles without complaint. A scan that
+    // called that a type error would send whoever
+    // reads the manifest off to fix working code.
+    const file = exported('twilioChat').file;
+
+    expect(manifest.errors.filter((error) => error.file === file)).toEqual([]);
   });
 
   it('stamps the scan with an instant, which is why it is not in the golden', () => {

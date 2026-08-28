@@ -251,6 +251,24 @@ describe('V05 back edges', () => {
     expect(found[0]?.edgeId).toBe('e3');
   });
 
+  it('says nothing about a loop still drafted as an island', () => {
+    // Drop the loop's blocks, wire them to each
+    // other, then join them to the main flow: no
+    // run reaches `decide` until that last step,
+    // so there is nothing true to say yet about
+    // what a run passes through on the way to it.
+    const ir = makeIR({
+      nodes: [EVENT_TRIGGER, { id: 'main' }, { id: 'work' }, YES_NO_BRANCH],
+      edges: [
+        { from: 'start', to: 'main' },
+        { from: 'work', to: 'decide' },
+        { from: 'decide', port: 'yes', to: 'work', back: true },
+      ],
+    });
+
+    expect(check(v05BackEdges, ir)).toEqual([]);
+  });
+
   it('rejects a loop edge back to a node the run could have skipped', () => {
     // `left` is not on every path to the branch,
     // so re-entering there would restart a run at
@@ -319,6 +337,36 @@ describe('V06 edge types', () => {
     expect(
       codes(check(v06EdgeTypes, ir, manifestWith({ types: ['SlotGrid'] }))),
     ).toEqual(['V06']);
+  });
+
+  it('rejects an untyped edge between ends that contradict each other', () => {
+    // Leaving the wire undeclared does not settle
+    // the disagreement: the document still says
+    // one end makes a `SlotGrid` and the other
+    // takes a `Booking`.
+    const ir = makeIR({
+      nodes: [
+        { id: 'find_slot', out: 'SlotGrid' },
+        { id: 'book', in: 'Booking' },
+      ],
+      edges: [{ from: 'find_slot', to: 'book' }],
+    });
+    const found = check(v06EdgeTypes, ir);
+
+    expect(codes(found)).toEqual(['V06']);
+    expect(found[0]?.edgeId).toBe('e1');
+  });
+
+  it('accepts an untyped edge whose ends declare the same type', () => {
+    const ir = makeIR({
+      nodes: [
+        { id: 'find_slot', out: 'SlotGrid' },
+        { id: 'book', in: 'SlotGrid' },
+      ],
+      edges: [{ from: 'find_slot', to: 'book' }],
+    });
+
+    expect(check(v06EdgeTypes, ir)).toEqual([]);
   });
 
   it('accepts an edge leaving a node that declares no output', () => {
@@ -590,6 +638,17 @@ describe('V11 requester address', () => {
 
     expect(codes(found)).toEqual(['V11']);
     expect(found[0]?.nodeId).toBe('confirm');
+  });
+
+  it('says nothing while the draft has no trigger at all', () => {
+    // V01 already reports the missing trigger, as
+    // a warning, because a draft is saveable
+    // without one. A second finding here would be
+    // an error on that same draft, blaming a
+    // trigger that is not there to blame.
+    const ir = makeIR({ nodes: [emailToRequester] });
+
+    expect(check(v11RequesterAddress, ir)).toEqual([]);
   });
 
   it('rejects it when the run is started by hand', () => {

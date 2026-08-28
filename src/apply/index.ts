@@ -1,7 +1,11 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm } from 'node:fs/promises';
 
-import { WorkflowIRSchema, type WorkflowIR } from '../ir/index.js';
+import {
+  WorkflowIRSchema,
+  WorkflowNameSchema,
+  type WorkflowIR,
+} from '../ir/index.js';
 import type { LibManifest } from '../manifest/index.js';
 import {
   hasErrors,
@@ -17,6 +21,7 @@ import { newestSnapshot, snapshot } from './history.js';
 import { withLock } from './lock.js';
 import { workflowFile, workflowsDir } from './paths.js';
 import {
+  WorkflowSpecSchema,
   mintProposalId,
   readProposal,
   supersede,
@@ -125,7 +130,7 @@ export async function readWorkflow(
   mbossDir: string,
   name: string,
 ): Promise<ReadOutcome> {
-  const missing = notAProject(mbossDir);
+  const missing = unusableRequest(mbossDir, name);
   if (missing !== undefined) return failed(missing);
 
   const ir = await readDocument(mbossDir, name);
@@ -143,7 +148,7 @@ export async function applySpec(
   request: ApplyRequest,
   opts?: ApplyOptions,
 ): Promise<ApplyOutcome> {
-  const missing = notAProject(mbossDir);
+  const missing = unusableRequest(mbossDir, request.name);
   if (missing !== undefined) return failed(missing);
 
   return await withLock(mbossDir, async () => {
@@ -177,7 +182,7 @@ export async function proposeSpec(
   request: ProposeRequest,
   opts?: ApplyOptions,
 ): Promise<ProposeOutcome> {
-  const missing = notAProject(mbossDir);
+  const missing = unusableRequest(mbossDir, request.name);
   if (missing !== undefined) return failed(missing);
 
   return await withLock(mbossDir, async () => {
@@ -280,7 +285,7 @@ export async function undo(
   name: string,
   opts?: ApplyOptions,
 ): Promise<ApplyOutcome> {
-  const missing = notAProject(mbossDir);
+  const missing = unusableRequest(mbossDir, name);
   if (missing !== undefined) return failed(missing);
 
   return await withLock(mbossDir, async () => {
@@ -375,18 +380,32 @@ async function writeSpec(mbossDir: string, edit: Edit): Promise<ApplyOutcome> {
  * is what makes "exactly one higher than what is
  * on disk" a property of the module rather than a
  * habit of its call sites.
+ *
+ * The spec is stripped to its own fields first,
+ * because it is not always a literal a caller
+ * wrote: the natural way to say "this document
+ * with one more block" is to spread the document
+ * that was read, and a spec arriving with an
+ * envelope on it would otherwise name its own
+ * revision — freezing the counter, so that every
+ * later base revision matches and the conflict
+ * check stops catching anything — or its own
+ * workflow, sending an approved edit to a file
+ * nobody agreed to change.
  */
 function documentFrom(
   name: string,
   spec: WorkflowSpec,
   current: WorkflowIR | undefined,
 ): WorkflowIR {
+  const body = WorkflowSpecSchema.parse(spec);
+
   return WorkflowIRSchema.parse({
     $schema: SCHEMA_URL,
     version: 1,
     revision: (current?.revision ?? 0) + 1,
     name,
-    ...spec,
+    ...body,
   });
 }
 
@@ -472,6 +491,38 @@ function notAProject(mbossDir: string): ApplyError | undefined {
   return existsSync(mbossDir)
     ? undefined
     : { code: 'NOT_AN_MBOSS_PROJECT', path: mbossDir };
+}
+
+/**
+ * Whether the caller's name is one a workflow file
+ * could carry.
+ *
+ * A name outside the slug format is a well-formed
+ * request for something that is not there —
+ * `Booking`, `booking-flow`, the two an agent
+ * reaches for first — so it gets the answer every
+ * other well-formed request gets, rather than a
+ * parse error thrown out from under the tool call
+ * that made it. This is the same treatment
+ * `readProposal` gives an id it could not have
+ * minted, for the same reason.
+ */
+function unusableName(name: string): ApplyError | undefined {
+  return WorkflowNameSchema.safeParse(name).success
+    ? undefined
+    : { code: 'WORKFLOW_NOT_FOUND', name };
+}
+
+/**
+ * The two things every entry point checks first:
+ * there is a project here, and the name it was
+ * given is one this module could write.
+ */
+function unusableRequest(
+  mbossDir: string,
+  name: string,
+): ApplyError | undefined {
+  return notAProject(mbossDir) ?? unusableName(name);
 }
 
 /**

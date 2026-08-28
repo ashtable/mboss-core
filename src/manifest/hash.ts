@@ -57,18 +57,54 @@ export function sourceHashOf(files: readonly LibSourceFile[]): string {
  * scan ignores, editing a test would force a
  * pointless rescan; if it covered fewer, an edit
  * the scan does see could go unnoticed.
+ *
+ * A project with no `lib/` reads the same as one
+ * with an empty `lib/`: git does not track an
+ * empty directory, so a draft whose handlers do
+ * not exist yet arrives at a clone with nothing
+ * there, and that is a project to draw rather than
+ * a reason to stop.
  */
 export function readLibSources(libDir: string): LibSourceFile[] {
   const projectDir = dirname(libDir);
 
-  return readdirSync(libDir, { recursive: true })
-    .map(String)
+  return entriesOf(libDir)
     .filter((entry) => entry.endsWith('.ts') && !entry.endsWith('.test.ts'))
     .map((entry) => ({
       path: toPosix(relative(projectDir, join(libDir, entry))),
       content: readFileSync(join(libDir, entry), 'utf8'),
     }))
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+}
+
+/**
+ * Everything under `libDir`, or nothing at all
+ * when there is no such directory. Any other
+ * failure — a permission, a broken disk — is left
+ * to throw, because it means something the caller
+ * cannot draw around.
+ */
+function entriesOf(libDir: string): string[] {
+  try {
+    return readdirSync(libDir, { recursive: true }).map(String);
+  } catch (error) {
+    if (isMissing(error)) return [];
+
+    throw error;
+  }
+}
+
+/**
+ * Node reports a missing directory as an ENOENT on
+ * an error a `catch` hands over as `unknown`.
+ */
+function isMissing(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'ENOENT'
+  );
 }
 
 /**

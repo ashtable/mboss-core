@@ -1,4 +1,10 @@
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -92,6 +98,24 @@ describe('loadOrScan', () => {
       0,
     );
     expect(calls()).toBe(1);
+  });
+
+  /**
+   * Git does not track an empty directory and the
+   * scaffold writes a file per handler-bearing
+   * node, so a draft with no handlers yet reaches
+   * a teammate's clone with no `lib/` at all.
+   * Whoever opens the canvas then gets whatever
+   * this call does.
+   */
+  it('reads a project with no lib directory as an empty manifest', () => {
+    rmSync(join(projectDir, 'lib'), { recursive: true, force: true });
+
+    const manifest = loadOrScan(projectDir);
+
+    expect(manifest.functions).toEqual([]);
+    expect(manifest.types).toEqual([]);
+    expect(manifest.errors).toEqual([]);
   });
 
   it('defaults to the real scanner when no seam is injected', () => {

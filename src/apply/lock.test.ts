@@ -1,4 +1,11 @@
-import { access, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import {
+  access,
+  mkdtemp,
+  readFile,
+  rm,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -107,6 +114,53 @@ describe('withLock', () => {
     await utimes(path, stale, stale);
 
     await expect(withLock(mbossDir, () => 'ran')).resolves.toBe('ran');
+  });
+
+  /**
+   * The takeover costs one overlap by design: a
+   * holder whose section outlives the stale budget
+   * keeps running while its successor enters. What
+   * it must not cost is the successor's exclusion —
+   * a release that deleted whatever lock it found
+   * would leave the next caller walking in on the
+   * `wx` fast path, with no lock to wait for and no
+   * stale check to make it wait.
+   */
+  it('leaves the lock alone once another holder has taken it over', async () => {
+    const path = lockFile(mbossDir);
+    const holding = deferred();
+    const mayFinish = deferred();
+    const tookOver = deferred();
+    const successorMayFinish = deferred();
+
+    const first = withLock(mbossDir, async () => {
+      holding.resolve();
+      await mayFinish.promise;
+    });
+
+    await holding.promise;
+
+    const stale = new Date(Date.now() - (STALE_LOCK_MS + 1_000));
+    await utimes(path, stale, stale);
+
+    let successorLock = '';
+    const second = withLock(mbossDir, async () => {
+      successorLock = await readFile(path, 'utf8');
+      tookOver.resolve();
+      await successorMayFinish.promise;
+    });
+
+    await tookOver.promise;
+
+    mayFinish.resolve();
+    await first;
+
+    expect(await readFile(path, 'utf8')).toBe(successorLock);
+
+    successorMayFinish.resolve();
+    await second;
+
+    expect(await exists(path)).toBe(false);
   });
 
   it('releases the lock when the body throws', async () => {

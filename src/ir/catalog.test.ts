@@ -73,6 +73,34 @@ describe('per-kind config rules', () => {
     ).toBe(false);
   });
 
+  it('refuses a branch whose two cases leave by the same port', () => {
+    // An edge names the port it leaves by, so two
+    // cases sharing one leave no way to say which
+    // edge belongs to which case.
+    expect(
+      NodeSchema.safeParse(
+        node('branch', {
+          cases: [
+            { port: 'yes', when: { path: 'a', op: 'eq', value: 1 } },
+            { port: 'yes', when: { path: 'b', op: 'eq', value: 2 } },
+          ],
+          elsePort: 'no',
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it('refuses a branch whose fall-through shares a case’s port', () => {
+    expect(
+      NodeSchema.safeParse(
+        node('branch', {
+          cases: [{ port: 'yes', when: { path: 'ok', op: 'exists' } }],
+          elsePort: 'yes',
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
   it('refuses a loop whose bound is below its floor', () => {
     expect(
       NodeSchema.safeParse(
