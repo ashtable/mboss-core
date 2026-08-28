@@ -1,0 +1,102 @@
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { fixturesRoot } from '../test-support/fixtures.js';
+import { loadOrScan } from './cache.js';
+import { scanLib } from './scan.js';
+
+let projectDir: string;
+let cachePath: string;
+
+/**
+ * A counting wrapper around the real scanner. The
+ * point of the injected seam is that "the rescan
+ * did not happen" is proved exactly, rather than
+ * inferred from how long a call took or from a
+ * timestamp that may not have moved.
+ */
+function countingScan(): { scan: typeof scanLib; calls: () => number } {
+  const scan = vi.fn(scanLib);
+  return { scan, calls: () => scan.mock.calls.length };
+}
+
+beforeEach(async () => {
+  projectDir = await mkdtemp(join(tmpdir(), 'mboss-'));
+  cachePath = join(projectDir, '.mboss', 'manifest.json');
+  cpSync(join(fixturesRoot, 'lib'), join(projectDir, 'lib'), {
+    recursive: true,
+  });
+});
+
+afterEach(async () => {
+  await rm(projectDir, { recursive: true, force: true });
+});
+
+describe('loadOrScan', () => {
+  it('scans and writes the cache the first time', () => {
+    const { scan, calls } = countingScan();
+
+    const manifest = loadOrScan(projectDir, { scan });
+
+    expect(calls()).toBe(1);
+    expect(JSON.parse(readFileSync(cachePath, 'utf8'))).toEqual(manifest);
+  });
+
+  it('does not scan again while the sources are unchanged', () => {
+    const { scan, calls } = countingScan();
+
+    const first = loadOrScan(projectDir, { scan });
+    const second = loadOrScan(projectDir, { scan });
+
+    expect(calls()).toBe(1);
+    expect(second).toEqual(first);
+  });
+
+  it('scans again once a lib file changes', () => {
+    const { scan, calls } = countingScan();
+
+    loadOrScan(projectDir, { scan });
+    writeFileSync(
+      join(projectDir, 'lib', 'recordBooking.ts'),
+      '/** Renamed. */\nexport function noteBooking(): void {}\n',
+    );
+    const rescanned = loadOrScan(projectDir, { scan });
+
+    expect(calls()).toBe(2);
+    expect(rescanned.functions.map((fn) => fn.export)).toContain('noteBooking');
+  });
+
+  it('scans rather than throwing when the cache file is unreadable', () => {
+    const { scan, calls } = countingScan();
+
+    mkdirSync(join(projectDir, '.mboss'), { recursive: true });
+    writeFileSync(cachePath, '{ this is not json');
+
+    expect(loadOrScan(projectDir, { scan }).functions.length).toBeGreaterThan(
+      0,
+    );
+    expect(calls()).toBe(1);
+  });
+
+  it('scans rather than trusting a cache file of the wrong shape', () => {
+    const { scan, calls } = countingScan();
+
+    mkdirSync(join(projectDir, '.mboss'), { recursive: true });
+    writeFileSync(cachePath, '{"sourceHash": 12, "functions": "none"}');
+
+    expect(loadOrScan(projectDir, { scan }).functions.length).toBeGreaterThan(
+      0,
+    );
+    expect(calls()).toBe(1);
+  });
+
+  it('defaults to the real scanner when no seam is injected', () => {
+    expect(loadOrScan(projectDir).functions.map((fn) => fn.export)).toContain(
+      'findSlot',
+    );
+  });
+});
