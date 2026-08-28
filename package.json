@@ -20,6 +20,9 @@
     "format": "prettier --write .",
     "lint": "tsc --noEmit && eslint . && prettier --check ."
   },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.13.3",
