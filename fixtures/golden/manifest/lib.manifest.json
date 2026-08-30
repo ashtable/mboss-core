@@ -1,0 +1,82 @@
+{
+  "errors": [],
+  "functions": [
+    {
+      "doc": "Reserves the slot with the scheduling provider.",
+      "export": "bookAppointment",
+      "file": "lib/bookAppointment.ts",
+      "params": [
+        {
+          "name": "grid",
+          "type": "SlotGrid"
+        }
+      ],
+      "returnType": "Booking"
+    },
+    {
+      "doc": "Looks up availability around the requested time.",
+      "export": "findSlot",
+      "file": "lib/findSlot.ts",
+      "params": [
+        {
+          "name": "req",
+          "type": "BookingReq"
+        }
+      ],
+      "returnType": "SlotGrid"
+    },
+    {
+      "doc": "Flattens the incoming webhook into the shape the rest of the workflow reads.",
+      "export": "parseRequest",
+      "file": "lib/parseRequest.ts",
+      "params": [
+        {
+          "name": "event",
+          "type": "WebhookEvent"
+        }
+      ],
+      "returnType": "BookingReq"
+    },
+    {
+      "doc": "Writes the confirmed booking to the app's own database. Separate from placing it, so a failed write is retried without double-booking.",
+      "export": "recordBooking",
+      "file": "lib/recordBooking.ts",
+      "params": [
+        {
+          "name": "booking",
+          "type": "Booking"
+        }
+      ],
+      "returnType": "Booking"
+    },
+    {
+      "doc": "Texts the customer the open times and asks them to pick one. The reply arrives as a separate event, so this only sends.",
+      "export": "twilioChat",
+      "file": "lib/twilioChat.ts",
+      "params": [
+        {
+          "name": "grid",
+          "type": "SlotGrid"
+        }
+      ],
+      "returnType": "ChatPrompt"
+    }
+  ],
+  "sourceHash": "8c28127c52cd0e056845f3d86847ed46d1d9c6692def7b2a8082bbe71873fb9b",
+  "typeSources": {
+    "Booking": "lib/types.ts",
+    "BookingReq": "lib/types.ts",
+    "ChatPrompt": "lib/types.ts",
+    "ChatReply": "lib/types.ts",
+    "SlotGrid": "lib/types.ts",
+    "WebhookEvent": "lib/types.ts"
+  },
+  "types": [
+    "Booking",
+    "BookingReq",
+    "ChatPrompt",
+    "ChatReply",
+    "SlotGrid",
+    "WebhookEvent"
+  ]
+}
