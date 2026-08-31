@@ -1,0 +1,4 @@
+authorization: AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date, Signature=7cf74c05ce69d4e76bcf341df7c596d9389bf6862e98482c1782e554da520b95
+content-type: application/pdf
+x-amz-content-sha256: f796ea76bd270f46cebb7a66cb965aec06a4cf53a794ae9bf143f885e3315c5f
+x-amz-date: 20130524T000000Z

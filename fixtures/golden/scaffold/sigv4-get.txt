@@ -1,0 +1,1 @@
+http://minio.example:9000/mboss-artifacts/runs/2f9c/receipt%20%281%29.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20130524T000000Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=570fc2b37901bddc8ac618f0a3d1cca0f568b0f057d952404f580139747e7f6b
