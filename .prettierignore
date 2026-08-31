@@ -5,6 +5,7 @@ coverage
 # Blessed email snapshots. Reformatting them would
 # rewrite the artifact under test.
 src/email/__snapshots__
+src/scaffold/app/**/__snapshots__
 
 # Test fixtures and blessed goldens. Goldens are
 # compared byte for byte, and one fixture holds a

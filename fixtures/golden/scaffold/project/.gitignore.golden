@@ -1,0 +1,13 @@
+node_modules/
+coverage/
+*.tsbuildinfo
+.DS_Store
+.env
+
+# Derived or transient; everything else under
+# .mboss/ is the project's own source.
+.mboss/proposals/
+.mboss/history/
+.mboss/manifest.json
+.mboss/state.json
+.mboss/.lock

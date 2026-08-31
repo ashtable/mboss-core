@@ -1,0 +1,4 @@
+// This project's settings. One key today; the
+// file exists so the next one has a home that is
+// already committed.
+export default { name: 'my_app' } as const;

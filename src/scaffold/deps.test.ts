@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 
 import { packageOf, specifiersOf } from '../test-support/specifiers.js';
 
+import { scaffoldFiles } from './files.js';
+
 /**
  * The two halves of "a scaffolded project's
  * declared dependencies are enough".
@@ -120,6 +122,66 @@ describe('what the copied runtime imports', () => {
     // this toolchain cannot run, and `@types/node`
     // latest is far ahead of the pinned runtime.
     for (const [name, range] of Object.entries(CORE_DEPS)) {
+      expect(`${name}@${range}`).not.toContain('latest');
+      expect(`${name}@${range}`).not.toContain('*');
+    }
+  });
+});
+
+const EMITTED = declaredIn(
+  JSON.parse(
+    scaffoldFiles({ name: 'my_app' }).find((f) => f.path === 'package.json')
+      ?.contents ?? '{}',
+  ) as PackageJson,
+);
+
+/** Every bare package the emitted tree imports. */
+const PROJECT_IMPORTS = [
+  ...new Set(
+    scaffoldFiles({ name: 'my_app' })
+      .filter((file) => /\.(ts|mjs)$/.test(file.path))
+      .flatMap((file) => specifiersOf(file.contents))
+      .map(packageOf)
+      .filter((name): name is string => name !== null),
+  ),
+].sort();
+
+describe('what a generated project imports', () => {
+  it('is a real list, so a clean result is not an empty one', () => {
+    expect(PROJECT_IMPORTS).toContain('zod');
+    expect(PROJECT_IMPORTS).toContain('vitest');
+  });
+
+  it('is declared by the project itself', () => {
+    const missing = PROJECT_IMPORTS.filter((name) => !(name in EMITTED));
+
+    expect(missing).toEqual([]);
+  });
+
+  it('is carried by this repo at the identical range', () => {
+    // Anything else and the type-check gate is
+    // checking generated code against typings the
+    // project will never install.
+    const shared = Object.fromEntries(
+      Object.entries(EMITTED).filter(([name]) => name in CORE_DEPS),
+    );
+
+    expect(mirrorProblems(shared, CORE_DEPS)).toEqual([]);
+  });
+
+  it('adds exactly one package this repo has no reason to carry', () => {
+    // Nothing here imports tsx — it is what a
+    // container execs — so there is no typing for
+    // this repo to mirror.
+    const unmirrored = Object.keys(EMITTED).filter(
+      (name) => !(name in CORE_DEPS),
+    );
+
+    expect(unmirrored).toEqual(['tsx']);
+  });
+
+  it('pins nothing to a floating range either', () => {
+    for (const [name, range] of Object.entries(EMITTED)) {
       expect(`${name}@${range}`).not.toContain('latest');
       expect(`${name}@${range}`).not.toContain('*');
     }

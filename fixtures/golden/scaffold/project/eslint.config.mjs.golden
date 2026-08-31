@@ -1,0 +1,16 @@
+import js from '@eslint/js';
+import tseslint from 'typescript-eslint';
+import prettier from 'eslint-config-prettier';
+
+// src/workflows is compiler-owned: a generated
+// schedule handler takes a context parameter it
+// does not use, and nobody can edit the file to
+// silence it. It is still type-checked.
+const ignores = ['node_modules/**', 'coverage/**', 'src/workflows/**'];
+
+export default tseslint.config(
+  { ignores },
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+  prettier, // last — turns off rules that fight Prettier
+);

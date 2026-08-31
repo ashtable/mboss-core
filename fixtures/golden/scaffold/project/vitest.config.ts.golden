@@ -1,0 +1,10 @@
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    environment: 'node',
+    // Tests sit beside what they test: the runtime
+    // under src/app, your handlers under lib.
+    include: ['src/**/*.test.ts', 'lib/**/*.test.ts'],
+  },
+});

@@ -108,3 +108,52 @@ describe.each(SUBPATHS)('the $name import graph', ({ name, external }) => {
     expect(visited.length).toBeGreaterThan(0);
   });
 });
+
+/**
+ * The scaffold's own graph.
+ *
+ * It ships a runtime tree — express, the DBOS SDK,
+ * a Prisma client — and it must never *import*
+ * one. Those files are read off disk with
+ * `readFileSync`, so that nesting this library
+ * costs a consumer nothing but what it already
+ * pays for. An ordinary import would put all three
+ * packages into the type graph of every repo that
+ * uses the barrel.
+ */
+describe('the scaffold import graph', () => {
+  const dir = join(SRC, 'scaffold');
+  const entry = join(dir, 'index.ts');
+
+  it('never imports the runtime tree it copies', () => {
+    const { visited } = walk(entry, dir);
+    const runtime = visited.filter(
+      (file) =>
+        file.startsWith(join(dir, 'app') + sep) ||
+        file.startsWith(join(dir, 'workflows') + sep),
+    );
+
+    expect(visited.length).toBeGreaterThan(1);
+    expect(runtime).toEqual([]);
+  });
+
+  it('keeps the packages that runtime needs out of its own surface', () => {
+    const { external } = walk(entry, dir);
+
+    // Non-vacuous: the scaffold does reach for
+    // the filesystem, which is how it reads the
+    // tree rather than importing it.
+    expect(external).toContain('node:fs');
+    for (const name of [
+      'express',
+      'pg',
+      'dotenv',
+      '@dbos-inc/dbos-sdk',
+      '@dbos-inc/prisma-datasource',
+      '@prisma/client',
+      '@prisma/adapter-pg',
+    ]) {
+      expect(external).not.toContain(name);
+    }
+  });
+});

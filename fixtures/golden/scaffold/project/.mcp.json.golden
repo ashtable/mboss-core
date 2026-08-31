@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "mboss": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${CLAUDE_PROJECT_DIR}/.mboss/mcp/server.js"]
+    }
+  }
+}

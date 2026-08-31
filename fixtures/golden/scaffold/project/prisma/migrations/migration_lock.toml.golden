@@ -1,0 +1,3 @@
+# Prisma reads only the provider below. Do not
+# edit this file by hand, and do commit it.
+provider = "postgresql"
