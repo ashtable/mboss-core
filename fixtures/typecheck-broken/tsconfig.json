@@ -8,16 +8,11 @@
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
     "noEmit": true,
     "skipLibCheck": true,
     "isolatedModules": true,
-    "erasableSyntaxOnly": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": [
-    "src",
-    "prisma.config.ts",
-    "vitest.config.ts",
-    "eslint.config.mjs"
-  ]
+  "include": ["src"]
 }

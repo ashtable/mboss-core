@@ -3,7 +3,7 @@ import tseslint from 'typescript-eslint';
 import prettier from 'eslint-config-prettier';
 
 export default tseslint.config(
-  { ignores: ['node_modules/**', 'coverage/**', 'fixtures/**'] },
+  { ignores: ['node_modules/**', 'coverage/**', 'fixtures/**', '.tmp/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   prettier, // last — turns off rules that fight Prettier
