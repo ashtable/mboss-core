@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 import { expect } from 'vitest';
@@ -90,4 +90,30 @@ function sortKeys(value: unknown): unknown {
     sorted[key] = sortKeys((value as Record<string, unknown>)[key]);
   }
   return sorted;
+}
+
+/**
+ * Copies the fixture code-behind into a project's
+ * `lib/`, the way a real project's handlers would
+ * already be there.
+ *
+ * Tests are left behind: a generated project's
+ * `lib/` may hold them, but they import vitest and
+ * nothing in a type-check or an import smoke needs
+ * them.
+ */
+export function copyFixtureLib(projectDir: string): string[] {
+  const from = join(fixturesRoot, 'lib');
+  const to = join(projectDir, 'lib');
+  const copied: string[] = [];
+
+  mkdirSync(to, { recursive: true });
+  for (const name of readdirSync(from).sort()) {
+    if (!name.endsWith('.ts') || name.endsWith('.test.ts')) continue;
+
+    writeFileSync(join(to, name), readFileSync(join(from, name), 'utf8'));
+    copied.push(`lib/${name}`);
+  }
+
+  return copied;
 }
