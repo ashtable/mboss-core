@@ -1,4 +1,5 @@
 import { expandedCall, writeThrow } from './emit-control.js';
+import { literal } from './predicate.js';
 import type { SourceWriter } from './source.js';
 
 /**
@@ -26,12 +27,27 @@ export type EmittedEntry = {
 /** A value, as the source that produces it. */
 export type Emitted =
   | { kind: 'source'; text: string }
+  | { kind: 'text'; value: string }
   | { kind: 'object'; entries: readonly EmittedEntry[] }
   | { kind: 'list'; items: readonly Emitted[] }
   | { kind: 'call'; callee: string; argument: Emitted };
 
 export function source(text: string): Emitted {
   return { kind: 'source', text };
+}
+
+/**
+ * Words somebody wrote, as a string literal.
+ *
+ * Kept apart from `source` because prose is the
+ * one value here that can be broken across lines
+ * without inventing anything: an email body runs
+ * past the width on its second sentence, and a sum
+ * of shorter pieces says exactly what the one long
+ * literal said.
+ */
+export function text(value: string): Emitted {
+  return { kind: 'text', value };
 }
 
 export function object(entries: readonly EmittedEntry[]): Emitted {
@@ -51,6 +67,9 @@ export function inlineValue(value: Emitted): string {
   switch (value.kind) {
     case 'source':
       return value.text;
+
+    case 'text':
+      return literal(value.value);
 
     case 'object': {
       if (value.entries.length === 0) return '{}';
@@ -102,11 +121,15 @@ export function writeValue(
       writer.line(one);
       return;
 
+    case 'text':
+      writeSum(writer, prefix, value.value, suffix, false);
+      return;
+
     case 'object':
       writer.open(`${prefix}{`);
       for (const entry of value.entries) {
         if (entry.value === undefined) writer.line(`${entry.key},`);
-        else writeValue(writer, `${entry.key}: `, entry.value, ',');
+        else writeEntry(writer, entry.key, entry.value);
       }
       writer.close(`}${suffix}`);
       return;
@@ -126,6 +149,117 @@ export function writeValue(
       );
       return;
   }
+}
+
+/**
+ * One entry of an object that has been broken
+ * open.
+ *
+ * Prose too wide for the line its key is on moves
+ * to a line of its own under the key, which is
+ * what prettier does with every assignment it has
+ * to break. Nothing else moves: an expression has
+ * no seam to break at, so it stays beside its key
+ * however wide it is.
+ */
+function writeEntry(writer: SourceWriter, key: string, value: Emitted): void {
+  if (value.kind === 'text' && !writer.fits(`${key}: ${inlineValue(value)},`)) {
+    writer.indented(`${key}:`, () => {
+      writeSum(writer, '', value.value, ',', true);
+    });
+    return;
+  }
+
+  writeValue(writer, `${key}: `, value, ',');
+}
+
+/**
+ * Prose too wide for one line, as the sum of
+ * pieces that each fit on one.
+ *
+ * The two shapes are prettier's, and a file that
+ * guessed either of them wrong is rewritten the
+ * first time anybody formats it. Where the sum
+ * stands on its own — a list's member, a call's
+ * argument — the first piece stays where the value
+ * started and the rest sit one level in. Where the
+ * writer has already broken after a key to make
+ * room, every piece sits level at that one indent.
+ *
+ * A piece with no space to break at is left
+ * over-wide on a line of its own. That is the same
+ * answer the comment wrapper gives, for the same
+ * reason: a link in an email body is one word, and
+ * cutting it in half would change what it says.
+ */
+function writeSum(
+  writer: SourceWriter,
+  prefix: string,
+  value: string,
+  suffix: string,
+  levelled: boolean,
+): void {
+  const pieces = splitToWidth(value, (index, quoted) =>
+    index === 0 || levelled
+      ? writer.fits(`${prefix}${quoted} +`)
+      : writer.fits(`  ${quoted} +`),
+  );
+  // The default covers the empty string, which
+  // splits into no pieces at all.
+  const [first = value, ...rest] = pieces;
+
+  if (rest.length === 0) {
+    writer.line(`${prefix}${literal(first)}${suffix}`);
+    return;
+  }
+
+  const head = `${prefix}${literal(first)} +`;
+  const writeRest = (): void => {
+    rest.forEach((piece, index) => {
+      const tail = index === rest.length - 1 ? suffix : ' +';
+
+      writer.line(`${literal(piece)}${tail}`);
+    });
+  };
+
+  if (levelled) {
+    writer.line(head);
+    writeRest();
+    return;
+  }
+
+  writer.indented(head, writeRest);
+}
+
+/**
+ * The text, split after spaces into pieces each of
+ * which fits where it is going.
+ *
+ * Split *after* the space rather than on it, so
+ * that concatenating the pieces gives back the
+ * text somebody actually wrote, space for space.
+ */
+function splitToWidth(
+  value: string,
+  fits: (index: number, quoted: string) => boolean,
+): string[] {
+  const pieces: string[] = [];
+  let current = '';
+
+  for (const word of value.split(/(?<= )/)) {
+    const candidate = `${current}${word}`;
+
+    if (current !== '' && !fits(pieces.length, literal(candidate))) {
+      pieces.push(current);
+      current = word;
+      continue;
+    }
+
+    current = candidate;
+  }
+
+  if (current !== '') pieces.push(current);
+  return pieces;
 }
 
 /**

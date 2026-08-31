@@ -55,7 +55,7 @@ export type FormDeps = {
   ring: LinkKeyRing;
   workflows: readonly WorkflowEntry[];
   send: SendToRun;
-  isWaiting: (runId: string, nodeId: string) => Promise<boolean>;
+  parkOf: (runId: string, nodeId: string) => Promise<string | null>;
   store: ArtifactStore | null;
 };
 
@@ -63,6 +63,9 @@ export type FormDeps = {
 type Opened = {
   runId: string;
   nodeId: string;
+  /** Which occasion of waiting the run is on, so
+   *  that what wakes it can say which. */
+  park: string;
   recipient: string;
   wait: WaitDescriptor;
 };
@@ -139,7 +142,9 @@ async function open(
     return null;
   }
 
-  if (!(await deps.isWaiting(payload.run, payload.node))) {
+  const park = await deps.parkOf(payload.run, payload.node);
+
+  if (park === null) {
     response
       .status(410)
       .type('html')
@@ -152,6 +157,7 @@ async function open(
   return {
     runId: payload.run,
     nodeId: payload.node,
+    park,
     recipient: payload.sub,
     wait,
   };
@@ -272,10 +278,15 @@ async function submitDecision(
 }
 
 /**
- * The key is what the run is woken by, and it is
- * derived from the run and the node rather than
- * from the request, so a double-submitted form
- * lands once.
+ * The key is what the run is woken by, and it
+ * names the park rather than the request, so a
+ * double-submitted form lands once.
+ *
+ * The park and not the run and node alone: a wait
+ * inside a loop parks on the same node every
+ * round, and DBOS keeps every key a run was ever
+ * woken with, so a key that repeated would have
+ * the second round's submission dropped.
  */
 async function wake(
   deps: FormDeps,
@@ -286,7 +297,7 @@ async function wake(
     opened.runId,
     message,
     opened.nodeId,
-    `${opened.runId}:${opened.nodeId}`,
+    `${opened.runId}:${opened.nodeId}:${opened.park}`,
   );
 }
 

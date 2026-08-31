@@ -24,8 +24,8 @@ const deps: AppDeps = {
   async findWaitCorrelation() {
     return null;
   },
-  async isWaiting() {
-    return false;
+  async parkOf() {
+    return null;
   },
   store: null,
 };

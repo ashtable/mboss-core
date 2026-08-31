@@ -1,3 +1,4 @@
+import prettier from 'prettier';
 import { describe, expect, it } from 'vitest';
 
 import { PredicateSchema, type Predicate } from '../ir/index.js';
@@ -89,11 +90,42 @@ describe('literal', () => {
   it('writes strings the way prettier would', () => {
     // The emitted file has to survive a
     // prettier-idempotence check, and prettier
-    // rewrites a double-quoted string.
+    // picks whichever quote the text needs fewer
+    // escapes for, keeping single ones on a tie.
     expect(literal('book')).toBe("'book'");
-    expect(literal("it's")).toBe("'it\\'s'");
+    expect(literal("it's")).toBe('"it\'s"');
+    expect(literal('say "hi"')).toBe('\'say "hi"\'');
+    expect(literal('it\'s a "quote"')).toBe("'it\\'s a \"quote\"'");
     expect(literal('a\\b')).toBe("'a\\\\b'");
     expect(literal('a\nb')).toBe("'a\\nb'");
+  });
+
+  it('emits what prettier itself leaves alone', async () => {
+    // The table above is the rule as a reader can
+    // check it; this is the rule as prettier
+    // actually applies it. An apostrophe in an
+    // email subject is the case that reaches here.
+    const texts = [
+      'book',
+      "We'd like a few details",
+      'say "hi"',
+      'it\'s a "quote" and a "second"',
+      'a\\b',
+      'a\nb',
+    ];
+
+    for (const text of texts) {
+      const line = `const a = ${literal(text)};\n`;
+
+      expect(
+        await prettier.format(line, {
+          parser: 'typescript',
+          singleQuote: true,
+          semi: true,
+          printWidth: 80,
+        }),
+      ).toBe(line);
+    }
   });
 
   it('writes the other scalars as themselves', () => {

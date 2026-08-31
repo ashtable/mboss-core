@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   clearWaitCorrelation,
   findWaitCorrelation,
-  isWaiting,
+  parkOf,
   registerWaitCorrelation,
   type WaitRow,
   type WaitStore,
@@ -68,6 +68,7 @@ describe('registering a wait', () => {
       nodeId: 'await_reply',
       topic: 'twilio.reply',
       key: '+15551234',
+      park: expect.any(String),
     });
   });
 
@@ -84,16 +85,48 @@ describe('registering a wait', () => {
     };
 
     await registerWaitCorrelation(registration, store);
+    const first = await store.get('wf_1', 'await_reply');
     await registerWaitCorrelation(registration, store);
 
     expect(await store.matching('twilio.reply', '+15551234')).toHaveLength(1);
+    // And it is the same park. A retry that minted
+    // a second one would leave a delivery that
+    // read the first still able to land beside a
+    // delivery that read the second.
+    expect((await store.get('wf_1', 'await_reply'))?.park).toBe(first?.park);
+  });
+
+  it('gives a run that parks here again a park of its own', async () => {
+    // A wait inside a loop parks on the same node
+    // every round. DBOS makes the idempotency key
+    // of a wake the primary key of its message
+    // table and never deletes the row, so a round
+    // whose wake carried the last round's key
+    // would have its answer dropped and would wait
+    // out its timeout instead.
+    const store = memoryStore();
+    const registration = {
+      runId: 'wf_1',
+      nodeId: 'await_reply',
+      topic: 'twilio.reply',
+      key: '+15551234',
+    };
+
+    await registerWaitCorrelation(registration, store);
+    const first = await store.get('wf_1', 'await_reply');
+    await clearWaitCorrelation('wf_1', 'await_reply', store);
+    await registerWaitCorrelation(registration, store);
+    const second = await store.get('wf_1', 'await_reply');
+
+    expect(first?.park).toEqual(expect.any(String));
+    expect(second?.park).not.toBe(first?.park);
   });
 });
 
 describe('clearing a wait', () => {
   it('removes the row the run was found by', async () => {
     const store = memoryStore([
-      { runId: 'wf_1', nodeId: 'n', topic: 't', key: 'k' },
+      { runId: 'wf_1', nodeId: 'n', topic: 't', key: 'k', park: 'p' },
     ]);
 
     await clearWaitCorrelation('wf_1', 'n', store);
@@ -114,18 +147,19 @@ describe('clearing a wait', () => {
 describe('finding the run an event should wake', () => {
   it('answers with the run and node parked on that topic and key', async () => {
     const store = memoryStore([
-      { runId: 'wf_1', nodeId: 'await_reply', topic: 't', key: 'k' },
+      { runId: 'wf_1', nodeId: 'await_reply', topic: 't', key: 'k', park: 'p' },
     ]);
 
     expect(await findWaitCorrelation('t', 'k', store)).toEqual({
       runId: 'wf_1',
       nodeId: 'await_reply',
+      park: 'p',
     });
   });
 
   it('answers null when nothing is waiting for it', async () => {
     const store = memoryStore([
-      { runId: 'wf_1', nodeId: 'await_reply', topic: 't', key: 'k' },
+      { runId: 'wf_1', nodeId: 'await_reply', topic: 't', key: 'k', park: 'p' },
     ]);
 
     expect(await findWaitCorrelation('t', 'other', store)).toBeNull();
@@ -137,28 +171,41 @@ describe('finding the run an event should wake', () => {
     // an event wakes is arbitrary, but it must not
     // be arbitrary differently on each delivery.
     const store = memoryStore([
-      { runId: 'wf_9', nodeId: 'n', topic: 't', key: 'k' },
-      { runId: 'wf_2', nodeId: 'n', topic: 't', key: 'k' },
+      { runId: 'wf_9', nodeId: 'n', topic: 't', key: 'k', park: 'p9' },
+      { runId: 'wf_2', nodeId: 'n', topic: 't', key: 'k', park: 'p2' },
     ]);
 
     expect(await findWaitCorrelation('t', 'k', store)).toEqual({
       runId: 'wf_2',
       nodeId: 'n',
+      park: 'p2',
     });
   });
 });
 
-describe('asking whether one run is still waiting', () => {
+describe('asking which park one run is on', () => {
   const store = memoryStore([
-    { runId: 'wf_1', nodeId: 'await_form', topic: 'form', key: 'await_form' },
-    { runId: 'wf_2', nodeId: 'await_form', topic: 'form', key: 'await_form' },
+    {
+      runId: 'wf_1',
+      nodeId: 'await_form',
+      topic: 'form',
+      key: 'await_form',
+      park: 'p1',
+    },
+    {
+      runId: 'wf_2',
+      nodeId: 'await_form',
+      topic: 'form',
+      key: 'await_form',
+      park: 'p2',
+    },
   ]);
 
-  it('is true while its own row is there', async () => {
-    expect(await isWaiting('wf_1', 'await_form', store)).toBe(true);
+  it('answers with the park while its own row is there', async () => {
+    expect(await parkOf('wf_1', 'await_form', store)).toBe('p1');
   });
 
-  it('is false once that run has answered, even though others have not', async () => {
+  it('is null once that run answered, though others have not', async () => {
     // This is the whole reason the question is
     // asked per run. Every run parked on a form
     // node registers the same key, so a lookup by
@@ -167,7 +214,7 @@ describe('asking whether one run is still waiting', () => {
     // days ago.
     await clearWaitCorrelation('wf_1', 'await_form', store);
 
-    expect(await isWaiting('wf_1', 'await_form', store)).toBe(false);
-    expect(await isWaiting('wf_2', 'await_form', store)).toBe(true);
+    expect(await parkOf('wf_1', 'await_form', store)).toBeNull();
+    expect(await parkOf('wf_2', 'await_form', store)).toBe('p2');
   });
 });

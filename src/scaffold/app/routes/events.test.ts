@@ -58,7 +58,10 @@ type Sent = {
 function harness(workflows: WorkflowEntry[]) {
   const started: Started[] = [];
   const sent: Sent[] = [];
-  const correlations = new Map<string, { runId: string; nodeId: string }>();
+  const correlations = new Map<
+    string,
+    { runId: string; nodeId: string; park: string }
+  >();
 
   const deps: EventDeps = {
     eventsSecret: SECRET,
@@ -256,6 +259,7 @@ describe('an event a sleeping run is waiting for', () => {
     built.correlations.set('twilio.reply +15551234', {
       runId: 'wf_1',
       nodeId: 'await_reply',
+      park: 'park_one',
     });
 
     return built;
@@ -272,22 +276,40 @@ describe('an event a sleeping run is waiting for', () => {
         runId: 'wf_1',
         message: payload,
         nodeId: 'await_reply',
-        key: 'wf_1:await_reply',
+        key: 'wf_1:await_reply:park_one',
       },
     ]);
   });
 
-  it('carries an idempotency key, so a redelivery lands once', async () => {
-    const { app, sent } = waiting();
+  it('keys each park apart, so a later one is still wakeable', async () => {
+    const { app, sent, correlations } = waiting();
     const payload = { from: '+15551234', body: 'yes please' };
 
     await post(app, '/events/twilio.reply', payload);
     await post(app, '/events/twilio.reply', payload);
 
+    // Two deliveries of one webhook carry one key,
+    // which is what makes the second one a
+    // duplicate rather than a second answer.
     expect(sent.map((one) => one.key)).toEqual([
-      'wf_1:await_reply',
-      'wf_1:await_reply',
+      'wf_1:await_reply:park_one',
+      'wf_1:await_reply:park_one',
     ]);
+
+    // A wait inside a loop parks on the same node
+    // again, and the key has to move with it. DBOS
+    // makes it the primary key of its message
+    // table and never deletes the row, so a run
+    // whose second park reused the first park's
+    // key could never be woken again at all.
+    correlations.set('twilio.reply +15551234', {
+      runId: 'wf_1',
+      nodeId: 'await_reply',
+      park: 'park_two',
+    });
+    await post(app, '/events/twilio.reply', payload);
+
+    expect(sent.at(-1)?.key).toBe('wf_1:await_reply:park_two');
   });
 
   it('is not found when no run is parked on that key', async () => {

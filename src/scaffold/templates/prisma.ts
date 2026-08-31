@@ -41,11 +41,19 @@ datasource db {
 /// rather than by topic and key, because two runs
 /// of the same workflow wait on the same node all
 /// the time and that is the ordinary case.
+///
+/// The park column is which occasion of waiting
+/// the row is. A wait inside a loop parks on the
+/// same node every round, and what wakes a run
+/// carries an idempotency key that has to differ
+/// between the rounds or the later ones are
+/// dropped.
 model WaitCorrelation {
   runId  String
   nodeId String
   topic  String
   key    String
+  park   String
 
   @@id([runId, nodeId])
   @@index([topic, key])
@@ -98,6 +106,7 @@ CREATE TABLE "mboss_wait_correlations" (
     "nodeId" TEXT NOT NULL,
     "topic" TEXT NOT NULL,
     "key" TEXT NOT NULL,
+    "park" TEXT NOT NULL,
 
     CONSTRAINT "mboss_wait_correlations_pkey" PRIMARY KEY ("runId","nodeId")
 );

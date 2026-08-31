@@ -36,8 +36,10 @@ async function formIntakeFn(evt: IntakeRequest): Promise<void> {
         workflowTitle: 'Intake form',
         nodeId: 'ask_details',
         to: requesterEmail,
-        subject: 'A few details, please',
-        bodyMarkdown: 'We need a little more before we can start.',
+        subject: "We'd like a few details",
+        bodyMarkdown:
+          'Thanks for getting in touch. We can start work on this once ' +
+          "you've told us a little more about it.",
         attach: {
           kind: 'form',
           nodeId: 'await_details',
@@ -58,7 +60,7 @@ async function formIntakeFn(evt: IntakeRequest): Promise<void> {
             },
             {
               id: 'details',
-              label: 'What is the rush?',
+              label: "What's the rush?",
               type: 'textarea',
               required: false,
               multiple: false,
@@ -183,7 +185,7 @@ export const waits: Record<string, WaitDescriptor> = {
       },
       {
         id: 'details',
-        label: 'What is the rush?',
+        label: "What's the rush?",
         type: 'textarea',
         required: false,
         multiple: false,

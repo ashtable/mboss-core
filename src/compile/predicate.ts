@@ -118,13 +118,33 @@ export function literal(value: unknown): string {
   }
 }
 
+/**
+ * The delimiter prettier would choose, and the
+ * text escaped for it.
+ *
+ * Prettier does not simply quote with the
+ * configured quote: it counts both kinds and
+ * switches to the other one when that means fewer
+ * backslashes, keeping the configured one on a
+ * tie. An apostrophe in an email subject is enough
+ * to reach that rule, and an emitted file that
+ * quoted it the other way would stop matching
+ * itself the first time anybody formatted it.
+ */
 function quote(text: string): string {
+  const singles = countOf(text, "'");
+  const doubles = countOf(text, '"');
+  const delimiter = singles > doubles ? '"' : "'";
   const escaped = text
     .replaceAll('\\', '\\\\')
-    .replaceAll("'", "\\'")
+    .replaceAll(delimiter, `\\${delimiter}`)
     .replaceAll('\n', '\\n')
     .replaceAll('\r', '\\r')
     .replaceAll('\t', '\\t');
 
-  return `'${escaped}'`;
+  return `${delimiter}${escaped}${delimiter}`;
+}
+
+function countOf(text: string, character: string): number {
+  return [...text].filter((each) => each === character).length;
 }

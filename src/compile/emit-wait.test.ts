@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
+import prettier from 'prettier';
 import { ts } from 'ts-morph';
 import { describe, expect, it } from 'vitest';
 
@@ -22,6 +23,7 @@ import {
   list,
   object,
   source,
+  text,
   writeStep,
   writeTimer,
   writeValue,
@@ -128,6 +130,158 @@ describe('a value on its way into emitted source', () => {
     // written — so the generated file would say
     // something no hand-written file would.
     expect(inlineValue(object([{ key: 'runId' }]))).toBe('{ runId }');
+  });
+
+  it('keeps a written string on its line while it fits there', () => {
+    expect(
+      written((writer) => {
+        writeValue(writer, 'subject: ', text('A few details, please'), ',');
+      }),
+    ).toBe("subject: 'A few details, please',\n");
+  });
+
+  it('moves a string too wide for its key onto a line under it', () => {
+    // What prettier does with any assignment it
+    // has to break, and what a body of authored
+    // prose reaches as soon as it is a sentence
+    // long.
+    expect(
+      written((writer) => {
+        writeValue(
+          writer,
+          'const x = ',
+          object([
+            {
+              key: 'bodyMarkdown',
+              value: text(
+                'Thanks for getting in touch. We can start once you tell ' +
+                  'us more.',
+              ),
+            },
+          ]),
+          ';',
+        );
+      }),
+    ).toBe(
+      [
+        'const x = {',
+        '  bodyMarkdown:',
+        "    'Thanks for getting in touch. We can start once you tell us " +
+          "more.',",
+        '};',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('writes a string no line can hold as the sum of ones that fit', () => {
+    expect(
+      written((writer) => {
+        writeValue(
+          writer,
+          'const x = ',
+          object([
+            {
+              key: 'bodyMarkdown',
+              value: text(
+                'Thanks for getting in touch. We can start work on this ' +
+                  'once you have told us a little more about it.',
+              ),
+            },
+          ]),
+          ';',
+        );
+      }),
+    ).toBe(
+      [
+        'const x = {',
+        '  bodyMarkdown:',
+        "    'Thanks for getting in touch. We can start work on this once " +
+          "you have ' +",
+        "    'told us a little more about it.',",
+        '};',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('indents the rest of a sum that stands on its own', () => {
+    // A list's member has not already been broken
+    // after a key to make room, so prettier
+    // indents everything after the first piece
+    // under it. Level and indented are different
+    // files, and only one of them survives a
+    // format.
+    expect(
+      written((writer) => {
+        writeValue(
+          writer,
+          'const x = ',
+          list([
+            text(
+              'Tell the customer we have everything we need and thank ' +
+                'them for their patience',
+            ),
+          ]),
+          ';',
+        );
+      }),
+    ).toBe(
+      [
+        'const x = [',
+        "  'Tell the customer we have everything we need and thank them for " +
+          "their ' +",
+        "    'patience',",
+        '];',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('keeps every line of what it writes inside the house width', async () => {
+    // Both shapes, against the formatter itself
+    // rather than against a transcription of what
+    // it does. The pieces have to join back to the
+    // text somebody wrote, and prettier has to
+    // leave the layout alone, or the file stops
+    // matching itself on the first format.
+    const prose =
+      'Thanks for getting in touch about this. We can start work on it ' +
+      'once you have told us a little more, and we will come back to you ' +
+      'the same day.';
+    const shapes = [
+      written((writer) => {
+        writeValue(
+          writer,
+          'const x = ',
+          object([{ key: 'bodyMarkdown', value: text(prose) }]),
+          ';',
+        );
+      }),
+      written((writer) => {
+        writeValue(writer, 'const x = ', list([text(prose)]), ';');
+      }),
+    ];
+
+    for (const shape of shapes) {
+      for (const line of shape.split('\n')) {
+        expect([...line].length).toBeLessThanOrEqual(80);
+      }
+
+      const quoted = [...shape.matchAll(/'([^']*)'/g)].map(
+        (match) => match[1] ?? '',
+      );
+      expect(quoted.join('')).toBe(prose);
+
+      expect(
+        await prettier.format(shape, {
+          parser: 'typescript',
+          singleQuote: true,
+          semi: true,
+          printWidth: 80,
+        }),
+      ).toBe(shape);
+    }
   });
 
   it('keeps an empty object and an empty list on their line', () => {
@@ -834,6 +988,63 @@ describe('a conditional field the page could not evaluate', () => {
     if (result.reason !== 'UNSUPPORTED') return;
     expect(result.message).toContain('why');
   });
+
+  it('refuses a comparison against something that is not one answer', () => {
+    // The catalog lets a predicate compare against
+    // any JSON, and the page compares one answer
+    // to one value in a browser. There is nothing
+    // for null, a list or an object to mean there,
+    // and a project that emitted one would fail
+    // its own type-check naming a type nobody
+    // wrote.
+    for (const value of [null, [1, 2], { a: 1 }]) {
+      const result = refuse(withCondition({ path: 'urgent', op: 'eq', value }));
+
+      expect(result.reason).toBe('UNSUPPORTED');
+      if (result.reason !== 'UNSUPPORTED') continue;
+      expect(result.nodeId).toBe('ask_something');
+      expect(result.message).toContain('why');
+    }
+  });
+
+  it('compiles every operator the page knows how to evaluate', () => {
+    // The page's own script handles all eight, and
+    // the compiler passes the operator through
+    // verbatim. What this pins is that it passes
+    // *every* one through: an operator the
+    // compiler quietly dropped would render a
+    // field that is always shown.
+    const operators = [
+      'eq',
+      'neq',
+      'gt',
+      'gte',
+      'lt',
+      'lte',
+      'exists',
+      'nonempty',
+    ] as const;
+
+    for (const op of operators) {
+      const compiled = compile(withCondition({ path: 'urgent', op }));
+
+      expect(compiled).toContain(`showIf: { fieldId: 'urgent', op: '${op}' },`);
+    }
+  });
+
+  it('compiles a comparison against each kind of answer there is', () => {
+    for (const value of ['yes', 3, true]) {
+      const source_ = compile(
+        withCondition({ path: 'urgent', op: 'eq', value }),
+      );
+
+      expect(source_).toContain(
+        `showIf: { fieldId: 'urgent', op: 'eq', value: ${JSON.stringify(
+          value,
+        ).replaceAll('"', "'")} },`,
+      );
+    }
+  });
 });
 
 describe('a reminder the author did not size', () => {
@@ -1000,6 +1211,26 @@ describe('an approval', () => {
   it('serves the approval page, with no form fields of its own', () => {
     expect(written_).toContain("page: 'approval',");
     expect(written_).toContain('fields: [],');
+  });
+
+  it('tells the submitted page the same thing the email did', () => {
+    // The waits table is what the page rendered
+    // after a decision reads, and it is the second
+    // place the join-onward titles have to be
+    // right. The email's copy of them is asserted
+    // above; without this one, widening either
+    // list is caught by nothing but the golden.
+    expect(written_).toContain(
+      [
+        'export const waits: Record<string, WaitDescriptor> = {',
+        '  manager_ok: {',
+        "    nodeId: 'manager_ok',",
+        "    title: 'Manager decides',",
+        "    page: 'approval',",
+        '    fields: [],',
+        "    downstream: ['Close the claim'],",
+      ].join('\n'),
+    );
   });
 
   it('takes both ways out of the decision', () => {

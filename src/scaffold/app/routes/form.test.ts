@@ -139,8 +139,8 @@ function harness(options: {
     async send(runId, message, nodeId, key) {
       sent.push({ runId, message, nodeId, key });
     },
-    async isWaiting(runId, nodeId) {
-      return waiting.has(`${runId} ${nodeId}`);
+    async parkOf(runId, nodeId) {
+      return waiting.has(`${runId} ${nodeId}`) ? 'park_one' : null;
     },
     store:
       store === null
@@ -407,7 +407,7 @@ describe('submitting a form', () => {
       {
         runId: 'wf_1',
         nodeId: 'await_form',
-        key: 'wf_1:await_form',
+        key: 'wf_1:await_form:park_one',
         // The declared file field answers with an
         // empty list rather than being left out.
         // The handler downstream declared a type

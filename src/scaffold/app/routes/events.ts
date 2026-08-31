@@ -39,7 +39,7 @@ export type EventDeps = {
   findWaitCorrelation: (
     topic: string,
     key: string,
-  ) => Promise<{ runId: string; nodeId: string } | null>;
+  ) => Promise<{ runId: string; nodeId: string; park: string } | null>;
 };
 
 export function eventRoutes(deps: EventDeps): Router {
@@ -132,11 +132,16 @@ async function deliver(
     return;
   }
 
+  // The park, not the run and node alone: a wait
+  // inside a loop parks on the same node every
+  // round, and DBOS keeps every key a run was ever
+  // woken with, so a key that repeated would have
+  // the second round's answer dropped.
   await deps.send(
     parked.runId,
     payload,
     parked.nodeId,
-    `${parked.runId}:${parked.nodeId}`,
+    `${parked.runId}:${parked.nodeId}:${parked.park}`,
   );
   response.status(202).json({ ok: true });
 }

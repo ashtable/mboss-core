@@ -70,6 +70,23 @@ export class SourceWriter {
   }
 
   /**
+   * A line, then a run of lines one deeper, then
+   * back out again.
+   *
+   * `open` and `close` cannot express this on
+   * their own: a value that has to move under the
+   * key it belongs to is indented with nothing to
+   * close it, because the comma that ends it goes
+   * on the last line of the value itself.
+   */
+  indented(head: string, body: () => void): void {
+    this.line(head);
+    this.#indent += INDENT_STEP;
+    body();
+    this.#indent -= INDENT_STEP;
+  }
+
+  /**
    * The line between two blocks: back out one
    * level, write it, and go one deeper again.
    *

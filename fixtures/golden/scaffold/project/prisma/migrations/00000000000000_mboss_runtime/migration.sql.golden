@@ -7,6 +7,7 @@ CREATE TABLE "mboss_wait_correlations" (
     "nodeId" TEXT NOT NULL,
     "topic" TEXT NOT NULL,
     "key" TEXT NOT NULL,
+    "park" TEXT NOT NULL,
 
     CONSTRAINT "mboss_wait_correlations_pkey" PRIMARY KEY ("runId","nodeId")
 );

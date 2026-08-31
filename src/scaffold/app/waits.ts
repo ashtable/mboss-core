@@ -1,6 +1,8 @@
 // Written by mBoss when this project was created.
 // It is yours now — edit it freely.
 
+import { randomUUID } from 'node:crypto';
+
 import type { WaitRegistration } from './contract.js';
 import { prismaClient } from './db.js';
 
@@ -33,6 +35,21 @@ export type WaitRow = {
   nodeId: string;
   topic: string;
   key: string;
+  /**
+   * Which occasion of waiting this row is.
+   *
+   * A wait inside a loop parks on the same node
+   * every round, and what wakes a run carries an
+   * idempotency key so that a webhook delivered
+   * twice lands once. DBOS makes that key the
+   * primary key of its message table and marks a
+   * consumed message rather than deleting it, so a
+   * key built from the run and the node alone
+   * would work for the first round and be silently
+   * dropped for every round after it. This is the
+   * part of the key that changes.
+   */
+  park: string;
 };
 
 /**
@@ -59,7 +76,7 @@ export function prismaWaitStore(): WaitStore {
       await table().upsert({
         where: { runId_nodeId: { runId: row.runId, nodeId: row.nodeId } },
         create: row,
-        update: { topic: row.topic, key: row.key },
+        update: { topic: row.topic, key: row.key, park: row.park },
       });
     },
     async remove(runId, nodeId) {
@@ -77,11 +94,25 @@ export function prismaWaitStore(): WaitStore {
   };
 }
 
+/**
+ * Writing the row a wake is addressed by.
+ *
+ * A run already parked here keeps the park it
+ * has: the step around this call is retried, and a
+ * retry that minted a second park would let a
+ * delivery that read the first and one that read
+ * the second both land, which is the double wake
+ * the key exists to prevent. A run parking here
+ * again after clearing gets a new one, because
+ * that is a new occasion of waiting.
+ */
 export async function registerWaitCorrelation(
   registration: WaitRegistration,
   store: WaitStore = prismaWaitStore(),
 ): Promise<void> {
-  await store.put(registration);
+  const parked = await store.get(registration.runId, registration.nodeId);
+
+  await store.put({ ...registration, park: parked?.park ?? randomUUID() });
 }
 
 export async function clearWaitCorrelation(
@@ -108,18 +139,20 @@ export async function findWaitCorrelation(
   topic: string,
   key: string,
   store: WaitStore = prismaWaitStore(),
-): Promise<{ runId: string; nodeId: string } | null> {
+): Promise<{ runId: string; nodeId: string; park: string } | null> {
   const rows = [...(await store.matching(topic, key))].sort((a, b) =>
     a.runId < b.runId ? -1 : 1,
   );
   const first = rows[0];
 
-  return first ? { runId: first.runId, nodeId: first.nodeId } : null;
+  return first
+    ? { runId: first.runId, nodeId: first.nodeId, park: first.park }
+    : null;
 }
 
 /**
- * Whether this particular run is still parked on
- * this node.
+ * Which park this run is on, or null when it is
+ * not waiting here at all.
  *
  * Asked per run, and that is the whole point.
  * Every run waiting on a form node registers the
@@ -127,10 +160,10 @@ export async function findWaitCorrelation(
  * answer "somebody is still waiting" for a link
  * whose own run answered days ago.
  */
-export async function isWaiting(
+export async function parkOf(
   runId: string,
   nodeId: string,
   store: WaitStore = prismaWaitStore(),
-): Promise<boolean> {
-  return (await store.get(runId, nodeId)) !== null;
+): Promise<string | null> {
+  return (await store.get(runId, nodeId))?.park ?? null;
 }

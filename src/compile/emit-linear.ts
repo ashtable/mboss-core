@@ -23,6 +23,7 @@ import {
   list,
   object,
   source,
+  text,
   writeStep,
   writeTimer,
   writeValue,
@@ -1199,14 +1200,11 @@ class Emitter {
         'sendNodeEmail',
         object([
           { key: RUN_ID },
-          { key: 'workflowTitle', value: source(literal(this.#title())) },
+          { key: 'workflowTitle', value: text(this.#title()) },
           { key: 'nodeId', value: source(literal(node.id)) },
           { key: 'to', value: source(this.#recipient(node.config.to)) },
-          { key: 'subject', value: source(literal(node.config.subject)) },
-          {
-            key: 'bodyMarkdown',
-            value: source(literal(node.config.bodyMarkdown)),
-          },
+          { key: 'subject', value: text(node.config.subject) },
+          { key: 'bodyMarkdown', value: text(node.config.bodyMarkdown) },
           { key: 'attach', value: this.#attach(node) },
           { key: 'downstream', value: this.#downstreamOf(node) },
         ]),
@@ -1300,7 +1298,7 @@ class Emitter {
       fields.map((field, index) =>
         object([
           { key: 'id', value: source(literal(field.id)) },
-          { key: 'label', value: source(literal(field.label)) },
+          { key: 'label', value: text(field.label) },
           { key: 'type', value: source(literal(field.type)) },
           { key: 'required', value: source(String(field.required ?? false)) },
           { key: 'multiple', value: source(String(field.multiple ?? false)) },
@@ -1350,12 +1348,31 @@ class Emitter {
       );
     }
 
+    const compared = showIf.value;
+
+    if (compared !== undefined && !isScalar(compared)) {
+      throw new UnsupportedIR(
+        `\`${field.id}\` is shown only when \`${showIf.path}\` matches ` +
+          `${JSON.stringify(compared)}, and a form answer is one word, one ` +
+          `number or a yes — there is nothing for that to match.`,
+        node.id,
+      );
+    }
+
     return object([
       { key: 'fieldId', value: source(literal(only)) },
       { key: 'op', value: source(literal(showIf.op)) },
-      ...(showIf.value === undefined
+      ...(compared === undefined
         ? []
-        : [{ key: 'value', value: source(literal(showIf.value)) }]),
+        : [
+            {
+              key: 'value',
+              value:
+                typeof compared === 'string'
+                  ? text(compared)
+                  : source(literal(compared)),
+            },
+          ]),
     ]);
   }
 
@@ -1422,22 +1439,17 @@ class Emitter {
         'sendNodeEmail',
         object([
           { key: RUN_ID },
-          { key: 'workflowTitle', value: source(literal(this.#title())) },
+          { key: 'workflowTitle', value: text(this.#title()) },
           { key: 'nodeId', value: source(literal(node.id)) },
           { key: 'to', value: source(this.#recipient(config.to)) },
           {
             key: 'subject',
-            value: source(
-              literal(config.subject ?? `Approval needed: ${node.title}`),
-            ),
+            value: text(config.subject ?? `Approval needed: ${node.title}`),
           },
           {
             key: 'bodyMarkdown',
-            value: source(
-              literal(
-                config.message ??
-                  `${this.#title()} is waiting on your decision.`,
-              ),
+            value: text(
+              config.message ?? `${this.#title()} is waiting on your decision.`,
             ),
           },
           {
@@ -1787,7 +1799,7 @@ class Emitter {
   #waitHeader(node: WorkflowNode): EmittedEntry[] {
     return [
       { key: 'nodeId', value: source(literal(node.id)) },
-      { key: 'title', value: source(literal(node.title)) },
+      { key: 'title', value: text(node.title) },
     ];
   }
 
@@ -1979,9 +1991,28 @@ function timeoutWhy(days: number | undefined): string {
   );
 }
 
+/**
+ * Whether a value is one a form answer could ever
+ * equal.
+ *
+ * The catalog types a predicate's value as any
+ * JSON, because the same shape is used for
+ * conditions the workflow itself evaluates. A
+ * field's condition is evaluated in a browser
+ * against one answer per field, so this is the
+ * narrower question.
+ */
+function isScalar(value: unknown): value is string | number | boolean {
+  return (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  );
+}
+
 /** Titles, as the list the runtime reads. */
 function titlesList(titles: readonly string[]): Emitted {
-  return list(titles.map((title) => source(literal(title))));
+  return list(titles.map((title) => text(title)));
 }
 
 /**

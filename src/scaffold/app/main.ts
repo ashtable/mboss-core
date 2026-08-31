@@ -12,7 +12,7 @@ import { prismaClient } from './db.js';
 import { readEnv } from './env.js';
 import { applyAndPruneSchedules } from './schedules.js';
 import { parseKeyRing } from './signed-links.js';
-import { findWaitCorrelation, isWaiting } from './waits.js';
+import { findWaitCorrelation, parkOf } from './waits.js';
 
 /**
  * Starting the app. The only module here that does
@@ -100,7 +100,7 @@ async function main(): Promise<void> {
       await DBOS.send(runId, message, nodeId, idempotencyKey);
     },
     findWaitCorrelation: (topic, key) => findWaitCorrelation(topic, key),
-    isWaiting: (runId, nodeId) => isWaiting(runId, nodeId),
+    parkOf: (runId, nodeId) => parkOf(runId, nodeId),
     store: artifactStoreFromEnv(env),
   });
 
