@@ -157,3 +157,43 @@ describe('the scaffold import graph', () => {
     }
   });
 });
+
+/**
+ * The compiler's own graph.
+ *
+ * `src/compile/` is shipped source that the MCP
+ * server and the extension consume, so it may not
+ * reach for a devDependency: it parses and
+ * type-checks with the compiler ts-morph bundles,
+ * which is an ordinary runtime dependency. It also
+ * emits imports of the DBOS SDK, Express and a
+ * Prisma client without importing any of them — a
+ * generated project needs those, and a library
+ * that nests this one does not.
+ */
+describe('the compiler import graph', () => {
+  const dir = join(SRC, 'compile');
+  const entry = join(dir, 'index.ts');
+
+  it('parses with the compiler ts-morph brings, not the devDependency', () => {
+    const { external, visited } = walk(entry, dir);
+
+    expect(visited.length).toBeGreaterThan(1);
+    expect(external).toContain('ts-morph');
+    expect(external).not.toContain('typescript');
+  });
+
+  it('imports none of the packages it emits imports of', () => {
+    const { external } = walk(entry, dir);
+
+    for (const name of [
+      'express',
+      'prettier',
+      '@dbos-inc/dbos-sdk',
+      '@dbos-inc/prisma-datasource',
+      '@prisma/client',
+    ]) {
+      expect(external).not.toContain(name);
+    }
+  });
+});

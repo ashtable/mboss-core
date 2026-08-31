@@ -14,6 +14,18 @@
       "returnType": "Booking"
     },
     {
+      "doc": "Confirms one of the alternative times the slot grid offered. Takes a single alternative rather than the grid, which is what a block that fans out needs: the generated code hands its handler one item at a time.",
+      "export": "confirmSlot",
+      "file": "lib/confirmSlot.ts",
+      "params": [
+        {
+          "name": "slot",
+          "type": "string"
+        }
+      ],
+      "returnType": "Booking"
+    },
+    {
       "doc": "Looks up availability around the requested time.",
       "export": "findSlot",
       "file": "lib/findSlot.ts",
@@ -63,7 +75,7 @@
     }
   ],
   "nonSerializable": [],
-  "sourceHash": "8c28127c52cd0e056845f3d86847ed46d1d9c6692def7b2a8082bbe71873fb9b",
+  "sourceHash": "3dca475bbb9366544cce66e5500f2570668f1e6efdaea0c0309359dd906936b4",
   "typeSources": {
     "Booking": "lib/types.ts",
     "BookingReq": "lib/types.ts",

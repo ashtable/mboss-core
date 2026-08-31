@@ -38,6 +38,7 @@ describe('scanLib', () => {
   it('offers exactly the handlers the code-behind exports', () => {
     expect(manifest.functions.map((fn) => fn.export).sort()).toEqual([
       'bookAppointment',
+      'confirmSlot',
       'findSlot',
       'parseRequest',
       'recordBooking',

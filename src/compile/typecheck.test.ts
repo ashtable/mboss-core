@@ -1,14 +1,17 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { scaffoldProject } from '../scaffold/index.js';
 import { fixturesRoot } from '../test-support/fixtures.js';
 import {
   makeTypecheckProject,
   removeTypecheckProject,
   type TypecheckProject,
 } from '../test-support/typecheck.js';
+
+import { compileRegistry } from './compile.js';
 import { typecheckProject } from './typecheck.js';
 
 /**
@@ -211,4 +214,62 @@ describe('typecheckProject', () => {
     expect(message).toContain('is not assignable to parameter');
     expect(message).toContain("Type 'number' is not assignable");
   });
+});
+
+describe('the goldens, inside a real scaffolded project', () => {
+  it('type-check against the runtime and the code-behind', async () => {
+    // The one assertion in this task that is not
+    // about the shape of the text: the emitted
+    // code is compiled against the real, pinned
+    // typings of the DBOS SDK, the Prisma
+    // datasource and the handlers it calls. A
+    // green check against a stub would be a
+    // green check against my own assumptions.
+    project = await makeTypecheckProject();
+    await scaffoldProject(project.projectDir, { name: 'golden_app' });
+
+    const lib = join(project.projectDir, 'lib');
+    await mkdir(lib, { recursive: true });
+    for (const entry of await readdir(join(fixturesRoot, 'lib'))) {
+      if (entry.endsWith('.test.ts')) continue;
+      await writeFile(
+        join(lib, entry),
+        await readFile(join(fixturesRoot, 'lib', entry), 'utf8'),
+        'utf8',
+      );
+    }
+
+    const goldens = join(fixturesRoot, 'golden', 'compile');
+    const written: string[] = [];
+    const entries = [];
+
+    for (const file of (await readdir(goldens)).sort()) {
+      if (!file.endsWith('.workflow.ts')) continue;
+
+      const name = file.replace('.workflow.ts', '');
+      const relative = `src/workflows/${file}`;
+
+      await write(relative, await readFile(join(goldens, file), 'utf8'));
+      written.push(relative);
+      entries.push({
+        name,
+        title: name,
+        scheduled: name === 'schedule_trigger',
+      });
+    }
+
+    // The registry too, so the assignment of
+    // every workflow — the two-argument scheduled
+    // one included — is checked rather than
+    // assumed.
+    await write('src/workflows/index.ts', compileRegistry(entries));
+
+    const result = typecheckProject(project.projectDir);
+
+    expect(result.ok ? [] : result.problems).toEqual([]);
+    expect(result.ok).toBe(true);
+    for (const path of [...written, 'src/workflows/index.ts']) {
+      expect(result.checkedFiles).toContain(path);
+    }
+  }, 120_000);
 });
