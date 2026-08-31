@@ -25,8 +25,10 @@ implementation here rather than two that drift. Sending itself stays in the work
 provider key and a network.
 
 It imports **nothing at all**, not even a `node:` builtin, and a test enforces that. The preview
-runs in a browser, where a builtin would break the bundle. Alias `@mboss/core/email` directly; the
-package barrel stays signed-links only.
+runs in a browser, where a builtin would break the bundle. Alias `@mboss/core/email` directly:
+`email` is the one shipped module deliberately kept out of the package barrel, and the cloud
+consumers are barred from importing the barrel at all by an ESLint rule in each repo, so they
+reach every module they use through its own subpath.
 
 The four `.html` file snapshots beside the tests are the whole rendered cards, kept as files so an
 email can be opened and looked at — the only way to review one.
