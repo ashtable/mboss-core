@@ -494,6 +494,96 @@ describe('a block inside a loop body', () => {
   });
 });
 
+describe('a guarded block inside a loop, with work after the loop', () => {
+  const source = compile(
+    makeIR({
+      name: 'guard_in_loop',
+      nodes: [
+        TRIGGER,
+        {
+          id: 'draft_rounds',
+          kind: 'loop',
+          title: 'Draft and check',
+          config: { minRounds: 1, maxRounds: 3, body: ['find_slot'] },
+        },
+        { ...FIND_SLOT, guard: { path: 'service', op: 'eq', value: 'groom' } },
+        {
+          id: 'sweep_old',
+          kind: 'step',
+          title: 'Clear stale holds',
+          handler: { export: 'sweepStale' },
+          config: {},
+        },
+      ],
+      edges: [
+        { from: 'review_started', to: 'draft_rounds', type: 'BookingReq' },
+        { from: 'draft_rounds', to: 'find_slot', type: 'BookingReq' },
+        { from: 'find_slot', to: 'sweep_old' },
+      ],
+    }),
+  );
+
+  it('carries nothing out of a block that may not run', () => {
+    // A condition that was false on every round
+    // assigns nothing, so a check saying the value
+    // is always there would fail the ordinary run.
+    // The block after it asked for no input — that
+    // is the rule for a guarded producer, and the
+    // loop around it does not change it.
+    expect(source).not.toContain('Carried');
+    expect(source).not.toContain('=== undefined');
+  });
+
+  it('still runs the block after the loop', () => {
+    expect(source).toContain('sweepStale()');
+    expect(stepProblems(source)).toEqual([]);
+  });
+
+  it('refuses a block after the loop that reads what it bound', () => {
+    // Sharing the condition is what makes this
+    // legal to draw, and it is not enough to
+    // compile: the two blocks are in one block
+    // together only when they sit side by side, and
+    // a loop between them ends that.
+    const guard = { path: 'service', op: 'eq' as const, value: 'groom' };
+    const result = refuse(
+      makeIR({
+        name: 'guard_read_after',
+        nodes: [
+          TRIGGER,
+          {
+            id: 'draft_rounds',
+            kind: 'loop',
+            title: 'Draft and check',
+            config: { minRounds: 1, maxRounds: 3, body: ['find_slot'] },
+          },
+          { ...FIND_SLOT, guard },
+          {
+            id: 'chat',
+            kind: 'step',
+            title: 'Text the customer',
+            handler: { export: 'twilioChat' },
+            in: 'SlotGrid',
+            out: 'ChatPrompt',
+            guard,
+            config: {},
+          },
+        ],
+        edges: [
+          { from: 'review_started', to: 'draft_rounds', type: 'BookingReq' },
+          { from: 'draft_rounds', to: 'find_slot', type: 'BookingReq' },
+          { from: 'find_slot', to: 'chat', type: 'SlotGrid' },
+        ],
+      }),
+    );
+
+    expect(result).toMatchObject({ reason: 'UNSUPPORTED', nodeId: 'chat' });
+    if ('message' in result) {
+      expect(result.message).toContain('separate blocks');
+    }
+  });
+});
+
 describe('a fan-out inside a loop', () => {
   const source = compile(
     makeIR({
@@ -538,6 +628,53 @@ describe('a fan-out inside a loop', () => {
 
   it('still records a name no other step in the file records', () => {
     expect(stepProblems(source)).toEqual([]);
+  });
+});
+
+describe('which block a value comes from', () => {
+  it('lets the arms meet at a block reading what came before', () => {
+    // The canonical drawing: two ways out of two
+    // branches arrive at one block, and neither of
+    // them binds anything, so what that block reads
+    // is what was flowing before either branch was
+    // reached.
+    const source = compile(fixture('chat_retry_abort'));
+
+    expect(source).toContain('bookAppointment(findSlotCarried)');
+  });
+
+  it('ignores a wire from a block a run never reaches', () => {
+    // An island is a block dropped on the canvas
+    // and half wired up. A run never gets to it, so
+    // it never produces anything, and the wire out
+    // of it is not a way in to anywhere.
+    const source = compile(
+      makeIR({
+        name: 'island_wire',
+        nodes: [
+          TRIGGER,
+          FIND_SLOT,
+          { ...FIND_SLOT, id: 'stray' },
+          {
+            id: 'book_now',
+            kind: 'step',
+            title: 'Book it now',
+            handler: { export: 'bookAppointment' },
+            in: 'SlotGrid',
+            out: 'Booking',
+            config: {},
+          },
+        ],
+        edges: [
+          { from: 'review_started', to: 'find_slot', type: 'BookingReq' },
+          { from: 'find_slot', to: 'book_now', type: 'SlotGrid' },
+          { from: 'stray', to: 'book_now', type: 'SlotGrid' },
+        ],
+      }),
+    );
+
+    expect(source).toContain('bookAppointment(findSlotOut)');
+    expect(source).not.toContain('stray');
   });
 });
 
@@ -610,6 +747,192 @@ describe('what control flow this compiler will not follow', () => {
     expect(result).toMatchObject({ reason: 'UNSUPPORTED', nodeId: 'route' });
     if ('message' in result) {
       expect(result.message).toContain('one way out');
+    }
+  });
+
+  it('refuses two wires back to one block', () => {
+    // Each case declares its own bound. One loop
+    // can only carry one, so honouring the drawing
+    // would mean throwing one of the two away and
+    // letting a case go round more often than its
+    // author allowed.
+    const result = refuse(
+      makeIR({
+        name: 'two_ways_back',
+        nodes: [
+          TRIGGER,
+          FIND_SLOT,
+          {
+            id: 'first_check',
+            kind: 'branch',
+            title: 'Anything open?',
+            in: 'SlotGrid',
+            config: {
+              cases: [
+                {
+                  port: 'again',
+                  when: { path: 'requestedSlotFree', op: 'eq', value: false },
+                  maxIterations: 3,
+                },
+              ],
+              elsePort: 'on',
+            },
+          },
+          {
+            id: 'chat',
+            kind: 'step',
+            title: 'Text the customer',
+            handler: { export: 'twilioChat' },
+            in: 'SlotGrid',
+            out: 'ChatPrompt',
+            config: {},
+          },
+          {
+            id: 'second_check',
+            kind: 'branch',
+            title: 'Said anything?',
+            in: 'ChatPrompt',
+            config: {
+              cases: [
+                {
+                  port: 'again',
+                  when: { path: 'body', op: 'nonempty' },
+                  maxIterations: 7,
+                },
+              ],
+              elsePort: 'done',
+            },
+          },
+          {
+            id: 'book_now',
+            kind: 'step',
+            title: 'Book it now',
+            handler: { export: 'bookAppointment' },
+            in: 'SlotGrid',
+            out: 'Booking',
+            config: {},
+          },
+        ],
+        edges: [
+          { from: 'review_started', to: 'find_slot', type: 'BookingReq' },
+          { from: 'find_slot', to: 'first_check', type: 'SlotGrid' },
+          {
+            from: 'first_check',
+            port: 'again',
+            to: 'find_slot',
+            type: 'BookingReq',
+            back: true,
+          },
+          { from: 'first_check', port: 'on', to: 'chat', type: 'SlotGrid' },
+          { from: 'chat', to: 'second_check', type: 'ChatPrompt' },
+          {
+            from: 'second_check',
+            port: 'again',
+            to: 'find_slot',
+            type: 'BookingReq',
+            back: true,
+          },
+          {
+            from: 'second_check',
+            port: 'done',
+            to: 'book_now',
+            type: 'SlotGrid',
+          },
+        ],
+      }),
+    );
+
+    expect(result).toMatchObject({
+      reason: 'UNSUPPORTED',
+      nodeId: 'second_check',
+    });
+    if ('message' in result) {
+      expect(result.message).toContain('`first_check`');
+      expect(result.message).toContain('one bound');
+    }
+  });
+
+  it('refuses a block the ways into it disagree about', () => {
+    // Both arms bind a value of their own and both
+    // wire to the same block, so the drawing names
+    // two producers for one input. The types match
+    // here, which is the dangerous half: the file
+    // compiles and runs on the value from before
+    // the branch, and nothing says so.
+    const result = refuse(
+      makeIR({
+        name: 'two_producers',
+        nodes: [
+          TRIGGER,
+          FIND_SLOT,
+          {
+            id: 'book_appointment',
+            kind: 'step',
+            title: 'Book it now',
+            handler: { export: 'bookAppointment' },
+            in: 'SlotGrid',
+            out: 'Booking',
+            config: {},
+          },
+          {
+            id: 'pick',
+            kind: 'branch',
+            title: 'Which ledger?',
+            in: 'Booking',
+            config: {
+              cases: [
+                { port: 'yes', when: { path: 'bookingId', op: 'nonempty' } },
+              ],
+              elsePort: 'no',
+            },
+          },
+          {
+            id: 'record_a',
+            kind: 'transaction',
+            title: 'Record it one way',
+            handler: { export: 'recordBooking' },
+            in: 'Booking',
+            out: 'Booking',
+            config: {},
+          },
+          {
+            id: 'record_b',
+            kind: 'transaction',
+            title: 'Record it the other way',
+            handler: { export: 'recordBooking' },
+            in: 'Booking',
+            out: 'Booking',
+            config: {},
+          },
+          {
+            id: 'record_final',
+            kind: 'transaction',
+            title: 'Record it for good',
+            handler: { export: 'recordBooking' },
+            in: 'Booking',
+            out: 'Booking',
+            config: {},
+          },
+        ],
+        edges: [
+          { from: 'review_started', to: 'find_slot', type: 'BookingReq' },
+          { from: 'find_slot', to: 'book_appointment', type: 'SlotGrid' },
+          { from: 'book_appointment', to: 'pick', type: 'Booking' },
+          { from: 'pick', port: 'yes', to: 'record_a', type: 'Booking' },
+          { from: 'pick', port: 'no', to: 'record_b', type: 'Booking' },
+          { from: 'record_a', to: 'record_final', type: 'Booking' },
+          { from: 'record_b', to: 'record_final', type: 'Booking' },
+        ],
+      }),
+    );
+
+    expect(result).toMatchObject({
+      reason: 'UNSUPPORTED',
+      nodeId: 'record_final',
+    });
+    if ('message' in result) {
+      expect(result.message).toContain('`record_a`');
+      expect(result.message).toContain('`record_b`');
     }
   });
 

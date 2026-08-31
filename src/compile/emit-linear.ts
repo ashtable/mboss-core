@@ -5,6 +5,7 @@ import type {
   WorkflowIR,
   WorkflowNode,
 } from '../ir/index.js';
+import { sameGuard } from '../validate/rules.js';
 
 import {
   writeBackEdgeLoop,
@@ -713,12 +714,14 @@ class Emitter {
     this.#body.line(`const chunk = ${items}.slice(offset, offset + ${size});`);
     this.#body.open('const settledChunk = await Promise.allSettled(');
     this.#body.open('chunk.map((item, index) =>');
+    const perItem = this.#segments([{ kind: 'item' }]);
+
     expandedCall(
       this.#body,
       inTransaction ? 'appDb.runTransaction' : 'DBOS.runStep',
       `async () => ${this.#handlerCall(node, 'item')}`,
       [
-        `name: ${stepNameLiteral(node.id, this.#segments([{ kind: 'item' }]))},`,
+        `name: ${stepNameLiteral(node.id, perItem)},`,
         // A transaction's config carries an
         // isolation level, a read-only flag and a
         // name, and nothing at all about retries.
@@ -892,6 +895,24 @@ class Emitter {
       return new UnsupportedIR(
         `\`${node.id}\` reads the payload the run started with, but a run ` +
           `the clock starts carries no payload to give it.`,
+        node.id,
+      );
+    }
+
+    // Sharing the condition is what usually fixes
+    // this, so a block that already shares it needs
+    // to be told something else: the two are in one
+    // block together only where they sit side by
+    // side, and a loop or an unconditional block
+    // between them ends that.
+    const bound = this.#plan.chain.find((each) => each.id === producer);
+
+    if (bound !== undefined && sameGuard(bound.guard, node.guard)) {
+      return new UnsupportedIR(
+        `\`${node.id}\` reads what \`${producer}\` produced under the ` +
+          `same condition, but something between them put the two in ` +
+          `separate blocks, so the value \`${producer}\` bound cannot ` +
+          `be named where \`${node.id}\` runs.`,
         node.id,
       );
     }

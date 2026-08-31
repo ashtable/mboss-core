@@ -144,11 +144,18 @@ describe('what the compiler cannot emit yet', () => {
   });
 
   it('refuses the canonical workflow, which parks on a reply', () => {
-    // Its control flow compiles; its wait and its
-    // email do not yet. Named here rather than
-    // left to be discovered, because the canonical
-    // workflow is the one everything else is
-    // measured against.
+    // Its wait and its email have no emitter yet.
+    // What the control flow around them compiles
+    // to is pinned by `chat_retry_abort`, which is
+    // this document node for node with a plain
+    // step where the wait is and no trailing
+    // email.
+    //
+    // This is not a statement about the canonical
+    // workflow. It goes away the moment a wait and
+    // an email can be emitted, and what replaces
+    // it is that document's own full golden — not
+    // a relaxed assertion here.
     const result = compile(
       WorkflowIRSchema.parse(readFixtureJson('ir/groom_booking.workflow.json')),
     );

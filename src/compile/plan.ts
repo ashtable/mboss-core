@@ -225,7 +225,7 @@ class Planner {
     }
 
     for (const node of chain) {
-      this.#producers.set(node.id, this.#producerOf(node.id));
+      this.#producers.set(node.id, this.#producerOf(node));
     }
 
     this.#findLoops();
@@ -243,24 +243,85 @@ class Planner {
     };
   }
 
+  /** The block whose value another block reads,
+   *  once the ways into it have been shown to
+   *  agree on which block that is. */
+  #producerOf(node: WorkflowNode): string {
+    const dominating = this.#dominatingProducer(node.id);
+
+    if (node.in !== undefined) this.#checkWaysInAgree(node, dominating);
+
+    return dominating;
+  }
+
   /**
-   * The block whose value another block reads.
+   * The nearest block above one that every run
+   * passes through and that binds a value.
    *
-   * The nearest block above it that every run
-   * passes through and that binds a value. It has
-   * to be one every run passes through: a block
-   * reachable down only one arm of a branch has not
-   * run when the other arm was taken, and a
+   * It has to be one every run passes through: a
+   * block reachable down only one arm of a branch
+   * has not run when the other arm was taken, and a
    * reference to what it bound would be a
    * reference to nothing.
    */
-  #producerOf(id: string): string {
+  #dominatingProducer(id: string): string {
     const doms = this.#dominators.get(id) ?? new Set<string>();
     const above = [...doms]
       .filter((other) => other !== id && this.#bindsValue(other))
       .sort((a, b) => this.#at(a) - this.#at(b));
 
     return above.at(-1) ?? this.#trigger.id;
+  }
+
+  /**
+   * Every way into a block that reads a value
+   * arrives carrying the same one.
+   *
+   * A way in from a block that binds a value
+   * carries that value. A way in from a branch
+   * carries whatever was already flowing, which is
+   * the value above. When the ways in name two
+   * different blocks, the drawing says this one
+   * reads one thing down one route and something
+   * else down another, and a compiler binding one
+   * name per block would have to pick.
+   *
+   * Picking quietly is the worst of the options.
+   * Where the two differ in type the generated file
+   * does not compile, which at least says
+   * something; where they agree it runs on the
+   * value from before the branch and nothing
+   * anywhere reports it.
+   *
+   * A block declaring no input reads nothing, so
+   * no disagreement can reach it — which is the
+   * ordinary shape of arms meeting again at a block
+   * that only tidies up.
+   */
+  #checkWaysInAgree(node: WorkflowNode, dominating: string): void {
+    const sources = new Set<string>();
+
+    for (const edge of this.#graph.incoming.get(node.id) ?? []) {
+      const from = edge.from.node;
+
+      if (edge.back) continue;
+      if (!this.#position.has(from)) continue;
+
+      sources.add(this.#bindsValue(from) ? from : dominating);
+    }
+
+    if (sources.size < 2) return;
+
+    const [first, second] = [...sources].sort(
+      (a, b) => this.#at(a) - this.#at(b),
+    );
+
+    throw new UnsupportedIR(
+      `\`${node.id}\` reads what \`${first}\` produced on one way into ` +
+        `it and what \`${second}\` produced on another. This compiler ` +
+        `gives a block one value, so it cannot follow both.`,
+      node.id,
+    );
   }
 
   #bindsValue(id: string): boolean {
@@ -283,6 +344,23 @@ class Planner {
 
       if (branch === undefined || entry === undefined) continue;
       if (!this.#position.has(entry.id)) continue;
+
+      const already = this.#loops.get(entry.id);
+
+      // Each case carries its own bound. One loop
+      // has one, so honouring the second wire back
+      // would mean throwing one author's limit
+      // away and letting that case go round as
+      // often as the other one allows.
+      if (already !== undefined) {
+        throw new UnsupportedIR(
+          `\`${already.branch.id}\`'s \`${already.port}\` and ` +
+            `\`${branch.id}\`'s \`${edge.from.port}\` both wire back to ` +
+            `\`${entry.id}\`. This compiler emits one loop with one ` +
+            `bound, so it cannot follow both.`,
+          branch.id,
+        );
+      }
 
       this.#loops.set(entry.id, this.#loopRegion(edge, branch, entry.id));
     }
@@ -591,6 +669,17 @@ class Planner {
     for (const id of members) {
       const node = this.#graph.nodes.get(id);
       if (node === undefined || !VALUE_KINDS.has(node.kind)) continue;
+
+      // A block behind a condition may not run on
+      // any round, so there is nothing to promise
+      // the blocks after the loop: a check saying
+      // the value is always there would fail an
+      // ordinary run. Validation has already proved
+      // that whoever reads it either asked for no
+      // input or carries the same condition, and
+      // the emitter refuses the second of those by
+      // name rather than promise what it cannot.
+      if (node.guard !== undefined) continue;
 
       const read = [...this.#producers].some(
         ([consumer, producer]) => producer === id && !members.has(consumer),
