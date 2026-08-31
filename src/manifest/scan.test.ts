@@ -41,6 +41,7 @@ describe('scanLib', () => {
       'confirmSlot',
       'findSlot',
       'parseRequest',
+      'readReply',
       'recordBooking',
       'sweepStale',
       'twilioChat',

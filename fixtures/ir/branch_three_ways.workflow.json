@@ -1,0 +1,37 @@
+{
+  "$schema": "https://mboss.dev/schemas/workflow-v1.json",
+  "version": 1,
+  "revision": 1,
+  "name": "branch_three_ways",
+  "title": "Three ways out",
+  "nodes": [
+    { "id": "booking_requested", "kind": "trigger", "title": "Booking request",
+      "config": { "mode": "event", "topic": "booking.requested" }, "out": "BookingReq" },
+    { "id": "find_slot", "kind": "step", "title": "Find open slot",
+      "handler": { "export": "findSlot" }, "in": "BookingReq", "out": "SlotGrid", "config": {} },
+    { "id": "slot_route", "kind": "branch", "title": "What is open?", "in": "SlotGrid",
+      "config": { "cases": [
+        { "port": "free",  "when": { "path": "requestedSlotFree", "op": "eq", "value": true } },
+        { "port": "offer", "when": { "path": "alternatives", "op": "nonempty" } },
+        { "port": "later", "when": { "path": "requestedAt", "op": "nonempty" } } ],
+        "elsePort": "none" } },
+    { "id": "book_now", "kind": "step", "title": "Book it now",
+      "handler": { "export": "bookAppointment" }, "in": "SlotGrid", "out": "Booking", "config": {} },
+    { "id": "offer_times", "kind": "step", "title": "Offer other times",
+      "handler": { "export": "twilioChat" }, "in": "SlotGrid", "out": "ChatPrompt", "config": {} },
+    { "id": "sweep_old", "kind": "step", "title": "Clear stale holds",
+      "handler": { "export": "sweepStale" }, "config": {} },
+    { "id": "wrap_up", "kind": "step", "title": "Tidy up",
+      "handler": { "export": "sweepStale" }, "config": {} }
+  ],
+  "edges": [
+    { "id": "e1", "from": { "node": "booking_requested", "port": "out" }, "to": { "node": "find_slot" }, "type": "BookingReq" },
+    { "id": "e2", "from": { "node": "find_slot", "port": "out" }, "to": { "node": "slot_route" }, "type": "SlotGrid" },
+    { "id": "e3", "from": { "node": "slot_route", "port": "free" }, "to": { "node": "book_now" }, "type": "SlotGrid" },
+    { "id": "e4", "from": { "node": "slot_route", "port": "offer" }, "to": { "node": "offer_times" }, "type": "SlotGrid" },
+    { "id": "e5", "from": { "node": "slot_route", "port": "later" }, "to": { "node": "sweep_old" } },
+    { "id": "e6", "from": { "node": "book_now", "port": "out" }, "to": { "node": "wrap_up" }, "type": "Booking" },
+    { "id": "e7", "from": { "node": "offer_times", "port": "out" }, "to": { "node": "wrap_up" }, "type": "ChatPrompt" },
+    { "id": "e8", "from": { "node": "sweep_old", "port": "out" }, "to": { "node": "wrap_up" } }
+  ]
+}

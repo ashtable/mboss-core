@@ -1,14 +1,38 @@
 import type { LibManifest } from '../manifest/index.js';
-import type { Retry, WorkflowIR, WorkflowNode } from '../ir/index.js';
+import type {
+  Predicate,
+  Retry,
+  WorkflowIR,
+  WorkflowNode,
+} from '../ir/index.js';
 
+import {
+  writeBackEdgeLoop,
+  writeBranch,
+  writeCountedLoop,
+  type CarriedValue,
+} from './emit-control.js';
 import {
   importBlock,
   libTypeImport,
   libValueImport,
   type ImportEntry,
 } from './imports.js';
-import { LocalNames, camelCase, stepNameLiteral } from './names.js';
-import { planWorkflow, type EmissionPlan } from './plan.js';
+import {
+  LocalNames,
+  camelCase,
+  stepNameLiteral,
+  type StepSegment,
+} from './names.js';
+import {
+  planWorkflow,
+  type ArmTarget,
+  type EmissionPlan,
+  type GuardGroup,
+  type PlanArm,
+  type PlanItem,
+  type PlanRegion,
+} from './plan.js';
 import { literal, pathExpression, predicateExpression } from './predicate.js';
 import { SourceWriter } from './source.js';
 import { UnsupportedIR } from './unsupported.js';
@@ -67,10 +91,41 @@ class Emitter {
   /** What the file calls each handler it imports. */
   readonly #bindings = new Map<string, string>();
 
-  /** Which guard group each block's local is
-   *  declared in, so a reader of that local can be
-   *  checked against where it is in scope. */
-  readonly #groupOf = new Map<string, number>();
+  /**
+   * What each block's value is called, one frame
+   * per open block.
+   *
+   * A guard's `if`, a branch's arm and a loop's
+   * body each open one. A block emitted inside one
+   * can read what the frames below it hold and
+   * nothing else, which is exactly what the
+   * generated file's own scoping does.
+   */
+  readonly #scopes: Map<string, string>[] = [new Map()];
+
+  /** The counters of the loops now open, outermost
+   *  first, which is the order a step name carries
+   *  them in. */
+  readonly #rounds: string[] = [];
+
+  /**
+   * The loops drawn as a wire back to an earlier
+   * block that are open here, outermost first.
+   *
+   * `foldTo` is the bound a case carries in its own
+   * condition, and is set only where the author
+   * asked an exhausted case to fall through rather
+   * than fail.
+   */
+  readonly #open: {
+    round: string;
+    resume: string;
+    foldTo: number | undefined;
+  }[] = [];
+
+  /** The `let`s outside a loop that a value inside
+   *  it is copied into. */
+  readonly #carried = new Map<string, string[]>();
 
   constructor(request: EmitRequest) {
     this.#ir = request.ir;
@@ -104,10 +159,6 @@ class Emitter {
     for (const node of this.#plan.chain) {
       if (node.handler !== undefined) this.#bind(node.handler.export);
     }
-
-    this.#plan.groups.forEach((group, index) => {
-      for (const node of group.nodes) this.#groupOf.set(node.id, index);
-    });
   }
 
   /**
@@ -148,9 +199,7 @@ class Emitter {
 
     const preamble = this.#preamble();
     this.#emitBounds();
-    this.#plan.groups.forEach((group, index) => {
-      this.#emitGroup(group, index);
-    });
+    this.#emitRegion(this.#plan.region);
 
     const body = this.#body.toString();
     const tail = this.#emitDeclarations();
@@ -285,11 +334,37 @@ class Emitter {
     return declared;
   }
 
-  #emitGroup(group: EmissionPlan['groups'][number], index: number): void {
+  /** One stretch of blocks, in the order a run
+   *  takes them. */
+  #emitRegion(region: PlanRegion): void {
+    for (const item of region) this.#emitItem(item);
+  }
+
+  #emitItem(item: PlanItem): void {
+    switch (item.kind) {
+      case 'blocks':
+        this.#emitGroup(item.group);
+        return;
+
+      case 'branch':
+        this.#emitBranch(item);
+        return;
+
+      case 'countedLoop':
+        this.#emitCountedLoop(item);
+        return;
+
+      case 'repeat':
+        this.#emitRepeat(item);
+        return;
+    }
+  }
+
+  #emitGroup(group: GuardGroup): void {
     const guard = group.guard;
 
     if (guard === undefined) {
-      for (const node of group.nodes) this.#emitNode(node, index);
+      for (const node of group.nodes) this.#emitNode(node);
       return;
     }
 
@@ -299,16 +374,215 @@ class Emitter {
     // The condition stands outside the block it
     // opens, so it may only read what is in scope
     // out there.
-    const root = this.#valueOf(first, undefined);
+    const root = this.#valueOf(first);
     if (root === undefined) throw this.#unreachableValue(first);
 
     this.#body.open(`if (${predicateExpression(root, guard)}) {`);
-    for (const node of group.nodes) this.#emitNode(node, index);
+    this.#enter();
+    for (const node of group.nodes) this.#emitNode(node);
+    this.#leave();
     this.#body.close('}');
     this.#body.blank();
   }
 
-  #emitNode(node: WorkflowNode, group: number): void {
+  /**
+   * A branch, as its cases in the order the author
+   * wrote them.
+   *
+   * The condition reads the value that was flowing
+   * when the run arrived here, which is the nearest
+   * block above the branch that every run passes
+   * through — a branch itself produces nothing.
+   */
+  #emitBranch(item: Extract<PlanItem, { kind: 'branch' }>): void {
+    const root = this.#valueOf(item.node);
+    if (root === undefined) throw this.#unreachableValue(item.node);
+
+    writeBranch(
+      this.#body,
+      item.arms.map((arm) => ({
+        ...(arm.when === undefined
+          ? {}
+          : { condition: this.#armCondition(root, arm.when, arm.target) }),
+        body: () => this.#emitArm(arm),
+      })),
+    );
+    this.#body.blank();
+  }
+
+  /**
+   * A case's condition.
+   *
+   * The case that closes a loop and was told to
+   * carry on when its rounds run out carries the
+   * bound in the condition itself: on the last
+   * round the case simply does not match, and the
+   * run takes whichever way out the branch offers
+   * next. That is what "as if the case had not
+   * matched" has to mean in code.
+   */
+  #armCondition(root: string, when: Predicate, target: ArmTarget): string {
+    const condition = predicateExpression(root, when);
+    const loop = this.#open.at(-1);
+
+    if (target.kind !== 'again' || loop?.foldTo === undefined) {
+      return condition;
+    }
+
+    return `${loop.round} < ${loop.foldTo} && ${condition}`;
+  }
+
+  /**
+   * One way out of a branch. Answers whether the
+   * run leaves the branch by it.
+   */
+  #emitArm(arm: PlanArm): boolean {
+    const target = arm.target;
+
+    switch (target.kind) {
+      case 'end':
+        this.#body.line('return;');
+        return true;
+
+      case 'again':
+        this.#body.line('continue;');
+        return true;
+
+      case 'leave': {
+        // A way out of a loop only exists inside
+        // one. Naming the flag anyway, rather than
+        // guarding a state the plan cannot
+        // produce, means a mistake here reaches
+        // the type-check gate as an undeclared
+        // name rather than as quietly wrong code.
+        const resume = this.#open.at(-1)?.resume ?? 'resume';
+
+        this.#body.line(`${resume} = true;`);
+        this.#body.line('break;');
+        return true;
+      }
+
+      case 'join':
+        this.#body.comment('Nothing of its own to do on this way out.');
+        return false;
+
+      case 'region': {
+        this.#enter();
+        this.#emitRegion(target.region);
+        this.#leave();
+
+        if (target.outcome === 'ranOut') {
+          // Wired to nothing, so the run stops
+          // here rather than carrying on with what
+          // the other ways out lead to.
+          this.#body.line('return;');
+          return true;
+        }
+
+        return target.outcome !== 'reached';
+      }
+    }
+  }
+
+  #emitCountedLoop(item: Extract<PlanItem, { kind: 'countedLoop' }>): void {
+    const round = this.#locals.take('round');
+    const carried = this.#hoist(item.carried);
+
+    writeCountedLoop(this.#body, {
+      round,
+      rounds: item.rounds,
+      carried,
+      workflow: this.#ir.name,
+      unreachable:
+        'Unreachable: the loop runs at least once and assigns this. The ' +
+        'check is here because the type says so and a cast would be a lie ' +
+        'about which of the two is authoritative.',
+      body: () => {
+        this.#rounds.push(round);
+        this.#enter();
+        this.#emitRegion(item.body);
+        this.#leave();
+        this.#rounds.pop();
+      },
+    });
+  }
+
+  #emitRepeat(item: Extract<PlanItem, { kind: 'repeat' }>): void {
+    const round = this.#locals.take('round');
+    const resume = this.#locals.take('resume');
+    const carried = this.#hoist(item.carried);
+    const abort = item.onExhausted === 'abort';
+
+    writeBackEdgeLoop(this.#body, {
+      round,
+      resume,
+      carried,
+      workflow: this.#ir.name,
+      unreachable:
+        `Unreachable: every way out of the loop that sets ${resume} has ` +
+        'already assigned this. The check is here because the type says ' +
+        'so and a cast would be a lie about which of the two is ' +
+        'authoritative.',
+      exhaustion: abort
+        ? {
+            kind: 'abort',
+            rounds: item.rounds,
+            problem:
+              `${item.branch.id}: ${item.port} repeated ${item.rounds} ` +
+              `times without a result.`,
+          }
+        : { kind: 'continue' },
+      body: () => {
+        this.#rounds.push(round);
+        this.#open.push({
+          round,
+          resume,
+          foldTo: abort ? undefined : item.rounds,
+        });
+        this.#enter();
+        this.#emitRegion(item.body);
+        this.#leave();
+        this.#rounds.pop();
+        this.#open.pop();
+      },
+    });
+  }
+
+  /**
+   * Somewhere outside the loop for the values
+   * inside it that something after it reads.
+   *
+   * The name is declared in the frame the loop
+   * itself sits in, so a reader outside finds it
+   * and a reader inside finds the loop-local
+   * `const` instead — which is the one the step's
+   * own callback closes over, and the only one
+   * `strict` keeps narrowed.
+   */
+  #hoist(nodes: readonly WorkflowNode[]): CarriedValue[] {
+    return nodes.map((node) => {
+      const name = this.#locals.take(`${camelCase(node.id)}Carried`);
+
+      this.#declare(node.id, name);
+      this.#carried.set(node.id, [...(this.#carried.get(node.id) ?? []), name]);
+
+      return { name, type: this.#valueType(node), nodeId: node.id };
+    });
+  }
+
+  /**
+   * What a block said it produces. A block that
+   * said nothing leaves the value `unknown`, which
+   * is honest rather than a guess.
+   */
+  #valueType(node: WorkflowNode): string {
+    if (node.out === undefined) return 'unknown';
+
+    this.#want(libTypeImport(this.#manifest, node.out));
+    return node.out;
+  }
+
+  #emitNode(node: WorkflowNode): void {
     switch (node.kind) {
       case 'step':
       case 'codeStep':
@@ -316,13 +590,13 @@ class Emitter {
         if (node.kind === 'apiCall') {
           this.#body.comment(`External service: ${node.config.service}.`);
         }
-        if (node.forEach !== undefined) this.#emitForEach(node, group);
-        else this.#emitStep(node, group);
+        if (node.forEach !== undefined) this.#emitForEach(node);
+        else this.#emitStep(node);
         break;
 
       case 'transaction':
-        if (node.forEach !== undefined) this.#emitForEach(node, group);
-        else this.#emitTransaction(node, group);
+        if (node.forEach !== undefined) this.#emitForEach(node);
+        else this.#emitTransaction(node);
         break;
 
       default:
@@ -332,26 +606,46 @@ class Emitter {
         );
     }
 
+    this.#copyOut(node);
     this.#body.blank();
   }
 
-  #emitStep(node: WorkflowNode, group: number): void {
-    const local = this.#locals.forNode(node.id);
-    const call = this.#handlerCall(node, this.#valueOf(node, group));
+  /**
+   * The copy from a loop-local `const` into the
+   * `let` outside the loop.
+   *
+   * Two names for one value, and both are needed:
+   * the step's callback closes over the `const`, so
+   * `strict` keeps it narrowed, and the `let` is
+   * what the blocks after the loop can see.
+   */
+  #copyOut(node: WorkflowNode): void {
+    const local = this.#scopes.at(-1)?.get(node.id);
+    if (local === undefined) return;
+
+    for (const name of this.#carried.get(node.id) ?? []) {
+      this.#body.line(`${name} = ${local};`);
+    }
+  }
+
+  #emitStep(node: WorkflowNode): void {
+    const local = this.#local(node);
+    const call = this.#handlerCall(node, this.#valueOf(node));
     const head = `const ${local} = await DBOS.runStep`;
 
     expandedCall(this.#body, head, `async () => ${call}`, [
-      `name: ${stepNameLiteral(node.id, [])},`,
+      `name: ${stepNameLiteral(node.id, this.#segments([]))},`,
       ...retryOptions(node.retry),
     ]);
   }
 
-  #emitTransaction(node: WorkflowNode, group: number): void {
-    const local = this.#locals.forNode(node.id);
-    const call = this.#handlerCall(node, this.#valueOf(node, group));
+  #emitTransaction(node: WorkflowNode): void {
+    const local = this.#local(node);
+    const call = this.#handlerCall(node, this.#valueOf(node));
+    const name = stepNameLiteral(node.id, this.#segments([]));
     const one =
       `const ${local} = await appDb.runTransaction(async () => ${call}, ` +
-      `{ name: '${node.id}' });`;
+      `{ name: ${name} });`;
 
     this.#want({ specifier: '../app/db.js', name: 'appDb', type: false });
 
@@ -362,7 +656,7 @@ class Emitter {
 
     this.#body.open(`const ${local} = await appDb.runTransaction(`);
     this.#body.line(`async () => ${call},`);
-    this.#body.line(`{ name: '${node.id}' },`);
+    this.#body.line(`{ name: ${name} },`);
     this.#body.close(');');
   }
 
@@ -376,11 +670,11 @@ class Emitter {
    * still in flight have checkpointed, so a retry
    * re-runs work that had already succeeded.
    */
-  #emitForEach(node: WorkflowNode, group: number): void {
+  #emitForEach(node: WorkflowNode): void {
     const fanOut = node.forEach;
     if (fanOut === undefined) return;
 
-    const root = this.#valueOf(node, group);
+    const root = this.#valueOf(node);
     if (root === undefined) throw this.#unreachableValue(node);
 
     // A block the canvas drew as a transaction
@@ -399,7 +693,7 @@ class Emitter {
     const items = this.#locals.take('items');
     const settled = this.#locals.take('settled');
     const failed = this.#locals.take('failed');
-    const local = this.#locals.forNode(node.id);
+    const local = this.#local(node);
     const itemType = this.#itemType(node);
     const size = fanOut.concurrency;
 
@@ -424,7 +718,7 @@ class Emitter {
       inTransaction ? 'appDb.runTransaction' : 'DBOS.runStep',
       `async () => ${this.#handlerCall(node, 'item')}`,
       [
-        `name: ${stepNameLiteral(node.id, [{ kind: 'item' }])},`,
+        `name: ${stepNameLiteral(node.id, this.#segments([{ kind: 'item' }]))},`,
         // A transaction's config carries an
         // isolation level, a read-only flag and a
         // name, and nothing at all about retries.
@@ -522,7 +816,7 @@ class Emitter {
    * condition's block, so nothing outside the block
    * can name it.
    */
-  #valueOf(node: WorkflowNode, inside: number | undefined): string | undefined {
+  #valueOf(node: WorkflowNode): string | undefined {
     const producer = this.#plan.producers.get(node.id);
 
     if (producer === undefined || producer === this.#plan.trigger.id) {
@@ -531,13 +825,56 @@ class Emitter {
         : PAYLOAD_PARAMETER;
     }
 
-    const group = this.#groupOf.get(producer);
-    if (group === undefined) return undefined;
+    return this.#lookup(producer);
+  }
 
-    const guarded = this.#plan.groups[group]?.guard !== undefined;
-    if (guarded && group !== inside) return undefined;
+  /** The local a block's value is bound to, taken
+   *  and put in scope here. */
+  #local(node: WorkflowNode): string {
+    const local = this.#locals.forNode(node.id);
 
-    return this.#locals.forNode(producer);
+    this.#declare(node.id, local);
+    return local;
+  }
+
+  #declare(nodeId: string, name: string): void {
+    this.#scopes.at(-1)?.set(nodeId, name);
+  }
+
+  /** What a block's value is called here, or
+   *  undefined where it cannot be named. */
+  #lookup(nodeId: string): string | undefined {
+    for (let depth = this.#scopes.length - 1; depth >= 0; depth -= 1) {
+      const name = this.#scopes[depth]?.get(nodeId);
+      if (name !== undefined) return name;
+    }
+
+    return undefined;
+  }
+
+  #enter(): void {
+    this.#scopes.push(new Map());
+  }
+
+  #leave(): void {
+    this.#scopes.pop();
+  }
+
+  /**
+   * The regions a step is inside, as its recorded
+   * name carries them: one per open loop, outermost
+   * first, then the step's own.
+   *
+   * DBOS compares the recorded name at each
+   * function id on replay, so two rounds of one
+   * block have to record two different names or
+   * every recovery fails.
+   */
+  #segments(own: readonly StepSegment[]): StepSegment[] {
+    return [
+      ...this.#rounds.map((name) => ({ kind: 'round' as const, name })),
+      ...own,
+    ];
   }
 
   /**

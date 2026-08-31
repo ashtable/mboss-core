@@ -222,3 +222,91 @@ function walk(
 
   return seen;
 }
+
+/**
+ * Every node a run can reach from `root`, ordered
+ * so that nothing appears before something a run
+ * passes through to get to it.
+ *
+ * Loop-closing edges are set aside, the way they
+ * are everywhere else here: they are what makes
+ * the document cyclic, and an order is only
+ * defined over the forward graph.
+ *
+ * Ties are broken by the order the document lists
+ * its nodes in. Any order that respects the edges
+ * is a correct one, and the one a person reading
+ * their own canvas would expect is the one it was
+ * drawn in.
+ */
+export function topologicalOrder(graph: WorkflowGraph, root: string): string[] {
+  const reachable = walk(graph, root, false);
+  const position = new Map<string, number>();
+  for (const id of graph.nodes.keys()) position.set(id, position.size);
+
+  const remaining = new Map<string, number>();
+  for (const id of reachable) {
+    remaining.set(
+      id,
+      forwardEdges(graph.incoming.get(id), graph).filter((edge) =>
+        reachable.has(edge.from.node),
+      ).length,
+    );
+  }
+
+  const ready = [...remaining]
+    .filter(([, count]) => count === 0)
+    .map(([id]) => id);
+  const order: string[] = [];
+
+  while (ready.length > 0) {
+    ready.sort((a, b) => (position.get(a) ?? 0) - (position.get(b) ?? 0));
+
+    const id = ready.shift();
+    if (id === undefined) continue;
+
+    order.push(id);
+
+    for (const edge of forwardEdges(graph.outgoing.get(id), graph)) {
+      const left = (remaining.get(edge.to.node) ?? 0) - 1;
+      remaining.set(edge.to.node, left);
+      if (left === 0) ready.push(edge.to.node);
+    }
+  }
+
+  return order;
+}
+
+/**
+ * Where a branch's arms come back together: the
+ * earliest node, in the order above, that two or
+ * more of them reach.
+ *
+ * Deliberately not strict post-dominance. A branch
+ * port with no edge at all ends the run, and
+ * nothing post-dominates a branch that has one —
+ * so a post-dominance rule would find no join and
+ * force the whole tail of the workflow to be
+ * duplicated into every arm, which would also
+ * record the same step name twice.
+ *
+ * Arms that go nowhere contribute nothing, and a
+ * loop-closing arm goes back rather than on.
+ */
+export function joinOf(
+  graph: WorkflowGraph,
+  branchId: string,
+): string | undefined {
+  const arms = forwardEdges(graph.outgoing.get(branchId), graph);
+  const reaching = new Map<string, number>();
+
+  for (const arm of arms) {
+    for (const id of walk(graph, arm.to.node, false)) {
+      reaching.set(id, (reaching.get(id) ?? 0) + 1);
+    }
+  }
+
+  return topologicalOrder(graph, branchId).find(
+    (id) => (reaching.get(id) ?? 0) > 1,
+  );
+}

@@ -3,8 +3,13 @@ import { join } from 'node:path';
 import prettier from 'prettier';
 import { describe, expect, it } from 'vitest';
 
+import { WorkflowIRSchema, type WorkflowIR } from '../ir/index.js';
 import { scanLib } from '../manifest/index.js';
-import { expectGolden, fixturesRoot } from '../test-support/fixtures.js';
+import {
+  expectGolden,
+  fixturesRoot,
+  readFixtureJson,
+} from '../test-support/fixtures.js';
 import { makeIR, type EdgeSpec, type NodeSpec } from '../test-support/ir.js';
 import {
   relativeSpecifiersEndInJs,
@@ -35,7 +40,7 @@ const MANIFEST = scanLib(join(fixturesRoot, 'lib'));
 
 const TIMEZONE = 'America/Los_Angeles';
 
-function compile(ir: ReturnType<typeof makeIR>): string {
+function compile(ir: WorkflowIR): string {
   const result = compileWorkflow({
     ir,
     manifest: MANIFEST,
@@ -59,9 +64,7 @@ function compile(ir: ReturnType<typeof makeIR>): string {
  * document is a legal draft, and the message names
  * the block somebody has to go and look at.
  */
-function refuse(
-  ir: ReturnType<typeof makeIR>,
-): Extract<CompileResult, { ok: false }> {
+function refuse(ir: WorkflowIR): Extract<CompileResult, { ok: false }> {
   const result = compileWorkflow({
     ir,
     manifest: MANIFEST,
@@ -476,7 +479,21 @@ const GUARDED_CHAIN = workflow({
   ],
 });
 
+/**
+ * The control-flow fixtures live on disk rather
+ * than being built here: they are whole workflows
+ * with branches, loops and joins, and a document
+ * that big is easier to read as the document it is.
+ */
+function fixture(name: string): WorkflowIR {
+  return WorkflowIRSchema.parse(readFixtureJson(`ir/${name}.workflow.json`));
+}
+
 const GOLDENS = [
+  ['branch_three_ways', fixture('branch_three_ways')],
+  ['chat_retry_abort', fixture('chat_retry_abort')],
+  ['chat_retry_continue', fixture('chat_retry_continue')],
+  ['review_loop', fixture('review_loop')],
   ['event_trigger', EVENT_TRIGGER],
   ['manual_trigger', MANUAL_TRIGGER],
   ['schedule_trigger', SCHEDULE_TRIGGER],

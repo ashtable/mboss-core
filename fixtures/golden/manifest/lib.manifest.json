@@ -50,6 +50,18 @@
       "returnType": "BookingReq"
     },
     {
+      "doc": "Reads the customer's answer to the message that was just sent them. A block rather than a durable wait, so the retry loop the branch fixtures draw can be compiled on its own: what those fixtures are about is the loop, and a wait would put a second unrelated shape inside every one of them.",
+      "export": "readReply",
+      "file": "lib/readReply.ts",
+      "params": [
+        {
+          "name": "prompt",
+          "type": "ChatPrompt"
+        }
+      ],
+      "returnType": "ChatReply"
+    },
+    {
       "doc": "Writes the confirmed booking to the app's own database. Separate from placing it, so a failed write is retried without double-booking.",
       "export": "recordBooking",
       "file": "lib/recordBooking.ts",
@@ -82,7 +94,7 @@
     }
   ],
   "nonSerializable": [],
-  "sourceHash": "e3fcc15bbc038cbe41f74da2f530dc98fec8fa95abf1d822d5dd33ecaf488e0f",
+  "sourceHash": "be17aa99620e3063e2324cded6fd9b6724556be8f76cae30acc066b9a76fc742",
   "typeSources": {
     "Booking": "lib/types.ts",
     "BookingReq": "lib/types.ts",

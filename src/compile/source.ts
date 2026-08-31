@@ -70,6 +70,20 @@ export class SourceWriter {
   }
 
   /**
+   * The line between two blocks: back out one
+   * level, write it, and go one deeper again.
+   *
+   * `} else {` is one line as far as prettier is
+   * concerned, so a close followed by an open
+   * would emit source prettier immediately
+   * rewrites.
+   */
+  next(text: string): void {
+    this.close(text);
+    this.#indent += INDENT_STEP;
+  }
+
+  /**
    * A `//` comment, hard-wrapped so no line of it
    * passes fifty columns.
    *

@@ -42,6 +42,22 @@ describe('SourceWriter', () => {
     expect(writer.toString()).toBe(['{', '  a', '}', ''].join('\n'));
   });
 
+  it('closes one block and opens the next on one line', () => {
+    // `} else {` is one line to prettier, and a
+    // close followed by an open would be two.
+    const writer = new SourceWriter();
+
+    writer.open('if (a) {');
+    writer.line('one();');
+    writer.next('} else {');
+    writer.line('two();');
+    writer.close('}');
+
+    expect(writer.toString()).toBe(
+      ['if (a) {', '  one();', '} else {', '  two();', '}', ''].join('\n'),
+    );
+  });
+
   it('collapses consecutive blanks to one', () => {
     const writer = new SourceWriter();
 
