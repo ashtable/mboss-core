@@ -88,6 +88,20 @@ export type PlanArm = {
 export type PlanItem =
   | { kind: 'blocks'; group: GuardGroup }
   | { kind: 'branch'; node: WorkflowNode; arms: readonly PlanArm[] }
+  /**
+   * An approval: an email, a wait and a two-way
+   * decision, drawn as one block and emitted as
+   * all three. `downstream` is what the person who
+   * answered is told happens next, which starts
+   * where the two arms meet again — the blocks on
+   * the arm they did not take are not that.
+   */
+  | {
+      kind: 'approval';
+      node: WorkflowNode;
+      arms: readonly PlanArm[];
+      downstream: readonly string[];
+    }
   | {
       kind: 'countedLoop';
       node: WorkflowNode;
@@ -124,22 +138,24 @@ export type EmissionPlan = {
   /** Which block's value each block reads. The
    *  trigger is a producer like any other. */
   producers: ReadonlyMap<string, string>;
+  /**
+   * What the page a person lands on after a block
+   * tells them happens next: the titles of the
+   * work still to come, in the order it runs.
+   */
+  downstream: ReadonlyMap<string, readonly string[]>;
+  /**
+   * For each email carrying a form, the wait that
+   * form's answers wake.
+   *
+   * The edge is declared the other way round — a
+   * wait names its email — and the token an email
+   * mints has to be scoped to the wait, so this is
+   * the one place the graph is walked backwards.
+   */
+  waitForEmail: ReadonlyMap<string, string>;
   /** The whole body, as nested regions. */
   region: PlanRegion;
-};
-
-/**
- * The kinds this compiler does not emit yet, and
- * what to say about each.
- *
- * Named rather than reported as "unsupported node"
- * so the message tells somebody looking at their
- * canvas which block to take out.
- */
-const NOT_YET: Partial<Record<WorkflowNode['kind'], string>> = {
-  durableWait: 'a wait',
-  approval: 'an approval',
-  emailSend: 'an email',
 };
 
 /**
@@ -148,7 +164,10 @@ const NOT_YET: Partial<Record<WorkflowNode['kind'], string>> = {
  *
  * A branch decides where a run goes and produces
  * nothing, so a block after one reads whatever was
- * flowing when the branch was reached.
+ * flowing when the branch was reached. An approval
+ * is the same: what it binds is a decision, which
+ * only the two ways out of it read, and the value
+ * flowing past it is the one that arrived.
  */
 const VALUE_KINDS: ReadonlySet<NodeKind> = new Set<NodeKind>([
   'step',
@@ -156,6 +175,33 @@ const VALUE_KINDS: ReadonlySet<NodeKind> = new Set<NodeKind>([
   'apiCall',
   'transaction',
 ]);
+
+/**
+ * The kinds a person would call work, which is
+ * what a page listing "what happens next" shows.
+ * A branch and a loop choose a way rather than do
+ * anything, so neither is on a chip strip.
+ */
+const WORK_KINDS: ReadonlySet<NodeKind> = new Set<NodeKind>([
+  'step',
+  'codeStep',
+  'apiCall',
+  'transaction',
+  'durableWait',
+  'approval',
+  'emailSend',
+]);
+
+/**
+ * What one way out of an approval tests.
+ *
+ * The runtime sends `{ approved: boolean }` back,
+ * so the decision reads like any other predicate
+ * over the value a block bound — which is what
+ * lets the two arms go through the same layout a
+ * branch's do.
+ */
+const APPROVED: Predicate = { path: 'approved', op: 'eq', value: true };
 
 /** A loop drawn as a wire back to an earlier
  *  block, with everything the compiler needs to
@@ -213,18 +259,6 @@ class Planner {
       .filter((node) => node.id !== this.#trigger.id);
 
     for (const node of chain) {
-      const notYet = NOT_YET[node.kind];
-
-      if (notYet !== undefined) {
-        throw new UnsupportedIR(
-          `\`${node.id}\` is ${notYet}, which this compiler does not emit ` +
-            `yet.`,
-          node.id,
-        );
-      }
-    }
-
-    for (const node of chain) {
       this.#producers.set(node.id, this.#producerOf(node));
     }
 
@@ -239,6 +273,8 @@ class Planner {
       trigger: this.#trigger,
       chain,
       producers: this.#producers,
+      downstream: this.#downstream(),
+      waitForEmail: this.#waitForEmail(chain),
       region,
     };
   }
@@ -324,10 +360,103 @@ class Planner {
     );
   }
 
+  /**
+   * Whether a block leaves a value the blocks after
+   * it can read.
+   *
+   * A wait usually does — what arrived is the whole
+   * point of it — but a wait on the clock alone has
+   * no sender and nothing to bind, so the value
+   * that was flowing carries straight past it.
+   */
   #bindsValue(id: string): boolean {
     const node = this.#graph.nodes.get(id);
 
-    return node !== undefined && VALUE_KINDS.has(node.kind);
+    if (node === undefined) return false;
+    if (node.kind === 'durableWait') {
+      return node.config.source.kind !== 'timer';
+    }
+
+    return VALUE_KINDS.has(node.kind);
+  }
+
+  /**
+   * What the page after each block lists as still
+   * to come.
+   *
+   * An approval's list starts where its two arms
+   * meet again rather than at the block after it:
+   * somebody who has just answered is being told
+   * what happens next, and the arm they did not
+   * take is not that.
+   */
+  #downstream(): Map<string, readonly string[]> {
+    const titles = new Map<string, readonly string[]>();
+
+    for (const id of this.#order) {
+      const node = this.#graph.nodes.get(id);
+      if (node === undefined) continue;
+
+      titles.set(
+        id,
+        node.kind === 'approval'
+          ? this.#titlesFrom(joinOf(this.#graph, id), true)
+          : this.#titlesFrom(id, false),
+      );
+    }
+
+    return titles;
+  }
+
+  /**
+   * The work a run still has ahead of it at one
+   * block, in the order it does it.
+   *
+   * Ordered by the run order rather than by the
+   * walk, and cut off at the block itself, so a
+   * loop's back edge cannot list the blocks that
+   * came before as things still to come.
+   */
+  #titlesFrom(from: string | undefined, inclusive: boolean): string[] {
+    if (from === undefined) return [];
+
+    const ahead = reachableFrom(this.#graph, from);
+    const floor = this.#at(from);
+    const titles: string[] = [];
+
+    for (const id of this.#order) {
+      if (!ahead.has(id)) continue;
+      if (this.#at(id) < floor) continue;
+      if (this.#at(id) === floor && !inclusive) continue;
+
+      const node = this.#graph.nodes.get(id);
+      if (node === undefined || !WORK_KINDS.has(node.kind)) continue;
+
+      titles.push(node.title);
+    }
+
+    return titles;
+  }
+
+  /**
+   * Which wait each form-carrying email opens.
+   *
+   * The document declares the edge the other way —
+   * a wait names the email its form arrives on —
+   * and the token the email mints has to be scoped
+   * to the wait, so the index is built once here.
+   */
+  #waitForEmail(chain: readonly WorkflowNode[]): Map<string, string> {
+    const found = new Map<string, string>();
+
+    for (const node of chain) {
+      if (node.kind !== 'durableWait') continue;
+      if (node.config.source.kind !== 'form') continue;
+
+      found.set(node.config.source.email, node.id);
+    }
+
+    return found;
   }
 
   /** Where a block sits in the run order. */
@@ -499,17 +628,17 @@ class Planner {
         continue;
       }
 
-      if (node.kind === 'branch') {
+      if (node.kind === 'branch' || node.kind === 'approval') {
         flush();
-        const branch = this.#branch(node, stop, loop);
-        items.push(branch.item);
+        const choice = this.#choice(node, stop, loop);
+        items.push(choice.item);
 
-        if (branch.after !== undefined) {
-          cursor = branch.after;
+        if (choice.after !== undefined) {
+          cursor = choice.after;
           continue;
         }
 
-        return { items, outcome: branch.fallsThrough ? 'reached' : 'jumped' };
+        return { items, outcome: choice.fallsThrough ? 'reached' : 'jumped' };
       }
 
       run.push(node);
@@ -585,13 +714,21 @@ class Planner {
     };
   }
 
-  #branch(
+  /**
+   * A block a run leaves by one of several ways
+   * out, and where each one goes.
+   *
+   * A branch and an approval are the same shape
+   * here: ordered cases, first match wins, and the
+   * ways out meeting again somewhere below. What
+   * differs is only what each case tests, which is
+   * `#armWhen`'s business.
+   */
+  #choice(
     node: WorkflowNode,
     stop: string | undefined,
     loop: LoopRegion | undefined,
   ): { item: PlanItem; after: string | undefined; fallsThrough: boolean } {
-    if (node.kind !== 'branch') throw this.#notALoop(node);
-
     const join = joinOf(this.#graph, node.id);
 
     // A join outside the loop is where a run goes
@@ -602,11 +739,10 @@ class Planner {
     const armStop = join !== undefined && join !== stop && inside ? join : stop;
 
     const arms: PlanArm[] = [];
-    const cases = node.config.cases;
     let fallsThrough = false;
 
     for (const port of portsOf(node)) {
-      const found = cases.find((each) => each.port === port);
+      const when = this.#armWhen(node, port);
       const edge = (this.#graph.outgoing.get(node.id) ?? []).find(
         (each) =>
           each.from.port === port && this.#graph.nodes.has(each.to.node),
@@ -620,16 +756,39 @@ class Planner {
 
       arms.push({
         port,
-        ...(found === undefined ? {} : { when: found.when }),
+        ...(when === undefined ? {} : { when }),
         target,
       });
     }
 
     return {
-      item: { kind: 'branch', node, arms },
+      item:
+        node.kind === 'approval'
+          ? {
+              kind: 'approval',
+              node,
+              arms,
+              downstream: this.#titlesFrom(join, true),
+            }
+          : { kind: 'branch', node, arms },
       after: armStop === join && join !== stop ? join : undefined,
       fallsThrough,
     };
+  }
+
+  /**
+   * What one way out of a choice tests, or nothing
+   * for the way a run takes when none of the others
+   * matched.
+   */
+  #armWhen(node: WorkflowNode, port: string): Predicate | undefined {
+    if (node.kind === 'approval') {
+      return port === 'approved' ? APPROVED : undefined;
+    }
+
+    if (node.kind !== 'branch') throw this.#notALoop(node);
+
+    return node.config.cases.find((each) => each.port === port)?.when;
   }
 
   #armTarget(
@@ -668,7 +827,7 @@ class Planner {
 
     for (const id of members) {
       const node = this.#graph.nodes.get(id);
-      if (node === undefined || !VALUE_KINDS.has(node.kind)) continue;
+      if (node === undefined || !this.#bindsValue(id)) continue;
 
       // A block behind a condition may not run on
       // any round, so there is nothing to promise

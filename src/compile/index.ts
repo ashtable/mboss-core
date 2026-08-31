@@ -22,6 +22,7 @@ export {
 export {
   determinismProblems,
   headerProblems,
+  placementProblems,
   registrationProblems,
   stepProblems,
   type AuditProblem,

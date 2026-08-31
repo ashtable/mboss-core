@@ -2,13 +2,15 @@ import { literal } from './predicate.js';
 import type { SourceWriter } from './source.js';
 
 /**
- * How a branch and a loop reach the page.
+ * How the shapes that take more than one line
+ * reach the page.
  *
  * Nothing here knows what a workflow is. It is
  * handed conditions as text and arms as closures,
  * and its whole job is the layout — which arm
- * chains onto which, where the counter is declared
- * and what follows a loop that ran out of rounds.
+ * chains onto which, where the counter is declared,
+ * what follows a loop that ran out of rounds, and
+ * whether a call keeps its options hugged onto it.
  * Keeping it separate is what lets the shapes be
  * tested without a graph, and it is also the only
  * way the emitter stays readable: deciding where a
@@ -235,11 +237,46 @@ function writeCarriedChecks(
 }
 
 /**
+ * A call whose last argument is an options object,
+ * laid out the way prettier lays it out: hugged
+ * onto the call when the head fits, and with every
+ * argument on a line of its own when it does not.
+ *
+ * A free function over a writer rather than a
+ * method, because the callers write into different
+ * buffers and all of them have calls too wide for
+ * one line.
+ */
+export function expandedCall(
+  writer: SourceWriter,
+  head: string,
+  argument: string,
+  options: readonly string[],
+  terminator = ';',
+): void {
+  const hug = `${head}(${argument}, {`;
+
+  if (writer.fits(hug)) {
+    writer.open(hug);
+    for (const option of options) writer.line(option);
+    writer.close(`})${terminator}`);
+    return;
+  }
+
+  writer.open(`${head}(`);
+  writer.line(`${argument},`);
+  writer.open('{');
+  for (const option of options) writer.line(option);
+  writer.close('},');
+  writer.close(`)${terminator}`);
+}
+
+/**
  * A throw, hugged onto one line where it fits and
  * broken the way prettier breaks it where it does
  * not.
  */
-function writeThrow(writer: SourceWriter, problem: string): void {
+export function writeThrow(writer: SourceWriter, problem: string): void {
   const one = `throw new Error(${literal(problem)});`;
 
   if (writer.fits(one)) {

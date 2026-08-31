@@ -23,6 +23,18 @@ import { ts } from 'ts-morph';
 export type AuditProblem = { line: number; why: string };
 
 /**
+ * Why a link may not be minted in a workflow body.
+ *
+ * The generated code emits no minting call at all —
+ * `sendNodeEmail` mints inside the step it is
+ * called from — so this rule is what keeps that
+ * true rather than merely intended.
+ */
+const MINTING =
+  'minting a link stamps the clock into it, and a replay would mint a ' +
+  'different one';
+
+/**
  * Calls that make a workflow body irreproducible,
  * with what to say about each.
  *
@@ -38,6 +50,9 @@ const BANNED_CALLS: Record<string, string> = {
   'crypto.randomUUID': 'randomUUID() is a different id on every replay',
   fetch: 'fetch() reaches the network outside a step, so it is never retried',
   setTimeout: 'setTimeout() does not survive a restart; a durable wait does',
+  mintLink: MINTING,
+  mintFormLink: MINTING,
+  mintArtifactLink: MINTING,
 };
 
 /**
@@ -71,6 +86,27 @@ const WORKFLOW_ONLY: Record<string, string> = {
  * fail the same way.
  */
 export function determinismProblems(source: string): AuditProblem[] {
+  return walkFor(source, true);
+}
+
+/**
+ * The half of it that holds of hand-written runtime
+ * code as well.
+ *
+ * A workflow body may not read the clock, mint or
+ * roll a number; the code around it must — an
+ * email's link carries an issued time, and
+ * something has to supply it. What carries over is
+ * placement: what only exists inside a transaction,
+ * what may not run inside a step, and a fan-out
+ * that drops the results of everything that had not
+ * settled.
+ */
+export function placementProblems(source: string): AuditProblem[] {
+  return walkFor(source, false);
+}
+
+function walkFor(source: string, reproducible: boolean): AuditProblem[] {
   const file = parse(source);
   const found: AuditProblem[] = [];
 
@@ -89,7 +125,12 @@ export function determinismProblems(source: string): AuditProblem[] {
       );
     }
 
-    if (!inStep && callee !== undefined && callee in BANNED_CALLS) {
+    if (
+      reproducible &&
+      !inStep &&
+      callee !== undefined &&
+      callee in BANNED_CALLS
+    ) {
       report(node, BANNED_CALLS[callee] ?? '');
     }
 
@@ -98,6 +139,7 @@ export function determinismProblems(source: string): AuditProblem[] {
     }
 
     if (
+      reproducible &&
       !inStep &&
       ts.isNewExpression(node) &&
       text(file, node.expression) === 'Date'

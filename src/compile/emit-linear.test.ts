@@ -490,10 +490,15 @@ function fixture(name: string): WorkflowIR {
 }
 
 const GOLDENS = [
+  ['approval_flow', fixture('approval_flow')],
   ['branch_three_ways', fixture('branch_three_ways')],
   ['chat_retry_abort', fixture('chat_retry_abort')],
   ['chat_retry_continue', fixture('chat_retry_continue')],
+  ['form_intake', fixture('form_intake')],
+  ['form_retry', fixture('form_retry')],
+  ['groom_booking', fixture('groom_booking')],
   ['review_loop', fixture('review_loop')],
+  ['timer_wait', fixture('timer_wait')],
   ['event_trigger', EVENT_TRIGGER],
   ['manual_trigger', MANUAL_TRIGGER],
   ['schedule_trigger', SCHEDULE_TRIGGER],

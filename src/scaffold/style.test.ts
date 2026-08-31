@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { placementProblems } from '../compile/audit.js';
 import { relativeSpecifiersEndInJs } from '../test-support/specifiers.js';
 import { expectHouseStyle } from '../test-support/style.js';
 
@@ -16,6 +17,13 @@ import { expectHouseStyle } from '../test-support/style.js';
  * read them — none of the three has an opinion
  * about comment width, a design-doc citation, or a
  * relative import Node will refuse to resolve.
+ *
+ * The compiler's own audit is run over them too,
+ * in the half of it that applies: the runtime is
+ * not a workflow body, so it reads the clock and
+ * mints links quite properly, but the placement
+ * rules hold here exactly as they do in generated
+ * code and nothing else checks them.
  */
 
 const ROOT = import.meta.dirname;
@@ -54,5 +62,9 @@ describe('the copied runtime tree', () => {
     const source = readFileSync(file.path, 'utf8');
 
     expect(relativeSpecifiersEndInJs(source)).toEqual([]);
+  });
+
+  it.each(FILES)('$rel puts every call where it can run', (file) => {
+    expect(placementProblems(readFileSync(file.path, 'utf8'))).toEqual([]);
   });
 });

@@ -26,6 +26,35 @@
       "returnType": "Booking"
     },
     {
+      "export": "payClaim",
+      "file": "lib/expense.ts",
+      "params": [
+        {
+          "name": "claim",
+          "type": "ExpenseClaim"
+        }
+      ],
+      "returnType": "Payment"
+    },
+    {
+      "export": "fileRefusal",
+      "file": "lib/expense.ts",
+      "params": [
+        {
+          "name": "claim",
+          "type": "ExpenseClaim"
+        }
+      ],
+      "returnType": "Refusal"
+    },
+    {
+      "doc": "Tidies up whichever way the claim went. Takes nothing, so it can stand where two arms meet and read neither of them.",
+      "export": "closeClaim",
+      "file": "lib/expense.ts",
+      "params": [],
+      "returnType": "void"
+    },
+    {
       "doc": "Looks up availability around the requested time.",
       "export": "findSlot",
       "file": "lib/findSlot.ts",
@@ -36,6 +65,17 @@
         }
       ],
       "returnType": "SlotGrid"
+    },
+    {
+      "export": "recordIntake",
+      "file": "lib/intake.ts",
+      "params": [
+        {
+          "name": "answers",
+          "type": "IntakeAnswers"
+        }
+      ],
+      "returnType": "IntakeRecord"
     },
     {
       "doc": "Flattens the incoming webhook into the shape the rest of the workflow reads.",
@@ -62,7 +102,7 @@
       "returnType": "ChatReply"
     },
     {
-      "doc": "Writes the confirmed booking to the app's own database. Separate from placing it, so a failed write is retried without double-booking.",
+      "doc": "Writes the confirmed booking to the app's own database, through the transaction-scoped client.",
       "export": "recordBooking",
       "file": "lib/recordBooking.ts",
       "params": [
@@ -94,12 +134,18 @@
     }
   ],
   "nonSerializable": [],
-  "sourceHash": "be17aa99620e3063e2324cded6fd9b6724556be8f76cae30acc066b9a76fc742",
+  "sourceHash": "917135503b6b80f1828ab69cb135b30b7552fcf23440a55ec74acae4f842045f",
   "typeSources": {
     "Booking": "lib/types.ts",
     "BookingReq": "lib/types.ts",
     "ChatPrompt": "lib/types.ts",
     "ChatReply": "lib/types.ts",
+    "ExpenseClaim": "lib/expense.ts",
+    "IntakeAnswers": "lib/intake.ts",
+    "IntakeRecord": "lib/intake.ts",
+    "IntakeRequest": "lib/intake.ts",
+    "Payment": "lib/expense.ts",
+    "Refusal": "lib/expense.ts",
     "SlotGrid": "lib/types.ts",
     "WebhookEvent": "lib/types.ts"
   },
@@ -108,6 +154,12 @@
     "BookingReq",
     "ChatPrompt",
     "ChatReply",
+    "ExpenseClaim",
+    "IntakeAnswers",
+    "IntakeRecord",
+    "IntakeRequest",
+    "Payment",
+    "Refusal",
     "SlotGrid",
     "WebhookEvent"
   ]

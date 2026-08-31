@@ -102,7 +102,17 @@ export class LocalNames {
  * random value, which is what makes the name the
  * same on a replay as it was on the first run.
  */
-export type StepSegment = { kind: 'round'; name: string } | { kind: 'item' };
+export type StepSegment =
+  | { kind: 'round'; name: string }
+  | { kind: 'item' }
+  /** The row that says which run is parked here. */
+  | { kind: 'register' }
+  /** Deleting that row once the run wakes. */
+  | { kind: 'clear' }
+  /** The mail an approval asks its question in. */
+  | { kind: 'ask' }
+  /** One reminder, counted so two are two names. */
+  | { kind: 'resend'; counter: string };
 
 /**
  * The source text of a step's `name` option: a
@@ -114,11 +124,15 @@ export function stepNameLiteral(
   nodeId: string,
   segments: readonly StepSegment[],
 ): string {
-  if (segments.length === 0) return `'${nodeId}'`;
-
   const tail = segments.map(segmentText).join('');
+  const name = `${nodeId}${tail}`;
 
-  return `\`${nodeId}${tail}\``;
+  // Quoted rather than a template unless something
+  // in it is filled in at run time: prettier
+  // rewrites a template with no holes back to a
+  // plain string, and the emitted file has to
+  // already be formatted.
+  return tail.includes('${') ? `\`${name}\`` : `'${name}'`;
 }
 
 function segmentText(segment: StepSegment): string {
@@ -128,5 +142,17 @@ function segmentText(segment: StepSegment): string {
 
     case 'item':
       return '[${offset + index}]';
+
+    case 'register':
+      return '.register';
+
+    case 'clear':
+      return '.clear';
+
+    case 'ask':
+      return '.ask';
+
+    case 'resend':
+      return `.resend.\${${segment.counter}}`;
   }
 }

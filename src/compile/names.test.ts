@@ -119,4 +119,37 @@ describe('stepNameLiteral', () => {
       ]),
     ).toBe('`charge_each.r${round}[${offset + index}]`');
   });
+
+  it('names the three steps a wait is made of', () => {
+    expect(stepNameLiteral('await_reply', [{ kind: 'register' }])).toBe(
+      "'await_reply.register'",
+    );
+    expect(stepNameLiteral('await_reply', [{ kind: 'clear' }])).toBe(
+      "'await_reply.clear'",
+    );
+    expect(stepNameLiteral('manager_ok', [{ kind: 'ask' }])).toBe(
+      "'manager_ok.ask'",
+    );
+  });
+
+  it('counts a resend, so two reminders are two names', () => {
+    expect(
+      stepNameLiteral('await_form', [
+        { kind: 'resend', counter: 'awaitFormResends' },
+      ]),
+    ).toBe('`await_form.resend.${awaitFormResends}`');
+  });
+
+  it('carries the round and the resend count together', () => {
+    // Without the round, the first reminder of
+    // round one and the first of round two both
+    // record `await_form.resend.1`, and every
+    // recovery after the second round fails.
+    expect(
+      stepNameLiteral('await_form', [
+        { kind: 'round', name: 'round' },
+        { kind: 'resend', counter: 'awaitFormResends' },
+      ]),
+    ).toBe('`await_form.r${round}.resend.${awaitFormResends}`');
+  });
 });

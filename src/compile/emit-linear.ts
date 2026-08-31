@@ -1,18 +1,37 @@
 import type { LibManifest } from '../manifest/index.js';
 import type {
+  FormField,
   Predicate,
+  Recipient,
   Retry,
+  WaitSource,
   WorkflowIR,
   WorkflowNode,
 } from '../ir/index.js';
 import { sameGuard } from '../validate/rules.js';
 
 import {
+  expandedCall,
   writeBackEdgeLoop,
   writeBranch,
   writeCountedLoop,
+  writeThrow,
   type CarriedValue,
 } from './emit-control.js';
+import {
+  call,
+  list,
+  object,
+  source,
+  writeStep,
+  writeTimer,
+  writeValue,
+  writeWait,
+  type Emitted,
+  type EmittedEntry,
+  type StepSpec,
+  type WaitShape,
+} from './emit-wait.js';
 import {
   importBlock,
   libTypeImport,
@@ -60,6 +79,46 @@ const DEFAULT_RETRY: Retry = {
 /** The workflow's own parameter, for the two
  *  trigger modes that carry a payload. */
 const PAYLOAD_PARAMETER = 'evt';
+
+/** The run's own id, which every row a wait writes
+ *  and every email it sends is addressed by. */
+const RUN_ID = 'runId';
+
+/** The address of whoever asked for the run, read
+ *  once from the event that started it. */
+const REQUESTER = 'requesterEmail';
+
+const SECONDS_PER_DAY = 86400;
+
+/**
+ * How long a wait that named no limit of its own
+ * runs for.
+ *
+ * `recv` with no timeout returns null after sixty
+ * seconds, so leaving it to the SDK would abort a
+ * wait for a person a minute after the email went
+ * out. Seven days is inside the form token's own
+ * lifetime, so the link never dies before the wait
+ * it opens.
+ */
+const DEFAULT_WAIT_DAYS = 7;
+
+/**
+ * How many reminders a wait sends when the author
+ * asked for reminders and did not say how many.
+ *
+ * One: the smallest number that makes "remind
+ * them" mean anything, and the run still ends
+ * rather than nagging forever.
+ */
+const DEFAULT_RESENDS = 1;
+
+/**
+ * How long a link to something in storage lasts.
+ * The token type's own lifetime, so a link that
+ * verifies is a link the store will still serve.
+ */
+const ARTIFACT_SECONDS = 7 * SECONDS_PER_DAY;
 
 /** The body sits one level inside its function,
  *  and it has to measure its lines from there. */
@@ -139,6 +198,12 @@ class Emitter {
     this.#locals = new LocalNames([
       'DBOS',
       'appDb',
+      'sendNodeEmail',
+      'isTransientSendFailure',
+      'registerWaitCorrelation',
+      'clearWaitCorrelation',
+      RUN_ID,
+      REQUESTER,
       PAYLOAD_PARAMETER,
       'scheduledTime',
       'context',
@@ -200,6 +265,7 @@ class Emitter {
 
     const preamble = this.#preamble();
     this.#emitBounds();
+    this.#emitPrelude();
     this.#emitRegion(this.#plan.region);
 
     const body = this.#body.toString();
@@ -351,6 +417,10 @@ class Emitter {
         this.#emitBranch(item);
         return;
 
+      case 'approval':
+        this.#emitApproval(item);
+        return;
+
       case 'countedLoop':
         this.#emitCountedLoop(item);
         return;
@@ -399,9 +469,22 @@ class Emitter {
     const root = this.#valueOf(item.node);
     if (root === undefined) throw this.#unreachableValue(item.node);
 
+    this.#writeArms(root, item.arms);
+  }
+
+  /**
+   * The ways out of a choice, in the order the
+   * author wrote them, reading the value named
+   * here.
+   *
+   * Shared with the approval, whose two ways out
+   * are a branch in everything but where the value
+   * they test came from.
+   */
+  #writeArms(root: string, arms: readonly PlanArm[]): void {
     writeBranch(
       this.#body,
-      item.arms.map((arm) => ({
+      arms.map((arm) => ({
         ...(arm.when === undefined
           ? {}
           : { condition: this.#armCondition(root, arm.when, arm.target) }),
@@ -598,6 +681,14 @@ class Emitter {
       case 'transaction':
         if (node.forEach !== undefined) this.#emitForEach(node);
         else this.#emitTransaction(node);
+        break;
+
+      case 'durableWait':
+        this.#emitWait(node);
+        break;
+
+      case 'emailSend':
+        this.#emitEmail(node);
         break;
 
       default:
@@ -808,6 +899,615 @@ class Emitter {
   }
 
   /**
+   * The two things a run has to know about itself
+   * before any wait or email can name it.
+   *
+   * The run's id is read once, checked once, and
+   * used by every row a wait writes and every
+   * email it sends. `?? ''` instead of the check
+   * would put a correlation key in the world that
+   * nothing can ever find.
+   */
+  #emitPrelude(): void {
+    if (this.#needsRunId()) {
+      this.#body.line(`const ${RUN_ID} = DBOS.workflowID;`);
+      this.#body.open(`if (${RUN_ID} === undefined) {`);
+      writeThrow(
+        this.#body,
+        `${this.#ir.name}: no workflow id — not running as a workflow.`,
+      );
+      this.#body.close('}');
+      this.#body.blank();
+    }
+
+    if (!this.#needsRequester()) return;
+
+    this.#body.line(
+      `const ${REQUESTER} = ${pathExpression(
+        PAYLOAD_PARAMETER,
+        this.#requesterPath(),
+      )};`,
+    );
+    this.#body.blank();
+  }
+
+  /** Whether anything this run does is addressed
+   *  to the run itself. */
+  #needsRunId(): boolean {
+    return this.#plan.chain.some(
+      (node) =>
+        node.kind === 'emailSend' ||
+        node.kind === 'approval' ||
+        (node.kind === 'durableWait' && node.config.source.kind !== 'timer'),
+    );
+  }
+
+  #needsRequester(): boolean {
+    return this.#plan.chain.some(
+      (node) =>
+        (node.kind === 'emailSend' || node.kind === 'approval') &&
+        node.config.to === 'requestingUser',
+    );
+  }
+
+  /**
+   * Where in the starting event the requesting
+   * user's address is.
+   *
+   * Validation already refuses a document that
+   * writes to the requesting user without one, so
+   * this is the compiler refusing to guess rather
+   * than a case anybody meets.
+   */
+  #requesterPath(): string {
+    const trigger = this.#plan.trigger.config;
+    const path =
+      trigger.mode === 'event' ? trigger.requesterEmailPath : undefined;
+
+    if (path === undefined) {
+      throw new UnsupportedIR(
+        `this workflow writes to whoever asked for the run, but its ` +
+          `trigger does not say where to find their address.`,
+        this.#plan.trigger.id,
+      );
+    }
+
+    return path;
+  }
+
+  /**
+   * A durable pause.
+   *
+   * A wait on the clock is a different thing from
+   * a wait on somebody: it has no sender, so there
+   * is nothing to correlate with, nothing to remind
+   * and no answer to check.
+   */
+  #emitWait(node: WorkflowNode): void {
+    if (node.kind !== 'durableWait') return;
+
+    const config = node.config;
+
+    // Asked before the wait on the clock takes its
+    // own way out below: a timer told to remind
+    // somebody is a drawing that cannot be honoured
+    // either, and it would otherwise compile to a
+    // sleep that quietly forgets the reminder.
+    this.#checkResendable(node);
+
+    if (config.source.kind === 'timer') {
+      writeTimer(this.#body, config.source.seconds);
+      return;
+    }
+
+    const local = this.#local(node);
+    const resend = this.#resend(node);
+    const days = config.timeoutDays ?? DEFAULT_WAIT_DAYS;
+
+    this.#want(waitsImport('registerWaitCorrelation'));
+    this.#want(waitsImport('clearWaitCorrelation'));
+
+    const shape: WaitShape = {
+      local,
+      type: this.#valueType(node),
+      topic: node.id,
+      timeoutSeconds: days * SECONDS_PER_DAY,
+      why: [timeoutWhy(config.timeoutDays)],
+      register: this.#registerStep(
+        node,
+        topicOf(config.source),
+        this.#correlationKey(node, config.source),
+      ),
+      clear: this.#clearStep(node),
+      ...(resend === undefined ? {} : { resend }),
+      onNothing: this.#onNothing(node, days),
+    };
+
+    writeWait(this.#body, shape);
+  }
+
+  /**
+   * Writing the row an arriving message is looked
+   * up by.
+   *
+   * It goes through a step, like the clearing
+   * below: both touch the app's own database, and a
+   * workflow body that wrote to it directly would
+   * repeat the write on every replay.
+   */
+  #registerStep(node: WorkflowNode, topic: string, key: string): StepSpec {
+    return {
+      head: 'await DBOS.runStep',
+      call: call(
+        'registerWaitCorrelation',
+        object([
+          { key: RUN_ID },
+          { key: 'nodeId', value: source(literal(node.id)) },
+          { key: 'topic', value: source(literal(topic)) },
+          { key: 'key', value: source(key) },
+        ]),
+      ),
+      options: this.#waitStepOptions(node, 'register'),
+    };
+  }
+
+  #clearStep(node: WorkflowNode): StepSpec {
+    return {
+      head: 'await DBOS.runStep',
+      call: source(`clearWaitCorrelation(${RUN_ID}, ${literal(node.id)})`),
+      options: this.#waitStepOptions(node, 'clear'),
+    };
+  }
+
+  #waitStepOptions(node: WorkflowNode, which: 'register' | 'clear'): string[] {
+    const name = stepNameLiteral(node.id, this.#segments([{ kind: which }]));
+
+    return [`name: ${name},`, ...retryOptions(node.retry)];
+  }
+
+  /**
+   * The value an arriving message is matched
+   * against.
+   *
+   * A form's is the waiting node itself: every run
+   * parked there registers the same key, and which
+   * run a submitted form wakes is settled by the
+   * link, which carries the run. An event's is read
+   * out of what was flowing when the run parked.
+   */
+  #correlationKey(node: WorkflowNode, waitOn: WaitSource): string {
+    if (waitOn.kind !== 'event') return literal(node.id);
+
+    const root = this.#valueOf(node);
+    if (root === undefined) throw this.#unreachableValue(node);
+
+    return pathExpression(root, waitOn.correlateWith);
+  }
+
+  /** What a run does when nothing ever arrives. */
+  #onNothing(node: WorkflowNode, days: number): WaitShape['onNothing'] {
+    if (node.kind !== 'durableWait') return { kind: 'return' };
+
+    const config = node.config;
+    const after =
+      config.onTimeout === 'resend' ? (config.afterMax ?? 'abort') : 'abort';
+
+    // Carrying on would mean running the blocks
+    // below with no value to give them, and every
+    // one of them said what it expects.
+    if (after === 'continue') return { kind: 'return' };
+
+    return {
+      kind: 'throw',
+      problem: `${node.id}: nothing arrived within ${daysText(days)}.`,
+    };
+  }
+
+  /**
+   * The reminder, where the author asked for one.
+   *
+   * Only a wait on a form has anything to send
+   * again. A wait on an event has no email behind
+   * it and a wait on the clock has no recipient, so
+   * a reminder on either is refused by name rather
+   * than quietly dropped.
+   */
+  #checkResendable(node: WorkflowNode): void {
+    if (node.kind !== 'durableWait') return;
+
+    const config = node.config;
+    if (config.onTimeout !== 'resend') return;
+    if (config.source.kind === 'form') return;
+
+    throw new UnsupportedIR(
+      `\`${node.id}\` sends a reminder when nothing arrives, but it is ` +
+        `waiting on ${
+          config.source.kind === 'timer' ? 'the clock' : 'an event'
+        } rather than on a form, so there is no email to send again.`,
+      node.id,
+    );
+  }
+
+  #resend(node: WorkflowNode): WaitShape['resend'] {
+    if (node.kind !== 'durableWait') return undefined;
+
+    const config = node.config;
+    if (config.onTimeout !== 'resend') return undefined;
+    if (config.source.kind !== 'form') return undefined;
+
+    const email = this.#nodeById(config.source.email, node.id);
+    const counter = this.#locals.take(`${camelCase(node.id)}Resends`);
+    const name = stepNameLiteral(
+      node.id,
+      this.#segments([{ kind: 'resend', counter }]),
+    );
+
+    return {
+      counter,
+      max: config.maxResends ?? DEFAULT_RESENDS,
+      step: this.#emailStep(email, name),
+    };
+  }
+
+  /**
+   * One email, sent inside one step.
+   *
+   * Everything the message needs is built here and
+   * everything irreproducible happens in the
+   * runtime call: the link is minted, the template
+   * rendered and the message sent inside the step,
+   * so a replay re-runs none of it and the person
+   * is not holding a token the app has forgotten.
+   */
+  #emitEmail(node: WorkflowNode): void {
+    if (node.kind !== 'emailSend') return;
+
+    const name = stepNameLiteral(node.id, this.#segments([]));
+
+    if (retriesOn(node.retry)) {
+      this.#body.comment(
+        'A retry can send a second copy when the provider accepted a ' +
+          'request whose response was lost. A run that never sends its ' +
+          'only link sleeps until its timeout, which is worse.',
+      );
+    }
+
+    writeStep(this.#body, this.#emailStep(node, name));
+  }
+
+  #emailStep(node: WorkflowNode, name: string): StepSpec {
+    if (node.kind !== 'emailSend') throw this.#notAnEmail(node);
+
+    const retries = retriesOn(node.retry);
+
+    this.#want({
+      specifier: '../app/mail.js',
+      name: 'sendNodeEmail',
+      type: false,
+    });
+    if (retries) {
+      this.#want({
+        specifier: '../app/mailer.js',
+        name: 'isTransientSendFailure',
+        type: false,
+      });
+    }
+
+    return {
+      head: 'await DBOS.runStep',
+      call: call(
+        'sendNodeEmail',
+        object([
+          { key: RUN_ID },
+          { key: 'workflowTitle', value: source(literal(this.#title())) },
+          { key: 'nodeId', value: source(literal(node.id)) },
+          { key: 'to', value: source(this.#recipient(node.config.to)) },
+          { key: 'subject', value: source(literal(node.config.subject)) },
+          {
+            key: 'bodyMarkdown',
+            value: source(literal(node.config.bodyMarkdown)),
+          },
+          { key: 'attach', value: this.#attach(node) },
+          { key: 'downstream', value: this.#downstreamOf(node) },
+        ]),
+      ),
+      options: [
+        `name: ${name},`,
+        ...retryOptions(node.retry),
+        ...(retries ? ['shouldRetry: isTransientSendFailure,'] : []),
+      ],
+    };
+  }
+
+  /**
+   * What the email carries beyond its words.
+   *
+   * The IR says what the author drew; the runtime
+   * says which page a token opens. They are
+   * deliberately different words for different
+   * things, and this is the only place that
+   * translates between them.
+   */
+  #attach(node: WorkflowNode): Emitted {
+    if (node.kind !== 'emailSend') throw this.#notAnEmail(node);
+
+    const attach = node.config.attach;
+
+    if (attach.type === 'none') {
+      return object([{ key: 'kind', value: source(literal('none')) }]);
+    }
+
+    if (attach.type === 'artifactLink') {
+      const root = this.#valueOf(node);
+      if (root === undefined) throw this.#unreachableValue(node);
+
+      return object([
+        { key: 'kind', value: source(literal('artifact')) },
+        {
+          key: 'key',
+          value: source(pathExpression(root, attach.artifactPath)),
+        },
+        {
+          key: 'expiresInSeconds',
+          value: source(String(ARTIFACT_SECONDS)),
+        },
+      ]);
+    }
+
+    const waitId = this.#plan.waitForEmail.get(node.id);
+
+    // The token is scoped to the wait, and the page
+    // it opens is looked up by that. An email whose
+    // form nothing waits on has nowhere to point,
+    // and the link it sent would serve a 400 while
+    // verifying perfectly.
+    if (waitId === undefined) {
+      throw new UnsupportedIR(
+        `\`${node.id}\` carries a form, but no wait in this workflow is ` +
+          `waiting for it to come back, so the link it sends would open ` +
+          `nothing.`,
+        node.id,
+      );
+    }
+
+    return object([
+      { key: 'kind', value: source(literal('form')) },
+      { key: 'nodeId', value: source(literal(waitId)) },
+      { key: 'fields', value: this.#fields(node, attach.form.fields) },
+      {
+        key: 'expiresInSeconds',
+        value: source(String(this.#waitSeconds(waitId))),
+      },
+    ]);
+  }
+
+  /** How long the link into a wait outlives its
+   *  sending, which is as long as the wait runs. */
+  #waitSeconds(waitId: string): number {
+    const wait = this.#nodeById(waitId, waitId);
+    const days =
+      wait.kind === 'durableWait'
+        ? (wait.config.timeoutDays ?? DEFAULT_WAIT_DAYS)
+        : DEFAULT_WAIT_DAYS;
+
+    return days * SECONDS_PER_DAY;
+  }
+
+  /** The fields the page draws, with the two
+   *  optional flags answered once here. */
+  #fields(node: WorkflowNode, fields: readonly FormField[]): Emitted {
+    return list(
+      fields.map((field, index) =>
+        object([
+          { key: 'id', value: source(literal(field.id)) },
+          { key: 'label', value: source(literal(field.label)) },
+          { key: 'type', value: source(literal(field.type)) },
+          { key: 'required', value: source(String(field.required ?? false)) },
+          { key: 'multiple', value: source(String(field.multiple ?? false)) },
+          ...(field.showIf === undefined
+            ? []
+            : [
+                {
+                  key: 'showIf',
+                  value: this.#condition(node, field, fields.slice(0, index)),
+                },
+              ]),
+        ]),
+      ),
+    );
+  }
+
+  /**
+   * A conditional field, flattened to the answer it
+   * watches.
+   *
+   * The page evaluates this in a browser against
+   * the answers already filled in, and those are
+   * one value per field — so the path has to name
+   * one field, and a field asked before this one,
+   * or there is nothing there to read.
+   */
+  #condition(
+    node: WorkflowNode,
+    field: FormField,
+    earlier: readonly FormField[],
+  ): Emitted {
+    const showIf = field.showIf;
+    if (showIf === undefined) return object([]);
+
+    const [only, ...rest] = showIf.path.split('.');
+
+    if (
+      only === undefined ||
+      rest.length > 0 ||
+      !earlier.some((each) => each.id === only)
+    ) {
+      throw new UnsupportedIR(
+        `\`${field.id}\` is shown only when \`${showIf.path}\` holds, but ` +
+          `a form's answers are one value per field and \`${showIf.path}\` ` +
+          `does not name a field asked before it.`,
+        node.id,
+      );
+    }
+
+    return object([
+      { key: 'fieldId', value: source(literal(only)) },
+      { key: 'op', value: source(literal(showIf.op)) },
+      ...(showIf.value === undefined
+        ? []
+        : [{ key: 'value', value: source(literal(showIf.value)) }]),
+    ]);
+  }
+
+  /** What the page after this email lists as still
+   *  to come, which is what its wait leads to. */
+  #downstreamOf(node: WorkflowNode): Emitted {
+    const waitId = this.#plan.waitForEmail.get(node.id);
+    const titles =
+      waitId === undefined ? [] : (this.#plan.downstream.get(waitId) ?? []);
+
+    return titlesList(titles);
+  }
+
+  /** Whoever the email goes to. */
+  #recipient(to: Recipient): string {
+    return to === 'requestingUser' ? REQUESTER : literal(to);
+  }
+
+  /**
+   * An approval: one block on the canvas, three
+   * constructs in the file.
+   *
+   * It is sugar and it stays sugar — no pass
+   * rewrites the document. The email carries an
+   * ordinary form token scoped to this node, the
+   * park is an ordinary wait on it, and the two
+   * ways out are laid out exactly as a branch's
+   * are.
+   */
+  #emitApproval(item: Extract<PlanItem, { kind: 'approval' }>): void {
+    const node = item.node;
+    if (node.kind !== 'approval') return;
+
+    const config = node.config;
+    const days = config.timeoutDays ?? DEFAULT_WAIT_DAYS;
+    const seconds = days * SECONDS_PER_DAY;
+    const local = this.#local(node);
+
+    this.#want({
+      specifier: '../app/mail.js',
+      name: 'sendNodeEmail',
+      type: false,
+    });
+    this.#want(waitsImport('registerWaitCorrelation'));
+    this.#want(waitsImport('clearWaitCorrelation'));
+
+    const retries = retriesOn(node.retry);
+    if (retries) {
+      this.#want({
+        specifier: '../app/mailer.js',
+        name: 'isTransientSendFailure',
+        type: false,
+      });
+      this.#body.comment(
+        'A retry can send a second copy when the provider accepted a ' +
+          'request whose response was lost. A run that never sends its ' +
+          'only link sleeps until its timeout, which is worse.',
+      );
+    }
+
+    writeStep(this.#body, {
+      head: 'await DBOS.runStep',
+      call: call(
+        'sendNodeEmail',
+        object([
+          { key: RUN_ID },
+          { key: 'workflowTitle', value: source(literal(this.#title())) },
+          { key: 'nodeId', value: source(literal(node.id)) },
+          { key: 'to', value: source(this.#recipient(config.to)) },
+          {
+            key: 'subject',
+            value: source(
+              literal(config.subject ?? `Approval needed: ${node.title}`),
+            ),
+          },
+          {
+            key: 'bodyMarkdown',
+            value: source(
+              literal(
+                config.message ??
+                  `${this.#title()} is waiting on your decision.`,
+              ),
+            ),
+          },
+          {
+            key: 'attach',
+            value: object([
+              { key: 'kind', value: source(literal('approval')) },
+              { key: 'nodeId', value: source(literal(node.id)) },
+              { key: 'expiresInSeconds', value: source(String(seconds)) },
+            ]),
+          },
+          { key: 'downstream', value: titlesList(item.downstream) },
+        ]),
+      ),
+      options: [
+        `name: ${stepNameLiteral(node.id, this.#segments([{ kind: 'ask' }]))},`,
+        ...retryOptions(node.retry),
+        ...(retries ? ['shouldRetry: isTransientSendFailure,'] : []),
+      ],
+    });
+    this.#body.blank();
+
+    writeWait(this.#body, {
+      local,
+      type: APPROVAL_REPLY,
+      topic: node.id,
+      timeoutSeconds: seconds,
+      why: [timeoutWhy(config.timeoutDays)],
+      // A form wait in everything but the page it
+      // opens: the email mints an ordinary form
+      // token, which is the whole point of reusing
+      // the form machinery for a decision.
+      register: this.#registerStep(node, FORM_TOPIC, literal(node.id)),
+      clear: this.#clearStep(node),
+      onNothing: {
+        kind: 'throw',
+        problem: `${node.id}: nobody answered within ${daysText(days)}.`,
+      },
+    });
+    this.#body.blank();
+
+    this.#writeArms(local, item.arms);
+  }
+
+  /** The title the emails say this workflow is. */
+  #title(): string {
+    return this.#ir.title ?? this.#ir.name;
+  }
+
+  #nodeById(id: string, about: string): WorkflowNode {
+    const node = this.#ir.nodes.find((each) => each.id === id);
+
+    if (node === undefined) {
+      throw new UnsupportedIR(
+        `\`${about}\` names \`${id}\`, which is not a block in this ` +
+          `workflow.`,
+        about,
+      );
+    }
+
+    return node;
+  }
+
+  #notAnEmail(node: WorkflowNode): UnsupportedIR {
+    return new UnsupportedIR(
+      `\`${node.id}\` is not an email, so it has nothing to send.`,
+      node.id,
+    );
+  }
+
+  /**
    * Where a block reads its input from, or
    * undefined when nothing in scope there holds it.
    *
@@ -1012,11 +1712,115 @@ class Emitter {
       name: 'EventWait',
       type: true,
     });
-    writer.line('export const waits: Record<string, WaitDescriptor> = {};');
+    writeValue(
+      writer,
+      'export const waits: Record<string, WaitDescriptor> = ',
+      this.#waitTable(),
+      ';',
+    );
     writer.blank();
-    writer.line('export const eventWaits: EventWait[] = [];');
+    writeValue(
+      writer,
+      'export const eventWaits: EventWait[] = ',
+      this.#eventWaitTable(),
+      ';',
+    );
 
     return writer.toString();
+  }
+
+  /**
+   * Every wait a person can answer, by id.
+   *
+   * The form route looks a token's node up here and
+   * this is the only thing that can tell it which
+   * of the two pages to serve — the token itself
+   * cannot say, by design. A wait on an event is
+   * not here: nobody opens a page for it.
+   */
+  #waitTable(): Emitted {
+    const entries: EmittedEntry[] = [];
+
+    for (const node of this.#plan.chain) {
+      if (node.kind === 'approval') {
+        entries.push({
+          key: node.id,
+          value: object([
+            ...this.#waitHeader(node),
+            { key: 'page', value: source(literal('approval')) },
+            { key: 'fields', value: list([]) },
+            {
+              key: 'downstream',
+              value: titlesList(this.#plan.downstream.get(node.id) ?? []),
+            },
+          ]),
+        });
+        continue;
+      }
+
+      if (node.kind !== 'durableWait') continue;
+      if (node.config.source.kind !== 'form') continue;
+
+      const email = this.#nodeById(node.config.source.email, node.id);
+      const fields =
+        email.kind === 'emailSend' && email.config.attach.type === 'form'
+          ? email.config.attach.form.fields
+          : [];
+
+      entries.push({
+        key: node.id,
+        value: object([
+          ...this.#waitHeader(node),
+          { key: 'page', value: source(literal('form')) },
+          { key: 'fields', value: this.#fields(email, fields) },
+          {
+            key: 'downstream',
+            value: titlesList(this.#plan.downstream.get(node.id) ?? []),
+          },
+        ]),
+      });
+    }
+
+    return object(entries);
+  }
+
+  #waitHeader(node: WorkflowNode): EmittedEntry[] {
+    return [
+      { key: 'nodeId', value: source(literal(node.id)) },
+      { key: 'title', value: source(literal(node.title)) },
+    ];
+  }
+
+  /**
+   * Every wait something outside sends to.
+   *
+   * The ingress route reads this to work out which
+   * run an arriving event belongs to: the topic
+   * says which wait, and the path says where in the
+   * payload the value to match on is.
+   */
+  #eventWaitTable(): Emitted {
+    const rows: Emitted[] = [];
+
+    for (const node of this.#plan.chain) {
+      if (node.kind !== 'durableWait') continue;
+
+      const waitOn = node.config.source;
+      if (waitOn.kind !== 'event') continue;
+
+      rows.push(
+        object([
+          { key: 'nodeId', value: source(literal(node.id)) },
+          { key: 'topic', value: source(literal(waitOn.topic)) },
+          {
+            key: 'correlationPath',
+            value: source(literal(waitOn.correlationPath)),
+          },
+        ]),
+      );
+    }
+
+    return list(rows);
   }
 
   /**
@@ -1124,38 +1928,60 @@ class Emitter {
 }
 
 /**
- * A call whose last argument is an options object,
- * laid out the way prettier lays it out: hugged
- * onto the call when the head fits, and with every
- * argument on a line of its own when it does not.
+ * A run's answer to an approval, as the type the
+ * park is written against.
  *
- * A free function over a writer rather than a
- * method, because the body and the declarations
- * below it are written into different buffers and
- * both have calls too wide for one line.
+ * Written out rather than imported: the shape is
+ * the runtime's own reply to its approval page,
+ * not anything the project's code-behind declares,
+ * so there is no file it could come from.
  */
-function expandedCall(
-  writer: SourceWriter,
-  head: string,
-  argument: string,
-  options: readonly string[],
-  terminator = ';',
-): void {
-  const hug = `${head}(${argument}, {`;
+const APPROVAL_REPLY = '{ approved: boolean }';
 
-  if (writer.fits(hug)) {
-    writer.open(hug);
-    for (const option of options) writer.line(option);
-    writer.close(`})${terminator}`);
-    return;
-  }
+/** The table every wait on a person registers in. */
+const FORM_TOPIC = 'form';
 
-  writer.open(`${head}(`);
-  writer.line(`${argument},`);
-  writer.open('{');
-  for (const option of options) writer.line(option);
-  writer.close('},');
-  writer.close(`)${terminator}`);
+function waitsImport(name: string): ImportEntry {
+  return { specifier: '../app/waits.js', name, type: false };
+}
+
+/** Which table a message arrives on. */
+function topicOf(waitOn: WaitSource): string {
+  return waitOn.kind === 'event' ? waitOn.topic : FORM_TOPIC;
+}
+
+/** Whether a step is allowed more than one go. */
+function retriesOn(retry: Retry | undefined): boolean {
+  return (retry ?? DEFAULT_RETRY).maxAttempts !== 1;
+}
+
+/** A number of days, as a reader would say it. */
+function daysText(days: number): string {
+  return days === 1 ? '1 day' : `${days} days`;
+}
+
+/**
+ * Why the emitted file names the number of seconds
+ * it does.
+ *
+ * A wait that named its own limit needs only the
+ * unit spelled out. One that named none is being
+ * given a limit it never asked for, and the file
+ * should say where that came from.
+ */
+function timeoutWhy(days: number | undefined): string {
+  if (days !== undefined) return `${daysText(days)}, as seconds.`;
+
+  return (
+    'Seven days, as seconds. This wait set no limit of its own, and the ' +
+    'minute the SDK would wait instead is not what anybody means by ' +
+    'waiting for a person.'
+  );
+}
+
+/** Titles, as the list the runtime reads. */
+function titlesList(titles: readonly string[]): Emitted {
+  return list(titles.map((title) => source(literal(title))));
 }
 
 /**

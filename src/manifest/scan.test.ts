@@ -38,11 +38,15 @@ describe('scanLib', () => {
   it('offers exactly the handlers the code-behind exports', () => {
     expect(manifest.functions.map((fn) => fn.export).sort()).toEqual([
       'bookAppointment',
+      'closeClaim',
       'confirmSlot',
+      'fileRefusal',
       'findSlot',
       'parseRequest',
+      'payClaim',
       'readReply',
       'recordBooking',
+      'recordIntake',
       'sweepStale',
       'twilioChat',
     ]);
@@ -102,6 +106,12 @@ describe('scanLib', () => {
       'BookingReq',
       'ChatPrompt',
       'ChatReply',
+      'ExpenseClaim',
+      'IntakeAnswers',
+      'IntakeRecord',
+      'IntakeRequest',
+      'Payment',
+      'Refusal',
       'SlotGrid',
       'WebhookEvent',
     ]);
@@ -113,6 +123,8 @@ describe('scanLib', () => {
     // what the compiler has to emit.
     expect(manifest.typeSources['Booking']).toBe('lib/types.ts');
     expect(manifest.typeSources['ChatReply']).toBe('lib/types.ts');
+    expect(manifest.typeSources['IntakeAnswers']).toBe('lib/intake.ts');
+    expect(manifest.typeSources['Payment']).toBe('lib/expense.ts');
   });
 
   it('reports no errors for code that compiles', () => {

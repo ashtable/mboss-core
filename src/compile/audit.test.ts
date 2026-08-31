@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   determinismProblems,
   headerProblems,
+  placementProblems,
   registrationProblems,
   stepProblems,
 } from './audit.js';
@@ -412,6 +413,97 @@ describe('what belongs to the workflow and not to a step', () => {
       'async function fn(): Promise<void> {',
       '  const reply = await DBOS.recv("reply");',
       '  await DBOS.setEvent("done", 1);',
+      '}',
+    ].join('\n');
+
+    expect(determinismProblems(source)).toEqual([]);
+  });
+});
+
+describe('placementProblems', () => {
+  it('says nothing about a clock read, which the runtime has to do', () => {
+    // A workflow body may not read the clock; the
+    // code around it must. An email's link carries
+    // an issued time, and something has to supply
+    // it.
+    const source = [
+      'export function nowMs(): number {',
+      '  return Date.now();',
+      '}',
+    ].join('\n');
+
+    expect(placementProblems(source)).toEqual([]);
+    expect(why(determinismProblems(source))).toHaveLength(1);
+  });
+
+  it('still reports a fan-out that drops what had not settled', () => {
+    const source = [
+      'export async function all(work: Promise<void>[]): Promise<void> {',
+      '  await Promise.all(work);',
+      '}',
+    ].join('\n');
+
+    expect(why(placementProblems(source))).toEqual([
+      'Promise.all drops the results of everything that had not settled',
+    ]);
+  });
+
+  it('still reports the datasource client outside a transaction', () => {
+    const source = [
+      'export async function write(): Promise<void> {',
+      '  await appDb.client.thing.create({ data: {} });',
+      '}',
+    ].join('\n');
+
+    expect(why(placementProblems(source))).toEqual([
+      'the datasource client only exists inside a transaction',
+    ]);
+  });
+
+  it('still reports a workflow-only call made from inside a step', () => {
+    const source = [
+      'async function fn(): Promise<void> {',
+      '  await DBOS.runStep(async () => DBOS.send("a", 1), {',
+      "    name: 'a',",
+      '    retriesAllowed: false,',
+      '  });',
+      '}',
+    ].join('\n');
+
+    expect(why(placementProblems(source))).toEqual([
+      'DBOS.send() belongs to the workflow, not to a step',
+    ]);
+  });
+});
+
+describe('minting a link', () => {
+  it('is reported in a workflow body', () => {
+    // A token's issued and expiry times come from
+    // the clock, so a replay would mint a
+    // different one and the recipient would be
+    // holding a link the run no longer knows.
+    const source = [
+      'async function fn(): Promise<void> {',
+      '  const url = mintFormLink({ runId, nodeId });',
+      '  const other = mintArtifactLink({ key });',
+      '}',
+    ].join('\n');
+
+    expect(why(determinismProblems(source))).toEqual([
+      'minting a link stamps the clock into it, and a replay would mint a ' +
+        'different one',
+      'minting a link stamps the clock into it, and a replay would mint a ' +
+        'different one',
+    ]);
+  });
+
+  it('is left alone inside a step, which is where it belongs', () => {
+    const source = [
+      'async function fn(): Promise<void> {',
+      '  await DBOS.runStep(async () => mintFormLink({ runId }), {',
+      "    name: 'a',",
+      '    retriesAllowed: false,',
+      '  });',
       '}',
     ].join('\n');
 

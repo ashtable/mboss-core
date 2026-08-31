@@ -1,0 +1,1390 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+
+import { ts } from 'ts-morph';
+import { describe, expect, it } from 'vitest';
+
+import {
+  WorkflowIRSchema,
+  type Predicate,
+  type WaitSource,
+  type WorkflowIR,
+} from '../ir/index.js';
+import { scanLib } from '../manifest/index.js';
+import { fixturesRoot, readFixtureJson } from '../test-support/fixtures.js';
+import { makeIR, type NodeSpec } from '../test-support/ir.js';
+
+import { stepProblems } from './audit.js';
+import { compileWorkflow, type CompileResult } from './compile.js';
+import {
+  call,
+  inlineValue,
+  list,
+  object,
+  source,
+  writeStep,
+  writeTimer,
+  writeValue,
+  writeWait,
+  type Emitted,
+  type StepSpec,
+} from './emit-wait.js';
+import { SourceWriter } from './source.js';
+
+/**
+ * The statements a run parks on, and the values it
+ * hands the runtime, as layout alone.
+ *
+ * Nothing here knows what a workflow document is.
+ * What is checked is the order the statements come
+ * in — which is the part a type-check and a golden
+ * both agree with while it is wrong — and that the
+ * shapes come out already formatted.
+ */
+
+function written(write: (writer: SourceWriter) => void): string {
+  const writer = new SourceWriter();
+
+  write(writer);
+  return writer.toString();
+}
+
+const RETRY = [
+  'retriesAllowed: true,',
+  'maxAttempts: 3,',
+  'intervalSeconds: 1,',
+  'backoffRate: 2,',
+];
+
+function registerStep(nodeId: string, key: string): StepSpec {
+  return {
+    head: 'await DBOS.runStep',
+    call: call(
+      'registerWaitCorrelation',
+      object([
+        { key: 'runId' },
+        { key: 'nodeId', value: source(`'${nodeId}'`) },
+        { key: 'topic', value: source("'form'") },
+        { key: 'key', value: source(key) },
+      ]),
+    ),
+    options: [`name: '${nodeId}.register',`, ...RETRY],
+  };
+}
+
+function clearStep(nodeId: string): StepSpec {
+  return {
+    head: 'await DBOS.runStep',
+    call: source(`clearWaitCorrelation(runId, '${nodeId}')`),
+    options: [`name: '${nodeId}.clear',`, ...RETRY],
+  };
+}
+
+describe('a value on its way into emitted source', () => {
+  it('writes an object on one line when it fits there', () => {
+    expect(
+      written((writer) => {
+        writeValue(
+          writer,
+          'attach: ',
+          object([{ key: 'kind', value: source("'none'") }]),
+          ',',
+        );
+      }),
+    ).toBe("attach: { kind: 'none' },\n");
+  });
+
+  it('gives every entry a line of its own when it does not', () => {
+    expect(
+      written((writer) => {
+        writeValue(
+          writer,
+          'attach: ',
+          object([
+            { key: 'kind', value: source("'artifact'") },
+            { key: 'key', value: source('recordBookingOut.deckKey') },
+            { key: 'expiresInSeconds', value: source('604800') },
+            { key: 'somethingElse', value: source("'to push it over'") },
+          ]),
+          ',',
+        );
+      }),
+    ).toBe(
+      [
+        'attach: {',
+        "  kind: 'artifact',",
+        '  key: recordBookingOut.deckKey,',
+        '  expiresInSeconds: 604800,',
+        "  somethingElse: 'to push it over',",
+        '},',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('writes an entry with no value of its own as shorthand', () => {
+    // `runId: runId` is what a naive renderer
+    // writes, and prettier leaves it exactly as
+    // written — so the generated file would say
+    // something no hand-written file would.
+    expect(inlineValue(object([{ key: 'runId' }]))).toBe('{ runId }');
+  });
+
+  it('keeps an empty object and an empty list on their line', () => {
+    expect(inlineValue(object([]))).toBe('{}');
+    expect(inlineValue(list([]))).toBe('[]');
+  });
+
+  it('breaks a list of two objects even where it would fit', () => {
+    // Prettier always breaks a list whose members
+    // are all objects carrying more than one key,
+    // however short they are. A renderer that
+    // measured the width alone would emit
+    // something prettier immediately rewrites.
+    const two = list([
+      object([
+        { key: 'a', value: source('1') },
+        { key: 'b', value: source('2') },
+      ]),
+      object([
+        { key: 'c', value: source('3') },
+        { key: 'd', value: source('4') },
+      ]),
+    ]);
+
+    expect(
+      written((writer) => writeValue(writer, 'const x = ', two, ';')),
+    ).toBe(
+      ['const x = [', '  { a: 1, b: 2 },', '  { c: 3, d: 4 },', '];', ''].join(
+        '\n',
+      ),
+    );
+  });
+
+  it('leaves a list of one object alone when it fits', () => {
+    const one: Emitted = list([
+      object([
+        { key: 'a', value: source('1') },
+        { key: 'b', value: source('2') },
+      ]),
+    ]);
+
+    expect(
+      written((writer) => writeValue(writer, 'const x = ', one, ';')),
+    ).toBe('const x = [{ a: 1, b: 2 }];\n');
+  });
+});
+
+describe('a step whose callback is one call', () => {
+  it('hugs the options onto the call when the head fits', () => {
+    expect(
+      written((writer) => {
+        writeStep(writer, clearStep('await_form'));
+      }),
+    ).toBe(
+      [
+        'await DBOS.runStep(async () => ' +
+          "clearWaitCorrelation(runId, 'await_form'), {",
+        "  name: 'await_form.clear',",
+        '  retriesAllowed: true,',
+        '  maxAttempts: 3,',
+        '  intervalSeconds: 1,',
+        '  backoffRate: 2,',
+        '});',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('keeps the arrow whole when only the head is too wide', () => {
+    // Two levels in, the hugged form runs past the
+    // width but the call itself still fits. The
+    // arrow only moves to a line of its own when
+    // the call it wraps has to break, and prettier
+    // rewrites anything else.
+    const writer = new SourceWriter(4);
+
+    writeStep(writer, clearStep('await_details'));
+
+    expect(writer.toString()).toBe(
+      [
+        '    await DBOS.runStep(',
+        "      async () => clearWaitCorrelation(runId, 'await_details'),",
+        '      {',
+        "        name: 'await_details.clear',",
+        '        retriesAllowed: true,',
+        '        maxAttempts: 3,',
+        '        intervalSeconds: 1,',
+        '        backoffRate: 2,',
+        '      },',
+        '    );',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  it('puts the arrow on a line of its own when the call breaks', () => {
+    expect(
+      written((writer) => {
+        writeStep(writer, registerStep('await_form', 'evt.contact.email'));
+      }),
+    ).toBe(
+      [
+        'await DBOS.runStep(',
+        '  async () =>',
+        '    registerWaitCorrelation({',
+        '      runId,',
+        "      nodeId: 'await_form',",
+        "      topic: 'form',",
+        '      key: evt.contact.email,',
+        '    }),',
+        '  {',
+        "    name: 'await_form.register',",
+        '    retriesAllowed: true,',
+        '    maxAttempts: 3,',
+        '    intervalSeconds: 1,',
+        '    backoffRate: 2,',
+        '  },',
+        ');',
+        '',
+      ].join('\n'),
+    );
+  });
+});
+
+describe('a durable wait', () => {
+  const wait = {
+    local: 'awaitFormOut',
+    type: 'IntakeAnswers',
+    topic: 'await_form',
+    timeoutSeconds: 604800,
+    why: ['Seven days, as seconds.'],
+    register: registerStep('await_form', "'await_form'"),
+    clear: clearStep('await_form'),
+    onNothing: {
+      kind: 'throw' as const,
+      problem: 'await_form: nothing arrived within 7 days.',
+    },
+  };
+
+  const source_ = written((writer) => {
+    writeWait(writer, wait);
+  });
+
+  it('registers before it parks, so nothing arrives to no row', () => {
+    // An event landing in the gap would find
+    // nothing to look the run up by, and the run
+    // would sleep until its timeout with the
+    // answer already delivered and dropped.
+    expect(source_.indexOf('.register')).toBeLessThan(
+      source_.indexOf('DBOS.recv'),
+    );
+  });
+
+  it('clears after it wakes and before it asks what arrived', () => {
+    // A wait that timed out clears too. Without
+    // that the form route's "is this run still
+    // waiting?" check reads a row nothing ever
+    // deletes, and its 410 can never fire.
+    expect(source_.indexOf('DBOS.recv')).toBeLessThan(
+      source_.indexOf('.clear'),
+    );
+    expect(source_.indexOf('.clear')).toBeLessThan(source_.indexOf('=== null'));
+  });
+
+  it('calls recv with an options object and never a bare number', () => {
+    expect(source_).toContain(
+      "const awaitFormOut = await DBOS.recv<IntakeAnswers>('await_form', {",
+    );
+    expect(source_).toContain('timeoutSeconds: 604800,');
+    expect(source_).not.toMatch(/DBOS\.recv<[^>]*>\('[^']*', \d/);
+  });
+
+  it('checks the answer against null and never catches anything', () => {
+    // recv answers a timeout with null and never
+    // throws, so a try around it would be a
+    // handler for a case that does not happen.
+    // Matched as syntax rather than as words: the
+    // comment above the park says "not a catch",
+    // and a plain string search would find it.
+    expect(source_).toContain('if (awaitFormOut === null) {');
+    expect(source_).not.toMatch(/\btry\s*\{/);
+    expect(source_).not.toMatch(/\bcatch\s*[({]/);
+  });
+
+  it('says why the file names that many seconds', () => {
+    expect(source_).toContain('// Seven days, as seconds.');
+  });
+
+  it('carries on without the rest of the run when told to', () => {
+    const carriesOn = written((writer) => {
+      writeWait(writer, { ...wait, onNothing: { kind: 'return' } });
+    });
+
+    expect(carriesOn).toContain('if (awaitFormOut === null) return;');
+    expect(carriesOn).not.toContain('throw new Error');
+  });
+});
+
+describe('a wait that sends a reminder', () => {
+  const reminder = written((writer) => {
+    writeWait(writer, {
+      local: 'awaitFormOut',
+      type: 'IntakeAnswers',
+      topic: 'await_form',
+      timeoutSeconds: 604800,
+      why: ['Seven days, as seconds.'],
+      register: registerStep('await_form', "'await_form'"),
+      clear: clearStep('await_form'),
+      resend: {
+        counter: 'awaitFormResends',
+        max: 2,
+        step: {
+          head: 'await DBOS.runStep',
+          call: source('sendNodeEmail(payload)'),
+          options: ['name: `await_form.resend.${awaitFormResends}`,', ...RETRY],
+        },
+      },
+      onNothing: {
+        kind: 'throw',
+        problem: 'await_form: nothing arrived within 7 days.',
+      },
+    });
+  });
+
+  it('parks again after each reminder, up to the count asked for', () => {
+    expect(reminder).toContain('let awaitFormResends = 0;');
+    expect(reminder).toContain(
+      'let awaitFormOut: IntakeAnswers | null = null;',
+    );
+    expect(reminder).toContain('for (;;) {');
+    expect(reminder).toContain('if (awaitFormOut !== null) break;');
+    expect(reminder).toContain('if (awaitFormResends >= 2) break;');
+    expect(reminder).toContain('awaitFormResends += 1;');
+  });
+
+  it('counts the reminder before it sends it', () => {
+    // The count is in the step's recorded name, so
+    // it has to have moved before the step runs or
+    // the first and second reminders record the
+    // same one.
+    expect(reminder.indexOf('awaitFormResends += 1;')).toBeLessThan(
+      reminder.indexOf('sendNodeEmail'),
+    );
+  });
+
+  it('still registers once, outside the loop, and clears once after', () => {
+    const lines = reminder.split('\n');
+    const loop = lines.findIndex((line) => line.includes('for (;;) {'));
+    const end = lines.findIndex((line) => line.trim() === '}');
+
+    expect(lines.findIndex((line) => line.includes('.register'))).toBeLessThan(
+      loop,
+    );
+    expect(lines.findIndex((line) => line.includes('.clear'))).toBeGreaterThan(
+      end,
+    );
+  });
+});
+
+describe('a wait on the clock', () => {
+  const timer = written((writer) => {
+    writeTimer(writer, 900);
+  });
+
+  it('sleeps in milliseconds, with the seconds already multiplied out', () => {
+    expect(timer).toContain('await DBOS.sleep(900000);');
+  });
+
+  it('has no topic, no timeout, no reminder and no row to write', () => {
+    // A timer has no sender, so there is nobody to
+    // correlate with and nothing to remind.
+    expect(timer).not.toContain('DBOS.recv');
+    expect(timer).not.toContain('WaitCorrelation');
+    expect(timer).not.toContain('timeoutSeconds');
+    expect(timer).not.toContain('for (;;)');
+  });
+
+  it('says why the wake-up survives a restart', () => {
+    expect(timer).toContain('// Durable');
+    expect(timer).toContain('// 900 seconds, as milliseconds.');
+  });
+});
+
+/**
+ * The same shapes, compiled out of real documents.
+ *
+ * The layout above is checked with no workflow in
+ * sight; below is where a wait, an email and an
+ * approval are read out of the IR and turned into
+ * the statements that run them.
+ */
+
+const MANIFEST = scanLib(join(fixturesRoot, 'lib'));
+
+/** The runtime tree every project is made from. */
+const scaffoldRoot = resolve(import.meta.dirname, '../scaffold');
+
+const TIMEZONE = 'America/Los_Angeles';
+
+function compile(ir: WorkflowIR): string {
+  const result = compileWorkflow({
+    ir,
+    manifest: MANIFEST,
+    timezone: TIMEZONE,
+  });
+
+  if (!result.ok) {
+    throw new Error(
+      `compile failed: ${JSON.stringify(result, null, 2).slice(0, 2000)}`,
+    );
+  }
+
+  return result.source;
+}
+
+function refuse(ir: WorkflowIR): Extract<CompileResult, { ok: false }> {
+  const result = compileWorkflow({
+    ir,
+    manifest: MANIFEST,
+    timezone: TIMEZONE,
+  });
+
+  if (result.ok) throw new Error(`compile succeeded:\n${result.source}`);
+
+  return result;
+}
+
+function fixture(name: string): WorkflowIR {
+  return WorkflowIRSchema.parse(readFixtureJson(`ir/${name}.workflow.json`));
+}
+
+/** A trigger every small document below starts at. */
+const CLAIM_FILED: NodeSpec = {
+  id: 'claim_filed',
+  kind: 'trigger',
+  title: 'Claim filed',
+  out: 'ExpenseClaim',
+  config: {
+    mode: 'event',
+    topic: 'expense.filed',
+    requesterEmailPath: 'submitter.email',
+  },
+};
+
+describe('a wait for a form', () => {
+  const written_ = compile(fixture('form_intake'));
+
+  it('binds the run id once, before anything needs it', () => {
+    expect(written_).toContain('const runId = DBOS.workflowID;');
+    expect(written_).toContain('if (runId === undefined) {');
+    expect(written_.split('DBOS.workflowID')).toHaveLength(2);
+  });
+
+  it('reads the requesting address by the path the trigger declared', () => {
+    expect(written_).toContain('const requesterEmail = evt.contact?.email;');
+  });
+
+  it('registers under the form topic, keyed by the waiting node', () => {
+    // One mechanism for both sources rather than a
+    // second one invented for forms: every run
+    // waiting on this node registers the same key,
+    // and the form link carries the run.
+    expect(written_).toContain("topic: 'form',");
+    expect(written_).toContain("key: 'await_details',");
+  });
+
+  it('scopes the emailed token to the wait, not to the email', () => {
+    // The page a token opens is looked up in the
+    // module's waits map. A token scoped to the
+    // email would resolve to no wait at all and
+    // serve a 400 on a link that is perfectly
+    // valid. Asserted as the attachment rather
+    // than line by line, because the wait's own id
+    // appears in the table below either way.
+    expect(written_).toContain(
+      [
+        '        attach: {',
+        "          kind: 'form',",
+        "          nodeId: 'await_details',",
+      ].join('\n'),
+    );
+  });
+
+  it('lets the link last exactly as long as the wait it opens', () => {
+    // Three days, because that is what this wait
+    // set. A link that died first would leave a
+    // run parked on a page nobody can open.
+    expect(written_).toContain('          expiresInSeconds: 259200,');
+    expect(written_).toContain('timeoutSeconds: 259200,');
+  });
+
+  it('flattens a conditional field to the answer it watches', () => {
+    expect(written_).toContain(
+      "showIf: { fieldId: 'urgent', op: 'eq', value: true }",
+    );
+  });
+
+  it('answers the two optional field flags rather than skipping them', () => {
+    // Both are optional in the IR and required by
+    // the runtime: one `?? false` here beats one
+    // at every point that reads them.
+    expect(written_).toContain("id: 'name',");
+    expect(written_).toContain('required: true,');
+    expect(written_).toContain('multiple: false,');
+  });
+
+  it('names the wait in the table the form route looks it up in', () => {
+    expect(written_).toContain(
+      'export const waits: Record<string, WaitDescriptor> = {',
+    );
+    expect(written_).toContain('await_details: {');
+    expect(written_).toContain("page: 'form',");
+    expect(written_).toContain("downstream: ['Record the intake'],");
+  });
+
+  it('lists no event wait, because nothing outside sends to it', () => {
+    expect(written_).toContain('export const eventWaits: EventWait[] = [];');
+  });
+});
+
+describe('a wait for an event', () => {
+  const written_ = compile(fixture('groom_booking'));
+
+  it('correlates on the value the wait was told to read', () => {
+    // Asserted as the whole registration rather
+    // than line by line: the topic also appears in
+    // the event-wait table below, and a line-by-line
+    // check would pass on that one while the
+    // registration named something else.
+    expect(written_).toContain(
+      [
+        '        registerWaitCorrelation({',
+        '          runId,',
+        "          nodeId: 'await_reply',",
+        "          topic: 'twilio.reply',",
+        '          key: twilioChatOut.to,',
+        '        }),',
+      ].join('\n'),
+    );
+  });
+
+  it('tells the ingress route which topic wakes it, and by what', () => {
+    expect(written_).toContain(
+      "{ nodeId: 'await_reply', topic: 'twilio.reply', " +
+        "correlationPath: 'from' },",
+    );
+  });
+
+  it('serves no page, so it is in neither table twice', () => {
+    expect(written_).toContain(
+      'export const waits: Record<string, WaitDescriptor> = {};',
+    );
+  });
+
+  it('multiplies the days it was given out into seconds', () => {
+    expect(written_).toContain('timeoutSeconds: 172800,');
+    expect(written_).toContain('// 2 days, as seconds.');
+  });
+
+  it('carries the round into every step name inside the loop', () => {
+    expect(written_).toContain('name: `await_reply.r${round}.register`,');
+    expect(written_).toContain('name: `await_reply.r${round}.clear`,');
+  });
+});
+
+describe('a wait that names no limit of its own', () => {
+  const written_ = compile(
+    makeIR({
+      name: 'no_limit',
+      nodes: [
+        CLAIM_FILED,
+        {
+          id: 'await_decision',
+          kind: 'durableWait',
+          title: 'Wait for a decision',
+          out: 'ExpenseClaim',
+          config: {
+            source: {
+              kind: 'event',
+              topic: 'expense.decided',
+              correlationPath: 'claimId',
+              correlateWith: 'claimId',
+            },
+            onTimeout: 'abort',
+          },
+        },
+      ],
+      edges: [
+        { from: 'claim_filed', to: 'await_decision', type: 'ExpenseClaim' },
+      ],
+    }),
+  );
+
+  it('waits seven days rather than the minute the SDK would', () => {
+    // recv with no timeout returns null after
+    // sixty seconds, which would abort a
+    // human-in-the-loop wait a minute after the
+    // email went out.
+    expect(written_).toContain('timeoutSeconds: 604800,');
+    expect(written_).not.toMatch(/DBOS\.recv<[^>]*>\('[^']*'\)/);
+  });
+
+  it('says in the file why it is seven days', () => {
+    // Unwrapped before it is read: the comment is
+    // hard-wrapped to the house width, so the
+    // sentence it makes is spread over four lines.
+    const prose = written_.replaceAll(/\n\s*\/\/ /g, ' ');
+
+    expect(written_).toContain('// Seven days, as seconds.');
+    expect(prose).toContain('This wait set no limit of its own');
+  });
+});
+
+describe('a wait on the clock alone', () => {
+  const written_ = compile(fixture('timer_wait'));
+
+  it('sleeps for the seconds it was given, in milliseconds', () => {
+    expect(written_).toContain('await DBOS.sleep(900000);');
+  });
+
+  it('parks on nothing, correlates with nothing, reminds nobody', () => {
+    expect(written_).not.toContain('DBOS.recv');
+    expect(written_).not.toContain('WaitCorrelation');
+    expect(written_).not.toContain('timeoutSeconds');
+    expect(written_).not.toContain('for (;;)');
+  });
+
+  it('needs no run id, because nothing it does is addressed to a run', () => {
+    expect(written_).not.toContain('DBOS.workflowID');
+  });
+
+  it('lets the value flowing into it flow past it', () => {
+    // A timer produces nothing, so the block after
+    // one reads whatever the block before it
+    // produced.
+    expect(written_).toContain('async () => recordBooking(evt),');
+  });
+});
+
+describe('a wait that sends a reminder, inside a loop', () => {
+  const written_ = compile(fixture('form_retry'));
+
+  it('names each reminder by its round and its count', () => {
+    // Without the round, the first reminder of
+    // round one and the first of round two both
+    // record one name, and every recovery after
+    // the second round fails.
+    expect(written_).toContain(
+      'name: `await_details.r${round}.resend.${awaitDetailsResends}`,',
+    );
+  });
+
+  it('records no two steps under one name', () => {
+    expect(stepProblems(written_)).toEqual([]);
+  });
+
+  it('sends the same email the wait was opened by', () => {
+    // Twice: once when the run first asks, and
+    // once from inside the reminder loop.
+    expect(written_.split('sendNodeEmail({')).toHaveLength(3);
+  });
+});
+
+describe('an email', () => {
+  const written_ = compile(fixture('groom_booking'));
+
+  it('mints nothing itself, and hands the runtime what to send', () => {
+    // The link's issued and expiry times come from
+    // the clock, so a workflow body that minted
+    // one would produce a different token on every
+    // replay. sendNodeEmail mints inside the step.
+    expect(written_).toContain('sendNodeEmail({');
+    expect(written_).not.toContain('mintFormLink');
+    expect(written_).not.toContain('mintArtifactLink');
+  });
+
+  it('writes to whoever asked for the run, by the local at the top', () => {
+    expect(written_).toContain('to: requesterEmail,');
+  });
+
+  it('says which retries are worth making', () => {
+    expect(written_).toContain('shouldRetry: isTransientSendFailure,');
+    expect(written_).toContain(
+      "import { isTransientSendFailure } from '../app/mailer.js';",
+    );
+  });
+
+  it('carries nothing to attach when the author attached nothing', () => {
+    expect(written_).toContain("attach: { kind: 'none' },");
+    expect(written_).toContain('downstream: [],');
+  });
+});
+
+describe('an email carrying a link to something stored', () => {
+  const written_ = compile(fixture('approval_flow'));
+
+  it('resolves the path into the value the block produced', () => {
+    expect(written_).toContain("kind: 'artifact',");
+    expect(written_).toContain('key: payClaimOut.receiptKey,');
+  });
+
+  it('gives the link the seven days the token type allows', () => {
+    expect(written_).toContain('expiresInSeconds: 604800,');
+  });
+});
+
+describe('an email whose form nothing waits on', () => {
+  it('is refused by name rather than compiled into a dead link', () => {
+    const result = refuse(
+      makeIR({
+        name: 'orphan_form',
+        nodes: [
+          CLAIM_FILED,
+          {
+            id: 'ask_something',
+            kind: 'emailSend',
+            title: 'Ask something',
+            config: {
+              to: 'ops@example.com',
+              subject: 'A question',
+              bodyMarkdown: 'Please answer.',
+              attach: {
+                type: 'form',
+                form: {
+                  fields: [{ id: 'answer', label: 'Answer', type: 'text' }],
+                },
+              },
+            },
+          },
+        ],
+        edges: [{ from: 'claim_filed', to: 'ask_something' }],
+      }),
+    );
+
+    expect(result.reason).toBe('UNSUPPORTED');
+    if (result.reason !== 'UNSUPPORTED') return;
+
+    expect(result.nodeId).toBe('ask_something');
+    expect(result.message).toContain('ask_something');
+  });
+});
+
+describe('a conditional field the page could not evaluate', () => {
+  function withCondition(showIf: Predicate): WorkflowIR {
+    return makeIR({
+      name: 'bad_condition',
+      nodes: [
+        CLAIM_FILED,
+        {
+          id: 'ask_something',
+          kind: 'emailSend',
+          title: 'Ask something',
+          config: {
+            to: 'ops@example.com',
+            subject: 'A question',
+            bodyMarkdown: 'Please answer.',
+            attach: {
+              type: 'form',
+              form: {
+                fields: [
+                  { id: 'urgent', label: 'Urgent?', type: 'yesNo' },
+                  { id: 'why', label: 'Why?', type: 'textarea', showIf },
+                ],
+              },
+            },
+          },
+        },
+        {
+          id: 'await_answer',
+          kind: 'durableWait',
+          title: 'Wait for the answer',
+          out: 'ExpenseClaim',
+          config: {
+            source: { kind: 'form', email: 'ask_something' },
+            onTimeout: 'abort',
+          },
+        },
+      ],
+      edges: [
+        { from: 'claim_filed', to: 'ask_something' },
+        { from: 'ask_something', to: 'await_answer' },
+      ],
+    });
+  }
+
+  it('refuses a path that reaches past the answers themselves', () => {
+    // A form's answers are a flat map of field id
+    // to value. There is nothing for a deeper path
+    // to address, and the page evaluates the
+    // condition in a browser with only that map.
+    const result = refuse(
+      withCondition({ path: 'urgent.reason', op: 'exists' }),
+    );
+
+    expect(result.reason).toBe('UNSUPPORTED');
+    if (result.reason !== 'UNSUPPORTED') return;
+    expect(result.message).toContain('why');
+  });
+
+  it('refuses a field that watches one asked after it', () => {
+    const result = refuse(withCondition({ path: 'later', op: 'exists' }));
+
+    expect(result.reason).toBe('UNSUPPORTED');
+    if (result.reason !== 'UNSUPPORTED') return;
+    expect(result.message).toContain('why');
+  });
+});
+
+describe('a reminder the author did not size', () => {
+  function reminding(extra: Record<string, unknown>): WorkflowIR {
+    return makeIR({
+      name: 'unsized_reminder',
+      nodes: [
+        CLAIM_FILED,
+        {
+          id: 'ask_manager',
+          kind: 'emailSend',
+          title: 'Ask the manager',
+          config: {
+            to: 'ops@example.com',
+            subject: 'A question',
+            bodyMarkdown: 'Please answer.',
+            attach: {
+              type: 'form',
+              form: {
+                fields: [{ id: 'answer', label: 'Answer', type: 'text' }],
+              },
+            },
+          },
+        },
+        {
+          id: 'await_manager',
+          kind: 'durableWait',
+          title: 'Wait for the manager',
+          out: 'ExpenseClaim',
+          config: {
+            source: { kind: 'form', email: 'ask_manager' },
+            onTimeout: 'resend',
+            ...extra,
+          },
+        },
+      ],
+      edges: [
+        { from: 'claim_filed', to: 'ask_manager', type: 'ExpenseClaim' },
+        { from: 'ask_manager', to: 'await_manager' },
+      ],
+    });
+  }
+
+  it('sends one reminder, which is the fewest that means anything', () => {
+    // Left open, a reminder loop is a run that
+    // never ends. One is the smallest number that
+    // makes "remind them" mean something and still
+    // lets the run finish.
+    expect(compile(reminding({}))).toContain('if (awaitManagerResends >= 1)');
+  });
+
+  it('fails the run when the reminders ran out, unless told otherwise', () => {
+    expect(compile(reminding({}))).toContain(
+      "throw new Error('await_manager: nothing arrived within 7 days.');",
+    );
+  });
+
+  it('stops the run quietly when the author asked it to carry on', () => {
+    // "Carry on" cannot mean running the blocks
+    // below: there is no answer to give them and
+    // every one of them said what it expects. It
+    // means this run is done.
+    const written_ = compile(reminding({ afterMax: 'continue' }));
+
+    expect(written_).toContain('if (awaitManagerOut === null) return;');
+    expect(written_).not.toContain('nothing arrived within');
+  });
+});
+
+describe('a reminder with nothing to resend', () => {
+  function resending(waitOn: WaitSource): WorkflowIR {
+    return makeIR({
+      name: 'nothing_to_resend',
+      nodes: [
+        CLAIM_FILED,
+        {
+          id: 'await_decision',
+          kind: 'durableWait',
+          title: 'Wait for a decision',
+          out: 'ExpenseClaim',
+          config: { source: waitOn, onTimeout: 'resend', maxResends: 2 },
+        },
+      ],
+      edges: [
+        { from: 'claim_filed', to: 'await_decision', type: 'ExpenseClaim' },
+      ],
+    });
+  }
+
+  it('refuses a reminder on a wait for an event', () => {
+    const result = refuse(
+      resending({
+        kind: 'event',
+        topic: 'expense.decided',
+        correlationPath: 'claimId',
+        correlateWith: 'claimId',
+      }),
+    );
+
+    expect(result.reason).toBe('UNSUPPORTED');
+    if (result.reason !== 'UNSUPPORTED') return;
+    expect(result.nodeId).toBe('await_decision');
+  });
+
+  it('refuses a reminder on a wait for the clock', () => {
+    const result = refuse(resending({ kind: 'timer', seconds: 60 }));
+
+    expect(result.reason).toBe('UNSUPPORTED');
+    if (result.reason !== 'UNSUPPORTED') return;
+    expect(result.nodeId).toBe('await_decision');
+  });
+});
+
+describe('an approval', () => {
+  const written_ = compile(fixture('approval_flow'));
+
+  it('asks, registers, parks, clears, and only then reads the answer', () => {
+    const order = [
+      "name: 'manager_ok.ask',",
+      "name: 'manager_ok.register',",
+      "await DBOS.recv<{ approved: boolean }>('manager_ok', {",
+      "name: 'manager_ok.clear',",
+      'if (managerOkOut === null) {',
+      'if (managerOkOut.approved === true) {',
+    ].map((needle) => written_.indexOf(needle));
+
+    expect(order).not.toContain(-1);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  it('mints an ordinary form token, scoped to itself', () => {
+    // No new token type and no new wait primitive:
+    // which page a link opens is settled by the
+    // module's waits table, never by the token.
+    // The link lasts exactly as long as the wait,
+    // so nobody meets a dead link on a decision
+    // still open.
+    expect(written_).toContain(
+      [
+        '        attach: {',
+        "          kind: 'approval',",
+        "          nodeId: 'manager_ok',",
+        '          expiresInSeconds: 345600,',
+        '        },',
+      ].join('\n'),
+    );
+    expect(written_).toContain('timeoutSeconds: 345600,');
+  });
+
+  it('says what the email says, in words a reader can see', () => {
+    expect(written_).toContain("subject: 'Approve this expense',");
+    expect(written_).toContain(
+      "bodyMarkdown: 'Please take a look when you can.',",
+    );
+  });
+
+  it('tells the person what happens next, from where the arms meet', () => {
+    // The blocks on the arm they did not take are
+    // not what happens next.
+    expect(written_).toContain("downstream: ['Close the claim'],");
+    expect(written_).not.toContain("'Pay the claim', 'Close the claim'");
+  });
+
+  it('serves the approval page, with no form fields of its own', () => {
+    expect(written_).toContain("page: 'approval',");
+    expect(written_).toContain('fields: [],');
+  });
+
+  it('takes both ways out of the decision', () => {
+    expect(written_).toContain('async () => payClaim(evt),');
+    expect(written_).toContain('async () => fileRefusal(evt),');
+  });
+});
+
+describe('an approval with the two optional fields left out', () => {
+  function approval(config: Record<string, unknown>): WorkflowIR {
+    return makeIR({
+      name: 'bare_approval',
+      title: 'Bare approval',
+      nodes: [
+        CLAIM_FILED,
+        {
+          id: 'manager_ok',
+          kind: 'approval',
+          title: 'Manager decides',
+          config: { to: 'ops@example.com', ...config },
+        },
+        {
+          id: 'pay_it',
+          kind: 'step',
+          title: 'Pay it',
+          handler: { export: 'closeClaim' },
+          config: {},
+        },
+        {
+          id: 'drop_it',
+          kind: 'step',
+          title: 'Drop it',
+          handler: { export: 'closeClaim' },
+          config: {},
+        },
+      ],
+      edges: [
+        { from: 'claim_filed', to: 'manager_ok', type: 'ExpenseClaim' },
+        { from: 'manager_ok', port: 'approved', to: 'pay_it' },
+        { from: 'manager_ok', port: 'rejected', to: 'drop_it' },
+      ],
+    });
+  }
+
+  const written_ = compile(approval({}));
+
+  it('writes a subject rather than sending one with none', () => {
+    // An empty subject line is a bug that only
+    // shows up in somebody's inbox.
+    expect(written_).toContain("subject: 'Approval needed: Manager decides',");
+  });
+
+  it('writes a sentence rather than an empty message', () => {
+    expect(written_).toContain(
+      "bodyMarkdown: 'Bare approval is waiting on your decision.',",
+    );
+  });
+
+  it('shows nothing after a decision whose arms never meet again', () => {
+    expect(written_).toContain('downstream: [],');
+  });
+
+  it('waits the same seven days any other wait with no limit does', () => {
+    expect(written_).toContain('timeoutSeconds: 604800,');
+  });
+});
+
+/**
+ * The claim the word "sugar" makes, checked.
+ *
+ * An approval is one block on the canvas and three
+ * constructs in the file. The only way to show that
+ * is to write the three out by hand over the same
+ * data and compare what each compiles to — and to
+ * compare the statements rather than the text,
+ * since the names differ by construction.
+ */
+
+const SUBJECT = 'Approve this expense';
+const MESSAGE = 'Please take a look when you can.';
+
+/** Every statement of the workflow function, as its
+ *  kind and what it calls. */
+function shapeOf(text: string): string[] {
+  const file = ts.createSourceFile('w.ts', text, ts.ScriptTarget.ES2022, true);
+  const shapes: string[] = [];
+
+  const callsIn = (node: ts.Node): string[] => {
+    const found: string[] = [];
+    const walk = (each: ts.Node): void => {
+      if (ts.isCallExpression(each)) found.push(each.expression.getText(file));
+      ts.forEachChild(each, walk);
+    };
+
+    walk(node);
+    return found;
+  };
+
+  const statementsOf = (node: ts.Statement): readonly ts.Statement[] =>
+    ts.isBlock(node) ? node.statements : [node];
+
+  // Named here rather than taken from
+  // `SyntaxKind`, whose reverse lookup answers with
+  // whichever alias sorts first — a variable
+  // statement comes back as `FirstStatement`.
+  const labelOf = (statement: ts.Statement): string => {
+    if (ts.isVariableStatement(statement)) return 'const';
+    if (ts.isExpressionStatement(statement)) return 'call';
+    if (ts.isThrowStatement(statement)) return 'throw';
+    if (ts.isReturnStatement(statement)) return 'return';
+    if (ts.isBreakStatement(statement)) return 'break';
+    if (ts.isContinueStatement(statement)) return 'continue';
+    if (ts.isForStatement(statement)) return 'for';
+    if (ts.isDoStatement(statement)) return 'do';
+
+    return ts.SyntaxKind[statement.kind] ?? 'statement';
+  };
+
+  const block = (statements: readonly ts.Statement[], depth: number): void => {
+    const pad = '  '.repeat(depth);
+
+    for (const statement of statements) {
+      if (ts.isIfStatement(statement)) {
+        shapes.push(`${pad}if`);
+        block(statementsOf(statement.thenStatement), depth + 1);
+
+        if (statement.elseStatement === undefined) continue;
+        shapes.push(`${pad}else`);
+        block(statementsOf(statement.elseStatement), depth + 1);
+        continue;
+      }
+
+      if (ts.isForStatement(statement) || ts.isDoStatement(statement)) {
+        shapes.push(`${pad}${labelOf(statement)}`);
+        block(statementsOf(statement.statement), depth + 1);
+        continue;
+      }
+
+      shapes.push(
+        [`${pad}${labelOf(statement)}`, ...callsIn(statement)]
+          .join(' ')
+          .trimEnd(),
+      );
+    }
+  };
+
+  const fn = file.statements.find((each) => ts.isFunctionDeclaration(each));
+
+  if (fn === undefined || !ts.isFunctionDeclaration(fn) || !fn.body) {
+    throw new Error('no workflow function');
+  }
+
+  block(fn.body.statements, 0);
+  return shapes;
+}
+
+/** The two arms and where they meet, shared by
+ *  both spellings below. */
+const DECISION_TAIL: readonly NodeSpec[] = [
+  {
+    id: 'pay_claim',
+    kind: 'step',
+    title: 'Pay the claim',
+    handler: { export: 'payClaim' },
+    in: 'ExpenseClaim',
+    out: 'Payment',
+    config: {},
+  },
+  {
+    id: 'file_refusal',
+    kind: 'step',
+    title: 'File the refusal',
+    handler: { export: 'fileRefusal' },
+    in: 'ExpenseClaim',
+    out: 'Refusal',
+    config: {},
+  },
+  {
+    id: 'close_claim',
+    kind: 'step',
+    title: 'Close the claim',
+    handler: { export: 'closeClaim' },
+    config: {},
+  },
+];
+
+const AS_APPROVAL = makeIR({
+  name: 'as_approval',
+  title: 'Expense approval',
+  nodes: [
+    CLAIM_FILED,
+    {
+      id: 'manager_ok',
+      kind: 'approval',
+      title: 'Manager decides',
+      config: {
+        to: 'ops@example.com',
+        subject: SUBJECT,
+        message: MESSAGE,
+        timeoutDays: 4,
+      },
+    },
+    ...DECISION_TAIL,
+  ],
+  edges: [
+    { from: 'claim_filed', to: 'manager_ok', type: 'ExpenseClaim' },
+    { from: 'manager_ok', port: 'approved', to: 'pay_claim' },
+    { from: 'manager_ok', port: 'rejected', to: 'file_refusal' },
+    { from: 'pay_claim', to: 'close_claim' },
+    { from: 'file_refusal', to: 'close_claim' },
+  ],
+});
+
+const BY_HAND = makeIR({
+  name: 'by_hand',
+  title: 'Expense approval',
+  nodes: [
+    CLAIM_FILED,
+    {
+      id: 'ask_manager',
+      kind: 'emailSend',
+      title: 'Ask the manager',
+      config: {
+        to: 'ops@example.com',
+        subject: SUBJECT,
+        bodyMarkdown: MESSAGE,
+        attach: {
+          type: 'form',
+          form: {
+            fields: [{ id: 'approved', label: 'Approve?', type: 'yesNo' }],
+          },
+        },
+      },
+    },
+    {
+      id: 'await_manager',
+      kind: 'durableWait',
+      title: 'Wait for the manager',
+      // The claim rather than a decision type: the
+      // approval hands its arms the value that was
+      // already flowing, so this is what makes the
+      // two spellings read the same value.
+      out: 'ExpenseClaim',
+      config: {
+        source: { kind: 'form', email: 'ask_manager' },
+        timeoutDays: 4,
+        onTimeout: 'abort',
+      },
+    },
+    {
+      id: 'decide',
+      kind: 'branch',
+      title: 'Approved?',
+      in: 'ExpenseClaim',
+      config: {
+        cases: [
+          {
+            port: 'approved',
+            when: { path: 'approved', op: 'eq', value: true },
+          },
+        ],
+        elsePort: 'rejected',
+      },
+    },
+    ...DECISION_TAIL,
+  ],
+  edges: [
+    { from: 'claim_filed', to: 'ask_manager', type: 'ExpenseClaim' },
+    { from: 'ask_manager', to: 'await_manager' },
+    { from: 'await_manager', to: 'decide', type: 'ExpenseClaim' },
+    { from: 'decide', port: 'approved', to: 'pay_claim' },
+    { from: 'decide', port: 'rejected', to: 'file_refusal' },
+    { from: 'pay_claim', to: 'close_claim' },
+    { from: 'file_refusal', to: 'close_claim' },
+  ],
+});
+
+describe('an approval beside the three blocks it is sugar for', () => {
+  it('compiles to the same statements, in the same order', () => {
+    expect(shapeOf(compile(AS_APPROVAL))).toEqual(shapeOf(compile(BY_HAND)));
+  });
+
+  it('is compared against a shape with something in it', () => {
+    // A comparison of two empty lists would pass
+    // for the wrong reason, and this is the only
+    // assertion in the file that proves the word
+    // "desugared" rather than "plausible".
+    const shape = shapeOf(compile(AS_APPROVAL));
+
+    expect(shape).toContain('call DBOS.runStep sendNodeEmail');
+    expect(shape).toContain('call DBOS.runStep registerWaitCorrelation');
+    expect(shape).toContain('const DBOS.recv');
+    expect(shape).toContain('call DBOS.runStep clearWaitCorrelation');
+    // Three: the run id it checks it has, the
+    // answer it checks arrived, and the decision
+    // itself.
+    expect(shape.filter((line) => line === 'if')).toHaveLength(3);
+    expect(shape).toContain('else');
+  });
+});
+
+describe('the order the statements of a wait come in', () => {
+  it('registers, parks, clears, then asks — read off the parse tree', () => {
+    // Read off the statements rather than searched
+    // for in the text: the four names all appear
+    // in the tables at the bottom of the file too,
+    // and an order taken from a text search would
+    // agree with itself while the run parked before
+    // it had written the row that wakes it.
+    const shape = shapeOf(compile(fixture('form_intake')));
+    const at = (needle: string): number =>
+      shape.findIndex((line) => line.includes(needle));
+
+    expect(at('registerWaitCorrelation')).toBeGreaterThanOrEqual(0);
+    expect(at('registerWaitCorrelation')).toBeLessThan(at('DBOS.recv'));
+    expect(at('DBOS.recv')).toBeLessThan(at('clearWaitCorrelation'));
+    expect(at('clearWaitCorrelation')).toBeLessThan(shape.lastIndexOf('if'));
+  });
+});
+
+describe('every attachment the compiler can emit', () => {
+  /** The `kind` of each attachment in a compiled
+   *  file, read out of the parsed source. */
+  function attachKinds(text: string): string[] {
+    const file = ts.createSourceFile(
+      'w.ts',
+      text,
+      ts.ScriptTarget.ES2022,
+      true,
+    );
+    const kinds: string[] = [];
+
+    const walk = (node: ts.Node): void => {
+      if (
+        ts.isPropertyAssignment(node) &&
+        node.name.getText(file) === 'attach' &&
+        ts.isObjectLiteralExpression(node.initializer)
+      ) {
+        for (const property of node.initializer.properties) {
+          if (!ts.isPropertyAssignment(property)) continue;
+          if (property.name.getText(file) !== 'kind') continue;
+          kinds.push(property.initializer.getText(file).replaceAll("'", ''));
+        }
+      }
+
+      ts.forEachChild(node, walk);
+    };
+
+    walk(file);
+    return kinds;
+  }
+
+  const emitted = new Set(
+    ['groom_booking', 'form_intake', 'form_retry', 'approval_flow'].flatMap(
+      (name) => attachKinds(compile(fixture(name))),
+    ),
+  );
+
+  it('is one the runtime declares and has a rendered email for', () => {
+    // The compiler names what the runtime opens.
+    // A fifth kind, or a fourth spelled wrong,
+    // type-checks nowhere and renders as an email
+    // with no link in it — which is a thing
+    // somebody finds in their inbox rather than in
+    // a test.
+    const contract = readFileSync(
+      join(scaffoldRoot, 'app', 'contract.ts'),
+      'utf8',
+    );
+    const snapshots = readdirSync(
+      join(scaffoldRoot, 'app', 'email', '__snapshots__'),
+    );
+
+    expect(emitted).toEqual(new Set(['none', 'form', 'approval', 'artifact']));
+
+    for (const kind of emitted) {
+      expect(contract).toContain(`kind: '${kind}'`);
+    }
+
+    // `none` renders the plain message; the other
+    // three each carry a link and have a snapshot
+    // of their own.
+    expect(snapshots).toContain('node-email-plain.html');
+    expect(snapshots).toContain('node-email-form.html');
+    expect(snapshots).toContain('node-email-approval.html');
+    expect(snapshots).toContain('node-email-artifact.html');
+  });
+});

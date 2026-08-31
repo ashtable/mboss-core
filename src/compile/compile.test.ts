@@ -11,9 +11,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { workflowFile, workflowsDir } from '../apply/index.js';
-import { WorkflowIRSchema } from '../ir/index.js';
 import { scanLib } from '../manifest/index.js';
-import { fixturesRoot, readFixtureJson } from '../test-support/fixtures.js';
+import { fixturesRoot } from '../test-support/fixtures.js';
 import { makeIR } from '../test-support/ir.js';
 import {
   makeProject,
@@ -105,68 +104,6 @@ describe('the compile gate', () => {
 });
 
 describe('what the compiler cannot emit yet', () => {
-  it('names the block, so somebody can act on it', () => {
-    const result = compile(
-      makeIR({
-        nodes: [
-          TRIGGER,
-          {
-            id: 'await_reply',
-            kind: 'durableWait',
-            title: 'Wait for a reply',
-            out: 'ChatReply',
-            config: {
-              source: {
-                kind: 'event',
-                topic: 'twilio.reply',
-                correlationPath: 'from',
-                correlateWith: 'requestId',
-              },
-              timeoutDays: 2,
-              onTimeout: 'abort',
-            },
-          },
-        ],
-        edges: [{ from: 'booking_requested', to: 'await_reply' }],
-      }),
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      reason: 'UNSUPPORTED',
-      nodeId: 'await_reply',
-    });
-    // In the words the canvas uses, not the kind
-    // name out of the schema: the person reading
-    // this is looking at a block, not at JSON.
-    if (result.ok || !('message' in result)) throw new Error('compiled');
-    expect(result.message).toContain('is a wait');
-  });
-
-  it('refuses the canonical workflow, which parks on a reply', () => {
-    // Its wait and its email have no emitter yet.
-    // What the control flow around them compiles
-    // to is pinned by `chat_retry_abort`, which is
-    // this document node for node with a plain
-    // step where the wait is and no trailing
-    // email.
-    //
-    // This is not a statement about the canonical
-    // workflow. It goes away the moment a wait and
-    // an email can be emitted, and what replaces
-    // it is that document's own full golden — not
-    // a relaxed assertion here.
-    const result = compile(
-      WorkflowIRSchema.parse(readFixtureJson('ir/groom_booking.workflow.json')),
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      reason: 'UNSUPPORTED',
-      nodeId: 'await_reply',
-    });
-  });
-
   it('reports a condition it cannot read as a path', () => {
     const result = compile(
       makeIR({
