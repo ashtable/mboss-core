@@ -84,6 +84,46 @@ does not validate the payload against the declared type: the manifest carries
 type names, not their structure. Treat a handler's input as untrusted and
 check what you rely on.
 
+## Starting a workflow that has no trigger
+
+A workflow whose trigger is "manual" has no event to arrive and no schedule to
+fire, so there is one route for starting it by hand:
+
+\`\`\`bash
+curl -X POST http://localhost:3000/runs/<workflow-name> \\
+  -H "x-mboss-events-secret: $EVENTS_SECRET" \\
+  -H 'content-type: application/json' \\
+  -d '{ "payload": { } }'
+\`\`\`
+
+The body may also carry a \`workflowID\`. Passing one is how you make pressing
+the button twice mean one run — only you know whether the second press was a
+retry of the first. It refuses anything that is not a manual workflow: an
+event-triggered one is started by its event, and starting it here would put a
+run into the world with none of the payload its trigger promised it.
+
+## File uploads need an object store
+
+A form with a file field needs the five \`S3_\` variables set. With none of
+them the artifact route answers that it has no store, and the form renders its
+dropzone disabled with a sentence saying so — which is a better answer than a
+form that takes a file and loses it. The compose file ships no object store;
+point these at a MinIO container or at a real bucket.
+
+Uploaded files go to the store and the workflow receives descriptors —
+\`{ id, filename, contentType, size }\` — never the bytes. Read the bytes back
+in a handler with the id, which is the storage key.
+
+## Two names, and only one of them is safe to change
+
+\`APP_NAME\` is what people see: the logo row of every email this app sends
+and the headline of every form it serves. Change it whenever you like.
+
+The name DBOS files runs and schedules under is fixed in \`src/app/main.ts\`
+and is deliberately not that one. Schedule ownership is keyed on it, so
+renaming it would hide every schedule already recorded and the old ones would
+go on firing with nothing left to prune them.
+
 ## Loop settings that have no compiled effect yet
 
 - \`minRounds\` is inert. Nothing in the block catalog carries an exit

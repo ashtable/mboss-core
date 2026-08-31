@@ -83,16 +83,13 @@ const written = MODULES.filter(([, entry]) =>
 );
 
 describe('the runtime table against the runtime', () => {
-  it('lists the modules the runtime task has still to write', () => {
-    // Each of these arrives with the runtime app.
-    // When one lands, delete it from this list and
-    // its exports start being checked below — the
-    // failure here is the reminder to do it.
+  it('has every module the table names, so none is checked vacuously', () => {
     const missing = MODULES.filter(
       ([, entry]) => !existsSync(fileFor(entry.specifier)),
     ).map(([name]) => name);
 
-    expect(missing).toEqual(['db', 'mail', 'mailer', 'waits']);
+    expect(missing).toEqual([]);
+    expect(written).toHaveLength(MODULES.length);
   });
 
   it.each(written)('%s exports every name the table claims', (_name, entry) => {

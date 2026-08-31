@@ -32,7 +32,7 @@ const baseUrlSchema = z
   .transform((value) => value.replace(/\/+$/, ''));
 
 /**
- * Eight variables the app cannot run without,
+ * Nine variables the app cannot run without,
  * three with defaults, and seven that are
  * genuinely optional — an absent one turns a
  * feature off rather than breaking the app.
@@ -53,6 +53,14 @@ export const EnvSchema = z.object({
   // minted against it, so it has to be the origin
   // a recipient can actually reach.
   APP_BASE_URL: baseUrlSchema,
+  // What this app is called, in the logo row of
+  // every email it sends and the headline of
+  // every form it serves. It starts as the
+  // project's name; change it to whatever you
+  // would call this thing out loud. It is also
+  // the application name DBOS records runs
+  // against.
+  APP_NAME: z.string().min(1),
   // DBOS only recovers a run whose application
   // version matches the running one, and it
   // derives that version from a hash of the

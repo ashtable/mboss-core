@@ -29,7 +29,7 @@ export const PLACEHOLDER_LINK_KEYS =
 
 export const PLACEHOLDER_EVENTS_SECRET = 'dev-events-secret';
 
-export function envFile(secrets: EnvSecrets): string {
+export function envFile(name: string, secrets: EnvSecrets): string {
   return `# Written by mBoss when this project was created.
 #
 # Gitignored, and the deploy ignores it too, so
@@ -47,6 +47,13 @@ DBOS_SYSTEM_DATABASE_URL="postgres://app:app@localhost:5432/app"
 # minted against it, so in production it is the
 # public origin rather than this one.
 APP_BASE_URL="http://localhost:3000"
+
+# What this app is called: the name in the logo
+# row of every email it sends and in the headline
+# of every form it serves. It starts as the
+# project's name — change it to whatever you would
+# call this thing out loud.
+APP_NAME="${name}"
 
 # Leave this alone. DBOS only recovers runs whose
 # application version matches the running one, so
@@ -98,7 +105,9 @@ MAIL_FROM="hello@example.com"
  * same comments, and two values that are obviously
  * not secrets.
  */
-export const ENV_EXAMPLE = envFile({
-  linkKeys: PLACEHOLDER_LINK_KEYS,
-  eventsSecret: PLACEHOLDER_EVENTS_SECRET,
-});
+export function envExample(name: string): string {
+  return envFile(name, {
+    linkKeys: PLACEHOLDER_LINK_KEYS,
+    eventsSecret: PLACEHOLDER_EVENTS_SECRET,
+  });
+}

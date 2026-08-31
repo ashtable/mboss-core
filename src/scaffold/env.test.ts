@@ -62,6 +62,7 @@ describe('the variable set', () => {
   it('names every variable this app is documented to read', () => {
     expect(namedIn(EXAMPLE)).toEqual([
       'APP_BASE_URL',
+      'APP_NAME',
       'APP_VERSION',
       'DATABASE_URL',
       'DBOS_SYSTEM_DATABASE_URL',
@@ -112,6 +113,16 @@ describe('the real file', () => {
     expect(env.APP_BASE_URL).toBe('http://localhost:3000');
   });
 
+  it('starts the app off named after the project', () => {
+    // It is the name in the logo row of every
+    // email this app sends and in the headline of
+    // every form it serves, so it is a real
+    // setting rather than a slug — but the project
+    // name is the only answer the scaffold has, and
+    // a name nobody has changed beats no name.
+    expect(settingsIn(ENV).APP_NAME).toBe('my_app');
+  });
+
   it('gives every required variable a value that is really there', () => {
     const settings = settingsIn(ENV);
 
@@ -120,13 +131,14 @@ describe('the real file', () => {
     }
   });
 
-  it('requires exactly the eight an app cannot run without', () => {
+  it('requires exactly the nine an app cannot run without', () => {
     // Derived from the schema rather than listed
     // twice: a variable that quietly became
     // required would otherwise pass a list that
     // was written before it did.
     expect(requiredKeys()).toEqual([
       'APP_BASE_URL',
+      'APP_NAME',
       'DATABASE_URL',
       'DBOS_SYSTEM_DATABASE_URL',
       'EVENTS_SECRET',

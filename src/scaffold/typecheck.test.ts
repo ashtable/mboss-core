@@ -57,6 +57,19 @@ describe('a freshly scaffolded project', () => {
       'src/app/env.ts',
       'src/app/health.ts',
       'src/app/health.test.ts',
+      'src/app/main.ts',
+      'src/app/app.ts',
+      'src/app/db.ts',
+      'src/app/mail.ts',
+      'src/app/mailer.ts',
+      'src/app/waits.ts',
+      'src/app/schedules.ts',
+      'src/app/artifacts.ts',
+      'src/app/routes/events.ts',
+      'src/app/routes/form.ts',
+      'src/app/routes/artifact.ts',
+      'src/app/pages/form.ts',
+      'src/app/email/templates.ts',
       'src/workflows/index.ts',
       'mboss.config.ts',
       'prisma.config.ts',
@@ -124,18 +137,15 @@ describe('the gate over that project', () => {
 describe('the boot sequence', () => {
   const MAIN = join(import.meta.dirname, 'app', 'main.ts');
 
-  it('is not written yet, which is what the check below is waiting for', () => {
-    // The runtime task writes app/main.ts. When it
-    // lands this fails: delete this test, and the
-    // one after it starts checking the real boot
-    // order. That failure is the reminder.
-    expect(existsSync(MAIN)).toBe(false);
+  it('creates its schema and listens in order', () => {
+    // Three orderings, each of which fails in a
+    // way that looks like something else: a
+    // datasource whose table is created after
+    // launch is invisible until a recovery replays
+    // against it, and a listener opened before
+    // launch resolves accepts exactly the requests
+    // that arrive during a deployment.
+    expect(existsSync(MAIN)).toBe(true);
+    expect(bootProblems(readFileSync(MAIN, 'utf8'))).toEqual([]);
   });
-
-  it.skipIf(!existsSync(MAIN))(
-    'creates its schema and listens in order',
-    () => {
-      expect(bootProblems(readFileSync(MAIN, 'utf8'))).toEqual([]);
-    },
-  );
 });

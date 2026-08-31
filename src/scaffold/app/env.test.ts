@@ -18,6 +18,7 @@ const COMPLETE = {
   DATABASE_URL: 'postgres://app:app@localhost:5432/app',
   DBOS_SYSTEM_DATABASE_URL: 'postgres://app:app@localhost:5432/app',
   APP_BASE_URL: 'http://localhost:3000',
+  APP_NAME: 'my_app',
   LINK_KEYS:
     'k1:00000000000000000000000000000000000000000000000000000000000001',
   EVENTS_SECRET: 'deadbeef',
@@ -39,6 +40,7 @@ describe('readEnv', () => {
       message = (error as Error).message;
     }
 
+    expect(message).toContain('APP_NAME');
     expect(message).toContain('LINK_KEYS');
     expect(message).toContain('EVENTS_SECRET');
     expect(message).toContain('MAIL_FROM');
@@ -103,6 +105,6 @@ describe('the schema itself', () => {
     const keys = Object.keys(EnvSchema.shape);
 
     expect(keys).toContain('DATABASE_URL');
-    expect(keys).toHaveLength(18);
+    expect(keys).toHaveLength(19);
   });
 });

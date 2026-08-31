@@ -31,9 +31,9 @@ import {
 } from './templates/dotfiles.js';
 import { ENTRYPOINT_MODE, ENTRYPOINT_SH } from './templates/entrypoint.js';
 import {
-  ENV_EXAMPLE,
   PLACEHOLDER_EVENTS_SECRET,
   PLACEHOLDER_LINK_KEYS,
+  envExample,
   envFile,
 } from './templates/env.js';
 import { HEALTH_TEST_TS } from './templates/health-test.js';
@@ -219,8 +219,8 @@ export function scaffoldFiles(options: ScaffoldOptions): ScaffoldFile[] {
 
   const files: ScaffoldFile[] = [
     { path: '.dockerignore', contents: DOCKERIGNORE },
-    { path: '.env', contents: envFile(secrets) },
-    { path: '.env.example', contents: ENV_EXAMPLE },
+    { path: '.env', contents: envFile(name, secrets) },
+    { path: '.env.example', contents: envExample(name) },
     { path: '.github/workflows/ci.yml', contents: CI_YML },
     { path: '.gitignore', contents: GITIGNORE },
     {
