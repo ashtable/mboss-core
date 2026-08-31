@@ -61,6 +61,18 @@ describe('LocalNames', () => {
     expect(locals.take('evt')).toBe('evt2');
   });
 
+  it('says whether a name is already spoken for', () => {
+    // The emitter asks before it imports a
+    // handler: a file cannot both import and
+    // declare one identifier, so a handler whose
+    // export name is already taken has to come in
+    // under another one.
+    const locals = new LocalNames(['parseRequest']);
+
+    expect(locals.has('parseRequest')).toBe(true);
+    expect(locals.has('findSlot')).toBe(false);
+  });
+
   it('reserves a plain name for a temporary', () => {
     const locals = new LocalNames([]);
 

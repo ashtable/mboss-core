@@ -4,6 +4,7 @@
 
 import { DBOS } from '@dbos-inc/dbos-sdk';
 
+import { sweepStale } from '../../lib/sweepStale.js';
 import type {
   EventWait,
   PayloadCheck,
@@ -21,6 +22,14 @@ async function scheduleTriggerFn(
 ): Promise<void> {
   if (scheduledTime < SCHEDULE_STARTS) return;
   if (scheduledTime > SCHEDULE_ENDS) return;
+
+  const sweepStaleOut = await DBOS.runStep(async () => sweepStale(), {
+    name: 'sweep_stale',
+    retriesAllowed: true,
+    maxAttempts: 3,
+    intervalSeconds: 1,
+    backoffRate: 2,
+  });
 }
 
 export const scheduleTrigger = DBOS.registerWorkflow(scheduleTriggerFn, {

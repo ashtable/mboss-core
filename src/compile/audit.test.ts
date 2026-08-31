@@ -155,6 +155,52 @@ describe('stepProblems', () => {
     );
   });
 
+  it('asks the same of a transaction, apart from the retries', () => {
+    // A transaction's config carries an isolation
+    // level, a read-only flag and a name. It has
+    // no retry field, so there is nothing for one
+    // to say about retries — but a name it does
+    // record, and DBOS compares that on replay
+    // exactly as it does a step's.
+    const source = [
+      'async function fn(): Promise<void> {',
+      '  await appDb.runTransaction(async () => work(), {',
+      "    name: 'work',",
+      '  });',
+      '}',
+    ].join('\n');
+
+    expect(stepProblems(source)).toEqual([]);
+    expect(
+      why(stepProblems(source.replace("    name: 'work',\n", ''))),
+    ).toEqual([
+      'a step with no name: DBOS records the name and compares it on replay',
+    ]);
+    expect(
+      why(stepProblems(source.replace('async () => work()', '() => work()'))),
+    ).toEqual(["the step 'work' is not run through an async arrow"]);
+  });
+
+  it('counts a transaction into the same set of recorded names', () => {
+    // The names have to be unique across the file,
+    // not within one kind of call: a fanned-out
+    // transaction records a templated name just as
+    // a fanned-out step does.
+    const source = [
+      'async function fn(): Promise<void> {',
+      '  await DBOS.runStep(async () => a(), {',
+      "    name: 'x',",
+      '    retriesAllowed: true,',
+      '  });',
+      "  await appDb.runTransaction(async () => b(), { name: 'x' });",
+      '}',
+    ].join('\n');
+
+    expect(why(stepProblems(source))).toContain(
+      "two steps both record the name 'x'",
+    );
+  });
+
   it('reports two steps that would record the same name', () => {
     const source = [
       'async function fn(): Promise<void> {',

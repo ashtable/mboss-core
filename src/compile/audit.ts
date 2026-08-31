@@ -162,16 +162,31 @@ function isConstantDate(node: ts.NewExpression): boolean {
 }
 
 /**
- * What every emitted step has to say for itself:
- * an async arrow, an explicit retry decision, a
- * name, and a name no other step in the file uses.
+ * What every emitted checkpoint has to say for
+ * itself: an async arrow, a name, and a name no
+ * other checkpoint in the file uses — plus, for a
+ * step, an explicit retry decision.
+ *
+ * Transactions are held to the same account as
+ * steps because DBOS records their names the same
+ * way and compares them on the same replay. Only
+ * the retry decision is a step's alone: a
+ * transaction's config has no field to put one in.
  */
 export function stepProblems(source: string): AuditProblem[] {
   const file = parse(source);
   const found: AuditProblem[] = [];
   const seen = new Map<string, number>();
+  const checkpoints = [
+    ...STEP_CALLS.flatMap((callee) =>
+      callsTo(file, callee).map((call) => ({ call, retries: true })),
+    ),
+    ...TRANSACTION_CALLS.flatMap((callee) =>
+      callsTo(file, callee).map((call) => ({ call, retries: false })),
+    ),
+  ].sort((a, b) => a.call.getStart(file) - b.call.getStart(file));
 
-  for (const call of callsTo(file, 'DBOS.runStep')) {
+  for (const { call, retries } of checkpoints) {
     const line = lineOf(file, call);
     const [callback, config] = call.arguments;
     const options =
@@ -202,8 +217,9 @@ export function stepProblems(source: string): AuditProblem[] {
     }
 
     if (
-      options === undefined ||
-      propertyText(file, options, 'retriesAllowed') === undefined
+      retries &&
+      (options === undefined ||
+        propertyText(file, options, 'retriesAllowed') === undefined)
     ) {
       found.push({
         line,

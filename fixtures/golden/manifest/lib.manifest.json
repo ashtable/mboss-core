@@ -62,6 +62,13 @@
       "returnType": "Booking"
     },
     {
+      "doc": "Clears out bookings nobody ever confirmed. Takes no argument, which is what a block on a scheduled run needs: a run the clock starts carries no payload, so a handler that asked for one could never be called.",
+      "export": "sweepStale",
+      "file": "lib/sweepStale.ts",
+      "params": [],
+      "returnType": "number"
+    },
+    {
       "doc": "Texts the customer the open times and asks them to pick one. The reply arrives as a separate event, so this only sends.",
       "export": "twilioChat",
       "file": "lib/twilioChat.ts",
@@ -75,7 +82,7 @@
     }
   ],
   "nonSerializable": [],
-  "sourceHash": "3dca475bbb9366544cce66e5500f2570668f1e6efdaea0c0309359dd906936b4",
+  "sourceHash": "e3fcc15bbc038cbe41f74da2f530dc98fec8fa95abf1d822d5dd33ecaf488e0f",
   "typeSources": {
     "Booking": "lib/types.ts",
     "BookingReq": "lib/types.ts",

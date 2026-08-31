@@ -60,6 +60,18 @@ export class LocalNames {
   }
 
   /**
+   * Whether a name is already spoken for.
+   *
+   * Asked before a handler is imported: the file
+   * declares the workflow under the camelCase of
+   * its own name, and one file cannot both import
+   * and declare a single identifier.
+   */
+  has(name: string): boolean {
+    return this.#taken.has(name);
+  }
+
+  /**
    * A temporary, under the name asked for when it
    * is free and a numbered one when it is not.
    */

@@ -42,6 +42,7 @@ describe('scanLib', () => {
       'findSlot',
       'parseRequest',
       'recordBooking',
+      'sweepStale',
       'twilioChat',
     ]);
   });

@@ -18,7 +18,7 @@ import {
   registrationProblems,
   stepProblems,
 } from './audit.js';
-import { compileWorkflow } from './compile.js';
+import { compileWorkflow, type CompileResult } from './compile.js';
 
 /**
  * One compiled file per node kind, and the
@@ -49,6 +49,30 @@ function compile(ir: ReturnType<typeof makeIR>): string {
   }
 
   return result.source;
+}
+
+/**
+ * The other half of `compile`: what comes back
+ * when the document is one this compiler refuses.
+ *
+ * A refusal is an answer rather than a failure. The
+ * document is a legal draft, and the message names
+ * the block somebody has to go and look at.
+ */
+function refuse(
+  ir: ReturnType<typeof makeIR>,
+): Extract<CompileResult, { ok: false }> {
+  const result = compileWorkflow({
+    ir,
+    manifest: MANIFEST,
+    timezone: TIMEZONE,
+  });
+
+  if (result.ok) {
+    throw new Error(`compile succeeded:\n${result.source}`);
+  }
+
+  return result;
 }
 
 function workflow(parts: {
@@ -129,7 +153,41 @@ const SCHEDULE_TRIGGER = workflow({
         ends: '2026-12-31T23:59:59.000Z',
       },
     },
+    {
+      id: 'sweep_stale',
+      kind: 'step',
+      title: 'Sweep stale bookings',
+      handler: { export: 'sweepStale' },
+      config: {},
+    },
   ],
+  edges: [{ from: 'every_night', to: 'sweep_stale' }],
+});
+
+/**
+ * A scheduled run with a block that wants the
+ * payload the run does not have.
+ */
+const SCHEDULE_NEEDS_PAYLOAD = workflow({
+  name: 'nightly_sweep',
+  nodes: [
+    {
+      id: 'every_night',
+      kind: 'trigger',
+      title: 'Every night',
+      config: { mode: 'schedule', cron: '0 3 * * *' },
+    },
+    {
+      id: 'parse_request',
+      kind: 'step',
+      title: 'Parse request',
+      handler: { export: 'parseRequest' },
+      in: 'WebhookEvent',
+      out: 'BookingReq',
+      config: {},
+    },
+  ],
+  edges: [{ from: 'every_night', to: 'parse_request' }],
 });
 
 const SCHEDULE_NO_ZONE = workflow({
@@ -279,6 +337,96 @@ const FOR_EACH = workflow({
   edges: [{ from: 'slots_found', to: 'confirm_each', type: 'SlotGrid' }],
 });
 
+/**
+ * The same fan-out, drawn as a transaction. Every
+ * item writes, so every item needs a transaction of
+ * its own.
+ */
+const FOR_EACH_TRANSACTION = workflow({
+  name: 'for_each_transaction',
+  nodes: [
+    {
+      id: 'slots_found',
+      kind: 'trigger',
+      title: 'Slots found',
+      out: 'SlotGrid',
+      config: { mode: 'event', topic: 'slots.found' },
+    },
+    {
+      id: 'confirm_each',
+      kind: 'transaction',
+      title: 'Confirm each alternative',
+      handler: { export: 'confirmSlot' },
+      in: 'SlotGrid',
+      out: 'Booking',
+      forEach: { itemsPath: 'alternatives', concurrency: 2 },
+      config: {},
+    },
+  ],
+  edges: [{ from: 'slots_found', to: 'confirm_each', type: 'SlotGrid' }],
+});
+
+/**
+ * A workflow named the way one of its handlers is.
+ * The file would otherwise import and declare the
+ * same identifier.
+ */
+const NAME_COLLISION = workflow({
+  name: 'parse_request',
+  nodes: [
+    {
+      id: 'booking_requested',
+      kind: 'trigger',
+      title: 'Booking request',
+      out: 'WebhookEvent',
+      config: { mode: 'event', topic: 'booking.requested' },
+    },
+    {
+      id: 'parse_request',
+      kind: 'step',
+      title: 'Parse request',
+      handler: { export: 'parseRequest' },
+      in: 'WebhookEvent',
+      out: 'BookingReq',
+      config: {},
+    },
+  ],
+  edges: [
+    { from: 'booking_requested', to: 'parse_request', type: 'WebhookEvent' },
+  ],
+});
+
+/**
+ * A name long enough that the registration cannot
+ * be written on one line. Every name the goldens
+ * carry is short, so nothing else in this file
+ * measures the wide layouts.
+ */
+const LONG_NAME = workflow({
+  name: 'booking_confirmation_flow',
+  nodes: [
+    {
+      id: 'booking_requested',
+      kind: 'trigger',
+      title: 'Booking request',
+      out: 'WebhookEvent',
+      config: { mode: 'event', topic: 'booking.requested' },
+    },
+    {
+      id: 'parse_request',
+      kind: 'step',
+      title: 'Parse request',
+      handler: { export: 'parseRequest' },
+      in: 'WebhookEvent',
+      out: 'BookingReq',
+      config: {},
+    },
+  ],
+  edges: [
+    { from: 'booking_requested', to: 'parse_request', type: 'WebhookEvent' },
+  ],
+});
+
 const GUARD = { path: 'service', op: 'eq', value: 'groom' } as const;
 
 const GUARDED_CHAIN = workflow({
@@ -337,7 +485,9 @@ const GOLDENS = [
   ['code_step', CODE_STEP],
   ['transaction', TRANSACTION],
   ['for_each', FOR_EACH],
+  ['for_each_transaction', FOR_EACH_TRANSACTION],
   ['guarded_chain', GUARDED_CHAIN],
+  ['parse_request', NAME_COLLISION],
 ] as const;
 
 describe('an event trigger', () => {
@@ -467,6 +617,25 @@ describe('a schedule trigger', () => {
     expect(source).toContain('if (scheduledTime > SCHEDULE_ENDS) return;');
   });
 
+  it('runs a block whose handler asks it for nothing', () => {
+    // A run the clock starts carries no payload,
+    // and the SDK's signature binds no parameter
+    // to hold one, so the only block a scheduled
+    // workflow can run is one that wants nothing.
+    expect(source).toContain('async () => sweepStale(),');
+    expect(source).not.toContain('evt');
+  });
+
+  it('refuses a block that wants a payload the clock cannot give', () => {
+    const result = refuse(SCHEDULE_NEEDS_PAYLOAD);
+
+    expect(result.reason).toBe('UNSUPPORTED');
+    if (result.reason !== 'UNSUPPORTED') return;
+
+    expect(result.nodeId).toBe('parse_request');
+    expect(result.message).toContain('carries no payload');
+  });
+
   it('stamps the requested timezone when the trigger declares none', () => {
     // An absent zone means the process's local
     // one, which would make the schedule depend on
@@ -521,6 +690,56 @@ describe('a step', () => {
   it('passes each step its predecessor', () => {
     expect(source).toContain('async () => findSlot(parseRequestOut),');
     expect(source).toContain('async () => twilioChat(findSlotOut),');
+  });
+});
+
+describe('a block that declares no input', () => {
+  it('still hands its handler the value its producer bound', () => {
+    // What a block says about its own input does
+    // not change how many arguments its handler
+    // takes. Calling a one-parameter function with
+    // nothing is not a wrong type somewhere in the
+    // file — it is a file that does not compile.
+    const source = compile(
+      workflow({
+        name: 'no_declared_input',
+        nodes: [
+          {
+            id: 'booking_requested',
+            kind: 'trigger',
+            title: 'Booking request',
+            out: 'WebhookEvent',
+            config: { mode: 'event', topic: 'booking.requested' },
+          },
+          {
+            id: 'parse_request',
+            kind: 'step',
+            title: 'Parse request',
+            handler: { export: 'parseRequest' },
+            in: 'WebhookEvent',
+            out: 'BookingReq',
+            config: {},
+          },
+          {
+            id: 'find_slot',
+            kind: 'step',
+            title: 'Find open slot',
+            handler: { export: 'findSlot' },
+            config: {},
+          },
+        ],
+        edges: [
+          {
+            from: 'booking_requested',
+            to: 'parse_request',
+            type: 'WebhookEvent',
+          },
+          { from: 'parse_request', to: 'find_slot' },
+        ],
+      }),
+    );
+
+    expect(source).toContain('async () => findSlot(parseRequestOut),');
   });
 });
 
@@ -658,17 +877,14 @@ describe('a run of nodes behind one condition', () => {
     );
   });
 
-  it('never names a guarded local from outside the block', () => {
-    // A block that declares no input gets no
-    // argument, whatever its handler's signature
-    // says. Reaching for the value anyway would
-    // name a `const` the condition put out of
-    // scope, which is not a type error somewhere —
-    // it is code that does not compile at all.
-    // Validation has already refused the case
-    // where a consumer declares an input, so this
-    // is the only shape left.
-    const escaped = compile(
+  it('refuses a block that reads what a condition put out of scope', () => {
+    // A `const` bound inside an `if` is not there
+    // outside it. Handing the value to a block
+    // that runs unconditionally is not a wrong
+    // type somewhere in the file — it is a file
+    // that does not compile at all, which neither
+    // a golden nor a type name can see coming.
+    const result = refuse(
       workflow({
         name: 'guard_escape',
         nodes: [
@@ -708,8 +924,162 @@ describe('a run of nodes behind one condition', () => {
       }),
     );
 
-    expect(escaped).toContain('async () => findSlot(),');
-    expect(escaped.split('parseRequestOut')).toHaveLength(2);
+    expect(result.reason).toBe('UNSUPPORTED');
+    if (result.reason !== 'UNSUPPORTED') return;
+
+    expect(result.nodeId).toBe('find_slot');
+    expect(result.message).toContain('parse_request');
+  });
+
+  it('refuses a condition that tests what another condition hid', () => {
+    // The `if` is written outside the block it
+    // opens, so it may only read what is in scope
+    // there. `sweep_stale` asks its handler for
+    // nothing, so the condition is the only thing
+    // reaching for the value.
+    const result = refuse(
+      workflow({
+        name: 'guard_condition',
+        nodes: [
+          {
+            id: 'booking_requested',
+            kind: 'trigger',
+            title: 'Booking request',
+            out: 'WebhookEvent',
+            config: { mode: 'event', topic: 'booking.requested' },
+          },
+          {
+            id: 'parse_request',
+            kind: 'step',
+            title: 'Parse request',
+            handler: { export: 'parseRequest' },
+            in: 'WebhookEvent',
+            out: 'BookingReq',
+            guard: { path: 'service', op: 'exists' },
+            config: {},
+          },
+          {
+            id: 'sweep_stale',
+            kind: 'step',
+            title: 'Sweep stale bookings',
+            handler: { export: 'sweepStale' },
+            guard: GUARD,
+            config: {},
+          },
+        ],
+        edges: [
+          {
+            from: 'booking_requested',
+            to: 'parse_request',
+            type: 'WebhookEvent',
+          },
+          { from: 'parse_request', to: 'sweep_stale' },
+        ],
+      }),
+    );
+
+    expect(result.reason).toBe('UNSUPPORTED');
+    if (result.reason !== 'UNSUPPORTED') return;
+
+    expect(result.nodeId).toBe('sweep_stale');
+    expect(result.message).toContain('parse_request');
+  });
+});
+
+describe('a transaction that fans out', () => {
+  const source = compile(FOR_EACH_TRANSACTION);
+
+  it('runs every item through the datasource, not as a plain step', () => {
+    // A block the canvas drew as a transaction
+    // that quietly stopped being one leaves its
+    // handler writing through a client that only
+    // exists inside a transaction. Every item then
+    // fails, and the run reports the items rather
+    // than the missing transaction.
+    expect(source).toContain(
+      'appDb.runTransaction(async () => confirmSlot(item), {',
+    );
+    expect(source).toContain("import { appDb } from '../app/db.js';");
+    expect(source).not.toContain('DBOS.runStep');
+  });
+
+  it('settles every item, the way a fan-out of steps does', () => {
+    expect(source).toContain('await Promise.allSettled(');
+    expect(source).not.toContain('Promise.all(');
+    expect(source).toContain('name: `confirm_each[${offset + index}]`,');
+  });
+
+  it('says nothing about retries, which a transaction has no field for', () => {
+    // `TransactionConfig` carries an isolation
+    // level, a read-only flag and a name. Writing
+    // a retry policy there would say something the
+    // datasource does not read.
+    expect(source).not.toContain('retriesAllowed');
+  });
+});
+
+describe('a workflow named after a handler it calls', () => {
+  const source = compile(NAME_COLLISION);
+
+  it('imports the handler under a name of its own', () => {
+    // The registered workflow is exported under
+    // the camelCase of the workflow's name, and
+    // one file cannot both import and declare the
+    // same identifier.
+    expect(source).toContain(
+      'import { parseRequest as parseRequestHandler } from ' +
+        "'../../lib/parseRequest.js';",
+    );
+    expect(source).toContain('async () => parseRequestHandler(evt),');
+  });
+
+  it('still registers under the name the ingress knows', () => {
+    expect(source).toContain(
+      'export const parseRequest = DBOS.registerWorkflow(parseRequestFn, {',
+    );
+    expect(source).toContain("name: 'parse_request',");
+  });
+});
+
+describe('a workflow whose name is long but legal', () => {
+  const source = compile(LONG_NAME);
+  const path = 'src/workflows/booking_confirmation_flow.workflow.ts';
+
+  it('breaks its registration rather than running past the width', () => {
+    // Every golden's name is short enough that the
+    // registration fits on one line, so this is
+    // the only place the wide layout is measured.
+    expect(source).toContain(
+      [
+        'export const bookingConfirmationFlow = DBOS.registerWorkflow(',
+        '  bookingConfirmationFlowFn,',
+        '  {',
+        "    name: 'booking_confirmation_flow',",
+        '  },',
+        ');',
+      ].join('\n'),
+    );
+  });
+
+  it('registers itself as a free function at module scope', () => {
+    expect(registrationProblems(source, 'booking_confirmation_flow')).toEqual(
+      [],
+    );
+  });
+
+  it('follows the house style', () => {
+    expectHouseStyle(source, path);
+  });
+
+  it('is already formatted the way prettier would format it', async () => {
+    const formatted = await prettier.format(source, {
+      parser: 'typescript',
+      singleQuote: true,
+      semi: true,
+      printWidth: 80,
+    });
+
+    expect(formatted).toBe(source);
   });
 });
 

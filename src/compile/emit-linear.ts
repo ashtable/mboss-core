@@ -64,6 +64,14 @@ class Emitter {
   readonly #exported: string;
   readonly #inner: string;
 
+  /** What the file calls each handler it imports. */
+  readonly #bindings = new Map<string, string>();
+
+  /** Which guard group each block's local is
+   *  declared in, so a reader of that local can be
+   *  checked against where it is in scope. */
+  readonly #groupOf = new Map<string, number>();
+
   constructor(request: EmitRequest) {
     this.#ir = request.ir;
     this.#manifest = request.manifest;
@@ -87,10 +95,42 @@ class Emitter {
       'SCHEDULE_ENDS',
       this.#exported,
       this.#inner,
-      ...this.#plan.chain.flatMap((node) =>
-        node.handler === undefined ? [] : [node.handler.export],
-      ),
     ]);
+
+    // Handlers are bound before anything else, so
+    // the name a block calls does not depend on
+    // the order the emitters happen to run in and
+    // no node's local can shadow one.
+    for (const node of this.#plan.chain) {
+      if (node.handler !== undefined) this.#bind(node.handler.export);
+    }
+
+    this.#plan.groups.forEach((group, index) => {
+      for (const node of group.nodes) this.#groupOf.set(node.id, index);
+    });
+  }
+
+  /**
+   * The name the file calls a handler by.
+   *
+   * Its own export name, unless something else in
+   * the file already answers to that — the workflow
+   * itself, most often, when it is named after the
+   * block it runs. One file cannot both import and
+   * declare a single identifier, and that is not a
+   * wrong type somewhere in it: it is a file that
+   * does not compile at all.
+   */
+  #bind(exportName: string): string {
+    const existing = this.#bindings.get(exportName);
+    if (existing !== undefined) return existing;
+
+    const free = !this.#locals.has(exportName);
+    const name = this.#locals.take(free ? exportName : `${exportName}Handler`);
+
+    this.#bindings.set(exportName, name);
+
+    return name;
   }
 
   /**
@@ -108,7 +148,9 @@ class Emitter {
 
     const preamble = this.#preamble();
     this.#emitBounds();
-    for (const group of this.#plan.groups) this.#emitGroup(group);
+    this.#plan.groups.forEach((group, index) => {
+      this.#emitGroup(group, index);
+    });
 
     const body = this.#body.toString();
     const tail = this.#emitDeclarations();
@@ -243,26 +285,30 @@ class Emitter {
     return declared;
   }
 
-  #emitGroup(group: EmissionPlan['groups'][number]): void {
+  #emitGroup(group: EmissionPlan['groups'][number], index: number): void {
     const guard = group.guard;
 
     if (guard === undefined) {
-      for (const node of group.nodes) this.#emitNode(node);
+      for (const node of group.nodes) this.#emitNode(node, index);
       return;
     }
 
     const first = group.nodes[0];
     if (first === undefined) return;
 
-    this.#body.open(
-      `if (${predicateExpression(this.#inputOf(first), guard)}) {`,
-    );
-    for (const node of group.nodes) this.#emitNode(node);
+    // The condition stands outside the block it
+    // opens, so it may only read what is in scope
+    // out there.
+    const root = this.#valueOf(first, undefined);
+    if (root === undefined) throw this.#unreachableValue(first);
+
+    this.#body.open(`if (${predicateExpression(root, guard)}) {`);
+    for (const node of group.nodes) this.#emitNode(node, index);
     this.#body.close('}');
     this.#body.blank();
   }
 
-  #emitNode(node: WorkflowNode): void {
+  #emitNode(node: WorkflowNode, group: number): void {
     switch (node.kind) {
       case 'step':
       case 'codeStep':
@@ -270,13 +316,13 @@ class Emitter {
         if (node.kind === 'apiCall') {
           this.#body.comment(`External service: ${node.config.service}.`);
         }
-        if (node.forEach !== undefined) this.#emitForEach(node);
-        else this.#emitStep(node);
+        if (node.forEach !== undefined) this.#emitForEach(node, group);
+        else this.#emitStep(node, group);
         break;
 
       case 'transaction':
-        if (node.forEach !== undefined) this.#emitForEach(node);
-        else this.#emitTransaction(node);
+        if (node.forEach !== undefined) this.#emitForEach(node, group);
+        else this.#emitTransaction(node, group);
         break;
 
       default:
@@ -289,20 +335,20 @@ class Emitter {
     this.#body.blank();
   }
 
-  #emitStep(node: WorkflowNode): void {
+  #emitStep(node: WorkflowNode, group: number): void {
     const local = this.#locals.forNode(node.id);
-    const call = this.#handlerCall(node, this.#inputOf(node));
+    const call = this.#handlerCall(node, this.#valueOf(node, group));
     const head = `const ${local} = await DBOS.runStep`;
 
-    this.#emitExpandedCall(head, `async () => ${call}`, [
+    expandedCall(this.#body, head, `async () => ${call}`, [
       `name: ${stepNameLiteral(node.id, [])},`,
       ...retryOptions(node.retry),
     ]);
   }
 
-  #emitTransaction(node: WorkflowNode): void {
+  #emitTransaction(node: WorkflowNode, group: number): void {
     const local = this.#locals.forNode(node.id);
-    const call = this.#handlerCall(node, this.#inputOf(node));
+    const call = this.#handlerCall(node, this.#valueOf(node, group));
     const one =
       `const ${local} = await appDb.runTransaction(async () => ${call}, ` +
       `{ name: '${node.id}' });`;
@@ -330,9 +376,25 @@ class Emitter {
    * still in flight have checkpointed, so a retry
    * re-runs work that had already succeeded.
    */
-  #emitForEach(node: WorkflowNode): void {
+  #emitForEach(node: WorkflowNode, group: number): void {
     const fanOut = node.forEach;
     if (fanOut === undefined) return;
+
+    const root = this.#valueOf(node, group);
+    if (root === undefined) throw this.#unreachableValue(node);
+
+    // A block the canvas drew as a transaction
+    // stays one when it fans out. Running its
+    // items as plain steps would leave the handler
+    // writing through a client that only exists
+    // inside a transaction, and every item would
+    // then fail for a reason pointing at the
+    // items.
+    const inTransaction = node.kind === 'transaction';
+
+    if (inTransaction) {
+      this.#want({ specifier: '../app/db.js', name: 'appDb', type: false });
+    }
 
     const items = this.#locals.take('items');
     const settled = this.#locals.take('settled');
@@ -345,7 +407,7 @@ class Emitter {
       'allSettled rather than all: one rejection must not take the ' +
         'process down before the others have checkpointed.',
     );
-    const list = pathExpression(this.#inputOf(node), fanOut.itemsPath);
+    const list = pathExpression(root, fanOut.itemsPath);
 
     this.#body.line(`const ${items} = ${list};`);
     this.#body.line(
@@ -357,12 +419,16 @@ class Emitter {
     this.#body.line(`const chunk = ${items}.slice(offset, offset + ${size});`);
     this.#body.open('const settledChunk = await Promise.allSettled(');
     this.#body.open('chunk.map((item, index) =>');
-    this.#emitExpandedCall(
-      'DBOS.runStep',
+    expandedCall(
+      this.#body,
+      inTransaction ? 'appDb.runTransaction' : 'DBOS.runStep',
       `async () => ${this.#handlerCall(node, 'item')}`,
       [
         `name: ${stepNameLiteral(node.id, [{ kind: 'item' }])},`,
-        ...retryOptions(node.retry),
+        // A transaction's config carries an
+        // isolation level, a read-only flag and a
+        // name, and nothing at all about retries.
+        ...(inTransaction ? [] : retryOptions(node.retry)),
       ],
       ',',
     );
@@ -410,14 +476,16 @@ class Emitter {
   /**
    * The handler call itself.
    *
-   * An argument is passed when the block says it
-   * takes one and the function behind it declares
-   * a parameter. A block that declares no input
-   * gets none — which is what keeps a generated
-   * file from naming a local that a condition put
-   * out of scope.
+   * An argument is passed whenever the function
+   * behind the block declares a parameter. What the
+   * block says about its own input does not change
+   * how many arguments its handler takes, so a
+   * block with no declared input still hands its
+   * handler a value — and where there is no value
+   * to hand it, the document is refused rather than
+   * compiled into a call that cannot run.
    */
-  #handlerCall(node: WorkflowNode, input: string): string {
+  #handlerCall(node: WorkflowNode, input: string | undefined): string {
     const handler = node.handler;
 
     if (handler === undefined) {
@@ -428,62 +496,75 @@ class Emitter {
     }
 
     const entry = libValueImport(this.#manifest, handler.export);
-    this.#want(entry);
+    const binding = this.#bind(handler.export);
+
+    this.#want(binding === entry.name ? entry : { ...entry, alias: binding });
 
     const fn = this.#manifest.functions.find(
       (each) => each.export === handler.export,
     );
-    const takesOne = (fn?.params.length ?? 0) > 0;
-    const argument = node.forEach !== undefined || node.in !== undefined;
 
-    return takesOne && argument
-      ? `${handler.export}(${input})`
-      : `${handler.export}()`;
+    if ((fn?.params.length ?? 0) === 0) return `${binding}()`;
+    if (input === undefined) throw this.#unreachableValue(node);
+
+    return `${binding}(${input})`;
   }
 
   /**
-   * The expression a block reads its input from:
-   * the local its producer bound, or the payload
-   * the run started with.
+   * Where a block reads its input from, or
+   * undefined when nothing in scope there holds it.
+   *
+   * Two ways a value is not there. A run the clock
+   * starts carries no payload, and the SDK's
+   * signature for a scheduled workflow binds no
+   * parameter that could hold one. And a block
+   * behind a condition binds its result inside that
+   * condition's block, so nothing outside the block
+   * can name it.
    */
-  #inputOf(node: WorkflowNode): string {
+  #valueOf(node: WorkflowNode, inside: number | undefined): string | undefined {
     const producer = this.#plan.producers.get(node.id);
 
     if (producer === undefined || producer === this.#plan.trigger.id) {
-      return PAYLOAD_PARAMETER;
+      return this.#plan.trigger.config.mode === 'schedule'
+        ? undefined
+        : PAYLOAD_PARAMETER;
     }
+
+    const group = this.#groupOf.get(producer);
+    if (group === undefined) return undefined;
+
+    const guarded = this.#plan.groups[group]?.guard !== undefined;
+    if (guarded && group !== inside) return undefined;
 
     return this.#locals.forNode(producer);
   }
 
   /**
-   * A call whose last argument is an options
-   * object, laid out the way prettier lays it out:
-   * hugged onto the call when the head fits, and
-   * with every argument on its own line when it
-   * does not.
+   * What to say about a block reading a value
+   * nothing can hand it.
+   *
+   * It names the other block, because the fix is a
+   * change to how the two are drawn rather than to
+   * either one on its own.
    */
-  #emitExpandedCall(
-    head: string,
-    argument: string,
-    options: readonly string[],
-    terminator = ';',
-  ): void {
-    const hug = `${head}(${argument}, {`;
+  #unreachableValue(node: WorkflowNode): UnsupportedIR {
+    const producer = this.#plan.producers.get(node.id);
 
-    if (this.#body.fits(hug)) {
-      this.#body.open(hug);
-      for (const option of options) this.#body.line(option);
-      this.#body.close(`})${terminator}`);
-      return;
+    if (producer === undefined || producer === this.#plan.trigger.id) {
+      return new UnsupportedIR(
+        `\`${node.id}\` reads the payload the run started with, but a run ` +
+          `the clock starts carries no payload to give it.`,
+        node.id,
+      );
     }
 
-    this.#body.open(`${head}(`);
-    this.#body.line(`${argument},`);
-    this.#body.open('{');
-    for (const option of options) this.#body.line(option);
-    this.#body.close('},');
-    this.#body.close(`)${terminator}`);
+    return new UnsupportedIR(
+      `\`${node.id}\` reads what \`${producer}\` produced, but ` +
+        `\`${producer}\` only runs when its condition holds. Give ` +
+        `\`${node.id}\` the same condition.`,
+      node.id,
+    );
   }
 
   /**
@@ -502,11 +583,12 @@ class Emitter {
 
     if (writer.fits(registration)) writer.line(registration);
     else {
-      const head = `export const ${this.#exported} = DBOS.registerWorkflow`;
-
-      writer.open(`${head}(${this.#inner}, {`);
-      writer.line(`name: '${this.#ir.name}',`);
-      writer.close('});');
+      expandedCall(
+        writer,
+        `export const ${this.#exported} = DBOS.registerWorkflow`,
+        this.#inner,
+        [`name: '${this.#ir.name}',`],
+      );
     }
     writer.blank();
 
@@ -681,6 +763,41 @@ class Emitter {
   #want(entry: ImportEntry): void {
     this.#imports.push(entry);
   }
+}
+
+/**
+ * A call whose last argument is an options object,
+ * laid out the way prettier lays it out: hugged
+ * onto the call when the head fits, and with every
+ * argument on a line of its own when it does not.
+ *
+ * A free function over a writer rather than a
+ * method, because the body and the declarations
+ * below it are written into different buffers and
+ * both have calls too wide for one line.
+ */
+function expandedCall(
+  writer: SourceWriter,
+  head: string,
+  argument: string,
+  options: readonly string[],
+  terminator = ';',
+): void {
+  const hug = `${head}(${argument}, {`;
+
+  if (writer.fits(hug)) {
+    writer.open(hug);
+    for (const option of options) writer.line(option);
+    writer.close(`})${terminator}`);
+    return;
+  }
+
+  writer.open(`${head}(`);
+  writer.line(`${argument},`);
+  writer.open('{');
+  for (const option of options) writer.line(option);
+  writer.close('},');
+  writer.close(`)${terminator}`);
 }
 
 /**

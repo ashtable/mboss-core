@@ -22,6 +22,9 @@ const CODE_COLUMNS = 80;
 export type ImportEntry = {
   specifier: string;
   name: string;
+  /** The name the file calls it by, when the
+   *  export's own name is already spoken for. */
+  alias?: string;
   /** Type-only. `verbatimModuleSyntax` rejects a
    *  statement mixing the two. */
   type: boolean;
@@ -90,6 +93,19 @@ export function importBlock(entries: readonly ImportEntry[]): string {
   return `${groups.map((lines) => lines.join('\n')).join('\n\n')}\n`;
 }
 
+/**
+ * How one binding is written: its own name, or
+ * `<export> as <name>` where the file already has
+ * something else called that.
+ */
+function bindingText(entry: ImportEntry): string {
+  if (entry.alias === undefined || entry.alias === entry.name) {
+    return entry.name;
+  }
+
+  return `${entry.name} as ${entry.alias}`;
+}
+
 /** Builtins first, packages next, relative last. */
 function group(entry: ImportEntry): 0 | 1 | 2 {
   if (entry.specifier.startsWith('node:')) return 0;
@@ -111,7 +127,7 @@ function statementsFor(entries: readonly ImportEntry[]): string[] {
     const key = `${entry.specifier} ${entry.type ? '1' : '0'}`;
     const names = byStatement.get(key) ?? new Set<string>();
 
-    names.add(entry.name);
+    names.add(bindingText(entry));
     byStatement.set(key, names);
   }
 

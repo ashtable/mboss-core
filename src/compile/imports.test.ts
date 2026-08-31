@@ -51,6 +51,27 @@ describe('libTypeImport', () => {
   });
 });
 
+describe('an aliased binding', () => {
+  it('imports the export under the name the file uses', () => {
+    // A workflow named after a handler it calls
+    // exports that identifier itself, and one file
+    // cannot both import and declare it.
+    expect(
+      importBlock([
+        {
+          specifier: '../../lib/parseRequest.js',
+          name: 'parseRequest',
+          alias: 'parseRequestHandler',
+          type: false,
+        },
+      ]),
+    ).toBe(
+      'import { parseRequest as parseRequestHandler } from ' +
+        "'../../lib/parseRequest.js';\n",
+    );
+  });
+});
+
 describe('libValueImport', () => {
   it('reaches the file the handler is exported from', () => {
     expect(libValueImport(MANIFEST, 'parseRequest')).toEqual({
