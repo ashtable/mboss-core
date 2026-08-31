@@ -44,6 +44,39 @@ export const ManifestErrorSchema = z.object({
 });
 
 /**
+ * Why a type cannot travel between blocks.
+ *
+ * Values move through the workflow database on
+ * their way from one block to the next, so
+ * anything that is behaviour rather than data —
+ * a function, a class with methods — or a live
+ * resource — a buffer, a stream, an open
+ * connection — arrives at the far end as
+ * something else, or does not arrive at all.
+ */
+export const NonSerializableReasonSchema = z.enum([
+  'function',
+  'class',
+  'buffer',
+  'stream',
+  'handle',
+]);
+
+/**
+ * One place a scanned type cannot survive the trip
+ * between blocks.
+ *
+ * `path` is the dot-path to the member at fault
+ * and is empty for the type itself, which is what
+ * a class instance with methods is.
+ */
+export const NonSerializableSchema = z.object({
+  type: z.string(),
+  path: z.string(),
+  reason: NonSerializableReasonSchema,
+});
+
+/**
  * The scan result as a whole.
  *
  * `types` is the flat list of names the canvas
@@ -58,6 +91,12 @@ export const ManifestErrorSchema = z.object({
  * the files this scan read, so a rescan is skipped
  * when and only when nothing the scan looked at
  * changed.
+ *
+ * `nonSerializable` is structure rather than a
+ * name, and it is here because this is the only
+ * moment structure exists: the scan holds the
+ * parsed code, and everything downstream reads
+ * this file back out of JSON.
  */
 export const LibManifestSchema = z.object({
   scannedAt: z.iso.datetime(),
@@ -65,9 +104,12 @@ export const LibManifestSchema = z.object({
   functions: z.array(LibFunctionSchema),
   types: z.array(z.string()),
   typeSources: z.record(z.string(), z.string()),
+  nonSerializable: z.array(NonSerializableSchema),
   errors: z.array(ManifestErrorSchema),
 });
 
 export type LibFunction = z.infer<typeof LibFunctionSchema>;
 export type ManifestError = z.infer<typeof ManifestErrorSchema>;
+export type NonSerializableReason = z.infer<typeof NonSerializableReasonSchema>;
+export type NonSerializable = z.infer<typeof NonSerializableSchema>;
 export type LibManifest = z.infer<typeof LibManifestSchema>;

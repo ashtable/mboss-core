@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import type { WorkflowIR } from '../ir/index.js';
-import type { LibManifest } from '../manifest/index.js';
+import { WorkflowIRSchema, type WorkflowIR } from '../ir/index.js';
+import { LibManifestSchema, type LibManifest } from '../manifest/index.js';
+import { readFixtureJson } from '../test-support/fixtures.js';
 import { makeIR, type NodeSpec } from '../test-support/ir.js';
 
 import type { Diagnostic } from './diagnostic.js';
 import { buildGraph } from './graph.js';
+import { canCompile, hasErrors, validateWorkflow } from './index.js';
 import {
+  RULES,
+  sameGuard,
   v01TriggerShape,
   v02Structure,
   v03Reachability,
@@ -18,6 +22,8 @@ import {
   v09FormWaits,
   v10GuardedConsumers,
   v11RequesterAddress,
+  v12SerializableTypes,
+  v13HandlerSignatures,
   type RuleContext,
 } from './rules.js';
 
@@ -59,9 +65,28 @@ function manifestWith(parts: Partial<LibManifest>): LibManifest {
     functions: [],
     types: [],
     typeSources: {},
+    nonSerializable: [],
     errors: [],
     ...parts,
   };
+}
+
+/**
+ * A blessed scan, read back the way a tool reads
+ * one: through the schema, with the instant a
+ * golden cannot hold supplied here.
+ */
+function goldenManifest(name: string): LibManifest {
+  return LibManifestSchema.parse({
+    scannedAt: '2026-01-01T00:00:00.000Z',
+    ...readFixtureJson<Record<string, unknown>>(
+      `golden/manifest/${name}.manifest.json`,
+    ),
+  });
+}
+
+function irFixture(name: string): WorkflowIR {
+  return WorkflowIRSchema.parse(readFixtureJson(`ir/${name}.workflow.json`));
 }
 
 describe('V01 trigger shape', () => {
@@ -660,5 +685,276 @@ describe('V11 requester address', () => {
     });
 
     expect(codes(check(v11RequesterAddress, ir))).toEqual(['V11']);
+  });
+});
+
+describe('V12 serializable types', () => {
+  const unserializable = goldenManifest('lib-unserializable');
+
+  it('accepts the canonical workflow against the real scan of its code', () => {
+    expect(
+      check(
+        v12SerializableTypes,
+        irFixture('groom_booking'),
+        goldenManifest('lib'),
+      ),
+    ).toEqual([]);
+  });
+
+  it('says nothing at all when there is no scan to say it from', () => {
+    // No manifest never means "the manifest says
+    // no". Validation runs in tools that never
+    // scan a project, and a document must not look
+    // wrong merely because nothing was there to
+    // look at it.
+    const ir = makeIR({ nodes: [{ id: 'work', out: 'Upload' }] });
+
+    expect(check(v12SerializableTypes, ir)).toEqual([]);
+  });
+
+  it.each(['Ticket', 'Upload', 'Feed', 'Conn', 'Session', 'Job'])(
+    'rejects a node that produces %s',
+    (type) => {
+      const ir = makeIR({ nodes: [{ id: 'work', out: type }] });
+      const found = check(v12SerializableTypes, ir, unserializable);
+
+      expect(codes(found)).toEqual(['V12']);
+      expect(found[0]?.severity).toBe('error');
+      expect(found[0]?.nodeId).toBe('work');
+      expect(found[0]?.edgeId).toBeUndefined();
+    },
+  );
+
+  it('names the member at fault, however deep in the type it sits', () => {
+    const ir = makeIR({ nodes: [{ id: 'work', out: 'Job' }] });
+    const found = check(v12SerializableTypes, ir, unserializable);
+
+    expect(found[0]?.message).toContain('`Job.payload.onDone`');
+  });
+
+  it('names the type itself when the type itself is what cannot travel', () => {
+    const ir = makeIR({ nodes: [{ id: 'work', out: 'Session' }] });
+    const found = check(v12SerializableTypes, ir, unserializable);
+
+    expect(found[0]?.message).toContain('`Session` is a class with methods');
+  });
+
+  it('accepts a type of nothing but data', () => {
+    const ir = makeIR({ nodes: [{ id: 'work', out: 'Plain' }] });
+
+    expect(check(v12SerializableTypes, ir, unserializable)).toEqual([]);
+  });
+
+  it('reports both ends when the same type goes in and comes out', () => {
+    const ir = makeIR({
+      nodes: [{ id: 'work', in: 'Upload', out: 'Upload' }],
+    });
+    const found = check(v12SerializableTypes, ir, unserializable);
+
+    expect(codes(found)).toEqual(['V12', 'V12']);
+    expect(found[0]?.message).toContain('takes');
+    expect(found[1]?.message).toContain('produces');
+  });
+
+  it('stops a document that carries one from compiling', () => {
+    const manifest = manifestWith({
+      types: ['Upload'],
+      functions: [
+        {
+          export: 'takeUpload',
+          file: 'lib/upload.ts',
+          params: [],
+          returnType: 'Upload',
+        },
+      ],
+      nonSerializable: [{ type: 'Upload', path: 'body', reason: 'buffer' }],
+    });
+    const ir = makeIR({
+      nodes: [
+        { id: 'start', kind: 'trigger', config: { mode: 'manual' } },
+        { id: 'work', out: 'Upload', handler: { export: 'takeUpload' } },
+      ],
+      edges: [{ from: 'start', to: 'work' }],
+    });
+    const found = validateWorkflow(ir, { manifest });
+
+    expect(codes(found)).toEqual(['V12']);
+    expect(hasErrors(found)).toBe(true);
+    expect(canCompile(ir, found)).toBe(false);
+  });
+});
+
+describe('V13 handler signatures', () => {
+  const manifest = manifestWith({
+    types: ['SlotGrid', 'BookingReq', 'Booking'],
+    functions: [
+      {
+        export: 'findSlot',
+        file: 'lib/findSlot.ts',
+        params: [{ name: 'req', type: 'BookingReq' }],
+        returnType: 'SlotGrid',
+      },
+      {
+        export: 'countAll',
+        file: 'lib/countAll.ts',
+        params: [{ name: 'items', type: 'Booking[]' }],
+        returnType: 'number',
+      },
+      {
+        export: 'listAll',
+        file: 'lib/listAll.ts',
+        params: [],
+        returnType: 'SlotGrid',
+      },
+    ],
+  });
+
+  it('accepts a node whose declarations match its handler', () => {
+    const ir = makeIR({
+      nodes: [
+        {
+          id: 'find_slot',
+          in: 'BookingReq',
+          out: 'SlotGrid',
+          handler: { export: 'findSlot' },
+        },
+      ],
+    });
+
+    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);
+  });
+
+  it('rejects an input the handler does not take', () => {
+    const ir = makeIR({
+      nodes: [
+        { id: 'find_slot', in: 'SlotGrid', handler: { export: 'findSlot' } },
+      ],
+    });
+    const found = check(v13HandlerSignatures, ir, manifest);
+
+    expect(codes(found)).toEqual(['V13']);
+    expect(found[0]?.severity).toBe('error');
+    expect(found[0]?.nodeId).toBe('find_slot');
+    expect(found[0]?.message).toContain('`SlotGrid`');
+    expect(found[0]?.message).toContain('`BookingReq`');
+  });
+
+  it('rejects an output the handler does not return', () => {
+    const ir = makeIR({
+      nodes: [
+        { id: 'find_slot', out: 'Booking', handler: { export: 'findSlot' } },
+      ],
+    });
+    const found = check(v13HandlerSignatures, ir, manifest);
+
+    expect(codes(found)).toEqual(['V13']);
+    expect(found[0]?.message).toContain('`SlotGrid`');
+  });
+
+  it('accepts the canonical workflow against the real scan of its code', () => {
+    expect(
+      check(
+        v13HandlerSignatures,
+        irFixture('groom_booking'),
+        goldenManifest('lib'),
+      ),
+    ).toEqual([]);
+  });
+
+  it('says nothing when there is no scan to compare against', () => {
+    const ir = makeIR({
+      nodes: [
+        { id: 'find_slot', in: 'SlotGrid', handler: { export: 'findSlot' } },
+      ],
+    });
+
+    expect(check(v13HandlerSignatures, ir)).toEqual([]);
+  });
+
+  it('says nothing about a node with no handler yet', () => {
+    const ir = makeIR({ nodes: [{ id: 'find_slot', in: 'SlotGrid' }] });
+
+    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);
+  });
+
+  it('says nothing when the handler is not in the manifest', () => {
+    // A handler the code-behind does not export is
+    // V07's finding. Reporting it twice, under two
+    // codes, tells an author to fix two things.
+    const ir = makeIR({
+      nodes: [
+        { id: 'find_slot', in: 'SlotGrid', handler: { export: 'notThere' } },
+      ],
+    });
+
+    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);
+  });
+
+  it('says nothing when the handler takes nothing at all', () => {
+    // The generated call hands an argument to a
+    // handler that declares no parameter, and the
+    // compiler says so at the type-check gate in
+    // words this rule could not improve on.
+    const ir = makeIR({
+      nodes: [
+        { id: 'list_all', in: 'BookingReq', handler: { export: 'listAll' } },
+      ],
+    });
+
+    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);
+  });
+
+  it('says nothing about a node that fans out over its input', () => {
+    const ir = makeIR({
+      nodes: [
+        {
+          id: 'find_slot',
+          in: 'SlotGrid',
+          handler: { export: 'findSlot' },
+          forEach: { itemsPath: 'items' },
+        },
+      ],
+    });
+
+    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);
+  });
+
+  it('says nothing when the handler’s type is not a plain name', () => {
+    const ir = makeIR({
+      nodes: [
+        { id: 'count_all', in: 'Booking', handler: { export: 'countAll' } },
+      ],
+    });
+
+    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);
+  });
+});
+
+describe('the rule list', () => {
+  it('ends with the two rules that read the scan’s structure, in order', () => {
+    expect(RULES.slice(-2)).toEqual([
+      v12SerializableTypes,
+      v13HandlerSignatures,
+    ]);
+  });
+});
+
+describe('sameGuard', () => {
+  const guard = { path: 'ok', op: 'eq', value: true } as const;
+
+  it('calls two nodes with no condition equally guarded', () => {
+    expect(sameGuard(undefined, undefined)).toBe(true);
+  });
+
+  it('calls a guarded node and an unguarded one different', () => {
+    expect(sameGuard(guard, undefined)).toBe(false);
+    expect(sameGuard(undefined, guard)).toBe(false);
+  });
+
+  it('compares the path, the operator and the value', () => {
+    expect(sameGuard(guard, { ...guard })).toBe(true);
+    expect(sameGuard(guard, { ...guard, value: false })).toBe(false);
+    expect(sameGuard(guard, { ...guard, op: 'neq' })).toBe(false);
+    expect(sameGuard(guard, { ...guard, path: 'other' })).toBe(false);
   });
 });

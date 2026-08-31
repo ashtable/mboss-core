@@ -1,11 +1,12 @@
 import {
   portsOf,
+  TypeNameSchema,
   type NodeKind,
   type Predicate,
   type WorkflowIR,
   type WorkflowNode,
 } from '../ir/index.js';
-import type { LibManifest } from '../manifest/index.js';
+import type { LibManifest, NonSerializableReason } from '../manifest/index.js';
 
 import { diagnostic, warning, type Diagnostic } from './diagnostic.js';
 import {
@@ -16,7 +17,7 @@ import {
 } from './graph.js';
 
 /**
- * The eleven rules, one function each.
+ * The thirteen rules, one function each.
  *
  * They are separate functions rather than one pass
  * because they are read one at a time: a person
@@ -34,7 +35,8 @@ import {
  * name it still check everything the document can
  * be checked against on its own — they just cannot
  * tell a name that is wrong from a name that is
- * merely new.
+ * merely new, and the two rules that read nothing
+ * but the scan say nothing at all.
  */
 export type RuleContext = {
   ir: WorkflowIR;
@@ -621,9 +623,7 @@ export function v10GuardedConsumers(ctx: RuleContext): Diagnostic[] {
       const consumer = ctx.graph.nodes.get(edge.to.node);
 
       if (consumer === undefined || consumer.in === undefined) continue;
-      if (consumer.guard !== undefined && sameGuard(consumer.guard, guard)) {
-        continue;
-      }
+      if (sameGuard(consumer.guard, guard)) continue;
 
       found.push(
         diagnostic(
@@ -640,7 +640,9 @@ export function v10GuardedConsumers(ctx: RuleContext): Diagnostic[] {
   return found;
 }
 
-function sameGuard(a: Predicate, b: Predicate): boolean {
+export function sameGuard(a?: Predicate, b?: Predicate): boolean {
+  if (a === undefined || b === undefined) return a === b;
+
   return (
     a.path === b.path &&
     a.op === b.op &&
@@ -696,6 +698,151 @@ function recipientOf(node: WorkflowNode): string | undefined {
 }
 
 /**
+ * What a member is, said the way the message needs
+ * it.
+ */
+const CANNOT_TRAVEL: Record<NonSerializableReason, string> = {
+  function: 'is a function',
+  class: 'is a class with methods',
+  buffer: 'is a Buffer',
+  stream: 'is a stream',
+  handle: 'is an open connection',
+};
+
+/**
+ * What a node declares can survive the trip
+ * between two blocks.
+ *
+ * Values move from block to block through the
+ * workflow database, so a type carrying behaviour
+ * or a live resource — a callback, a class's
+ * methods, a buffer, a stream, an open connection
+ * — arrives at the far end as something else. The
+ * scan works this out while it still has the
+ * parsed code; by the time the manifest is read
+ * back out of JSON there is nothing left but
+ * names, which is why the finding is carried
+ * rather than recomputed.
+ *
+ * Silent without a manifest, like every rule that
+ * reads one: nothing scanned is not the same
+ * answer as nothing wrong.
+ */
+export function v12SerializableTypes(ctx: RuleContext): Diagnostic[] {
+  const manifest = ctx.manifest;
+  if (manifest === undefined) return [];
+
+  const found: Diagnostic[] = [];
+
+  for (const node of ctx.ir.nodes) {
+    for (const [verb, declared] of [
+      ['takes', node.in],
+      ['produces', node.out],
+    ] as const) {
+      if (declared === undefined) continue;
+
+      for (const fault of manifest.nonSerializable) {
+        if (fault.type !== declared) continue;
+
+        const where =
+          fault.path === '' ? declared : `${declared}.${fault.path}`;
+
+        found.push(
+          diagnostic(
+            'V12',
+            `\`${node.id}\` ${verb} \`${declared}\`, and \`${where}\` ` +
+              `${CANNOT_TRAVEL[fault.reason]}. Values are written to the ` +
+              `database between blocks, so only data survives the trip.`,
+            { nodeId: node.id },
+          ),
+        );
+      }
+    }
+  }
+
+  return found;
+}
+
+/**
+ * A node's declared types are the ones its code
+ * actually takes and returns.
+ *
+ * The canvas will wire anything to anything, so
+ * this is the likeliest thing to get wrong in the
+ * whole system. Without the rule it surfaces as a
+ * TypeScript error inside a generated file the
+ * author cannot edit; with it, it is a finding on
+ * the block that says it.
+ *
+ * It stays quiet wherever it cannot know: with no
+ * scan, with no handler, with a handler the scan
+ * never saw — that one is V07's to report — on a
+ * node that fans out, where the handler takes one
+ * item while the node takes the collection, and
+ * wherever the handler's type is written as
+ * anything but a plain name.
+ */
+export function v13HandlerSignatures(ctx: RuleContext): Diagnostic[] {
+  const manifest = ctx.manifest;
+  if (manifest === undefined) return [];
+
+  const found: Diagnostic[] = [];
+
+  for (const node of ctx.ir.nodes) {
+    const handler = node.handler;
+    if (handler === undefined || node.forEach !== undefined) continue;
+
+    const fn = manifest.functions.find(
+      (each) => each.export === handler.export,
+    );
+    if (fn === undefined) continue;
+
+    if (disagree(node.in, fn.params[0]?.type)) {
+      found.push(
+        diagnostic(
+          'V13',
+          `\`${node.id}\` takes \`${node.in}\`, but its code-behind ` +
+            `\`${fn.export}\` takes \`${fn.params[0]?.type}\`. The ` +
+            `generated code would hand it the wrong value.`,
+          { nodeId: node.id },
+        ),
+      );
+    }
+
+    if (disagree(node.out, fn.returnType)) {
+      found.push(
+        diagnostic(
+          'V13',
+          `\`${node.id}\` produces \`${node.out}\`, but its code-behind ` +
+            `\`${fn.export}\` returns \`${fn.returnType}\`. The generated ` +
+            `code would pass on the wrong value.`,
+          { nodeId: node.id },
+        ),
+      );
+    }
+  }
+
+  return found;
+}
+
+/**
+ * Whether two type names contradict each other.
+ *
+ * Only plain names are compared. A generic, an
+ * array or an inline object literal says something
+ * the node's own declaration has no way to say
+ * back, so a textual comparison there would report
+ * a disagreement that is only a difference in
+ * notation.
+ */
+function disagree(declared: string | undefined, written?: string): boolean {
+  if (declared === undefined || written === undefined) return false;
+  if (!TypeNameSchema.safeParse(written).success) return false;
+
+  return declared !== written;
+}
+
+/**
  * Every rule, in code order. The order is the
  * order findings come back in, so a document with
  * several problems reports them the same way every
@@ -713,4 +860,6 @@ export const RULES: readonly Rule[] = [
   v09FormWaits,
   v10GuardedConsumers,
   v11RequesterAddress,
+  v12SerializableTypes,
+  v13HandlerSignatures,
 ];

@@ -62,6 +62,7 @@
       "returnType": "ChatPrompt"
     }
   ],
+  "nonSerializable": [],
   "sourceHash": "8c28127c52cd0e056845f3d86847ed46d1d9c6692def7b2a8082bbe71873fb9b",
   "typeSources": {
     "Booking": "lib/types.ts",

@@ -1,0 +1,55 @@
+{
+  "errors": [],
+  "functions": [],
+  "nonSerializable": [
+    {
+      "path": "socket",
+      "reason": "handle",
+      "type": "Conn"
+    },
+    {
+      "path": "stream",
+      "reason": "stream",
+      "type": "Feed"
+    },
+    {
+      "path": "payload.onDone",
+      "reason": "function",
+      "type": "Job"
+    },
+    {
+      "path": "",
+      "reason": "class",
+      "type": "Session"
+    },
+    {
+      "path": "onDone",
+      "reason": "function",
+      "type": "Ticket"
+    },
+    {
+      "path": "body",
+      "reason": "buffer",
+      "type": "Upload"
+    }
+  ],
+  "sourceHash": "cbb66c10c12955e0a95229e045eeaf27e513fe860e8acced0eedd2d2266e3b95",
+  "typeSources": {
+    "Conn": "lib-unserializable/types.ts",
+    "Feed": "lib-unserializable/types.ts",
+    "Job": "lib-unserializable/types.ts",
+    "Plain": "lib-unserializable/types.ts",
+    "Session": "lib-unserializable/types.ts",
+    "Ticket": "lib-unserializable/types.ts",
+    "Upload": "lib-unserializable/types.ts"
+  },
+  "types": [
+    "Conn",
+    "Feed",
+    "Job",
+    "Plain",
+    "Session",
+    "Ticket",
+    "Upload"
+  ]
+}

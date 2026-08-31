@@ -12,11 +12,25 @@
 export {
   LibFunctionSchema,
   ManifestErrorSchema,
+  NonSerializableReasonSchema,
+  NonSerializableSchema,
   LibManifestSchema,
 } from './types.js';
 export { sourceHashOf } from './hash.js';
 export { scanLib } from './scan.js';
 export { loadOrScan } from './cache.js';
 
-export type { LibFunction, ManifestError, LibManifest } from './types.js';
+export type {
+  LibFunction,
+  ManifestError,
+  NonSerializable,
+  NonSerializableReason,
+  LibManifest,
+} from './types.js';
 export type { LibSourceFile } from './hash.js';
+
+// `nonSerializableMembers` is deliberately not
+// here. It takes a ts-morph type, which only a
+// scan with the project still open has, and
+// re-exporting it would put ts-morph's types on
+// the surface every consumer of this library sees.
