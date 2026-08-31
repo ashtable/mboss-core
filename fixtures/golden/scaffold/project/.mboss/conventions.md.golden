@@ -92,8 +92,9 @@ form that takes a file and loses it. The compose file ships no object store;
 point these at a MinIO container or at a real bucket.
 
 Uploaded files go to the store and the workflow receives descriptors —
-`{ id, filename, contentType, size }` — never the bytes. Read the bytes back
-in a handler with the id, which is the storage key.
+`{ id, filename, contentType, size }` — never the bytes. The id is the
+storage key. The store hands out links rather than bytes, so a handler that
+needs the file presigns that key and fetches the URL it gets back.
 
 ## Two names, and only one of them is safe to change
 

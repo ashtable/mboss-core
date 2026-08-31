@@ -184,11 +184,12 @@ export type SubmittedPageInput = {
 /**
  * What a submit lands on.
  *
- * The mockup this follows closes with "you'll get
- * the draft by email", which assumes a downstream
- * that ends in one. An arbitrary workflow does
- * not, so the page says what it does know: the run
- * woke up, and here is what it woke up into.
+ * It closes on what is true of every run rather
+ * than on a promise. Telling somebody the draft is
+ * on its way assumes a downstream that ends in an
+ * email, and an arbitrary workflow has none — so
+ * the page says what it does know: the run woke up,
+ * and here is what it woke up into.
  */
 export function renderSubmittedPage(input: SubmittedPageInput): string {
   return renderPage({

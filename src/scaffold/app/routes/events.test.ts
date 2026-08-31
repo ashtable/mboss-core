@@ -125,6 +125,47 @@ describe('the secret header', () => {
     expect(response.status).toBe(401);
     expect(started).toEqual([]);
   });
+
+  it('refuses one whose secret is the right length but wrong', async () => {
+    // Every other case here differs in length as
+    // well as in content, so a comparison that
+    // agreed about nothing but length would pass
+    // all of them.
+    const { app, started } = harness([entry()]);
+    const response = await post(
+      app,
+      '/events/booking.requested',
+      {},
+      { 'x-mboss-events-secret': 'ssh' },
+    );
+
+    expect(response.status).toBe(401);
+    expect(started).toEqual([]);
+  });
+
+  it('answers before the body is parsed, so rubbish is still a 401', async () => {
+    // The guard is the first handler in the chain
+    // on purpose: an unauthenticated caller must
+    // not be able to make this process read a
+    // megabyte of JSON. A 400 here would mean the
+    // parser had run first.
+    const { app, started } = harness([entry()]);
+    const status = await withServer(app, async (base) => {
+      const response = await fetch(`${base}/events/booking.requested`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-mboss-events-secret': 'guessed',
+        },
+        body: '{ not json at all',
+      });
+
+      return response.status;
+    });
+
+    expect(status).toBe(401);
+    expect(started).toEqual([]);
+  });
 });
 
 describe('a topic nothing is listening for', () => {

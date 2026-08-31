@@ -57,9 +57,11 @@ export const EnvSchema = z.object({
   // every email it sends and the headline of
   // every form it serves. It starts as the
   // project's name; change it to whatever you
-  // would call this thing out loud. It is also
-  // the application name DBOS records runs
-  // against.
+  // would call this thing out loud. The name
+  // DBOS files this app's runs and schedules
+  // under is a separate, fixed one in main.ts,
+  // and that is what makes this one safe to
+  // rename.
   APP_NAME: z.string().min(1),
   // DBOS only recovers a run whose application
   // version matches the running one, and it

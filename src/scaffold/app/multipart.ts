@@ -129,9 +129,16 @@ function headersOf(text: string): Record<string, string> {
  * header. An empty value is a real answer — an
  * unset file input posts `filename=""` — so this
  * returns null only when the parameter is absent.
+ *
+ * The parameter has to start a parameter, not sit
+ * inside one: `name` also appears inside
+ * `filename`, and the two may be written in either
+ * order. Reading the wrong one names the field
+ * after the file and loses the upload without
+ * anything failing.
  */
 function quoted(header: string, parameter: string): string | null {
-  const found = new RegExp(`${parameter}="([^"]*)"`).exec(header);
+  const found = new RegExp(`(?:^|;)\\s*${parameter}="([^"]*)"`).exec(header);
 
   return found?.[1] ?? null;
 }

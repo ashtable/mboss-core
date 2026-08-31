@@ -137,15 +137,35 @@ describe('the gate over that project', () => {
 describe('the boot sequence', () => {
   const MAIN = join(import.meta.dirname, 'app', 'main.ts');
 
-  it('creates its schema and listens in order', () => {
-    // Three orderings, each of which fails in a
-    // way that looks like something else: a
-    // datasource whose table is created after
-    // launch is invisible until a recovery replays
-    // against it, and a listener opened before
-    // launch resolves accepts exactly the requests
-    // that arrive during a deployment.
+  it('creates its schema and waits for launch before it listens', () => {
+    // Each way of getting this wrong fails as
+    // something else: a datasource whose table is
+    // created after launch is invisible until a
+    // recovery replays against it, and a listener
+    // opened before launch resolves accepts
+    // exactly the requests that arrive during a
+    // deployment. Dropping either `await` puts the
+    // listener in that same window with the source
+    // still reading in the right order, so the
+    // waiting is checked and not only the order.
     expect(existsSync(MAIN)).toBe(true);
     expect(bootProblems(readFileSync(MAIN, 'utf8'))).toEqual([]);
+  });
+
+  it('files its runs under a name that is not the one people see', () => {
+    // The env schema tells whoever owns this
+    // project that renaming the display name is
+    // safe. It only is while the identity DBOS
+    // keys schedule ownership on is a separate
+    // fixed one: point `setConfig` at `APP_NAME`
+    // instead and the first rename after that
+    // hides every schedule already recorded, so
+    // the next boot finds none to prune and the
+    // ones it should have pruned go on firing.
+    const source = readFileSync(MAIN, 'utf8');
+
+    expect(source).toContain("const DBOS_APP_NAME = 'mboss-app';");
+    expect(source).toContain('name: DBOS_APP_NAME,');
+    expect(source).not.toContain('name: env.APP_NAME');
   });
 });

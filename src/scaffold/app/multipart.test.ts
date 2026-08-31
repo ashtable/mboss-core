@@ -85,6 +85,29 @@ describe('parsing the parts', () => {
     ).toBe('line one\r\nline two');
   });
 
+  it('reads the field name when the filename is written first', () => {
+    // The disposition's parameters have no
+    // required order. Looking for `name=` anywhere
+    // in the header finds the one inside
+    // `filename=` first, which renames the field
+    // to the file and drops the upload on the
+    // floor — silently, because the part still
+    // parses.
+    const parts = parseMultipart(
+      body([
+        'content-disposition: form-data; filename="x.bin"; ' +
+          'name="docs"\r\ncontent-type: text/plain\r\n\r\nbytes',
+      ]),
+      BOUNDARY,
+    );
+
+    expect(parts[0]).toMatchObject({
+      kind: 'file',
+      name: 'docs',
+      filename: 'x.bin',
+    });
+  });
+
   it('reads several parts in the order they were sent', () => {
     const parts = parseMultipart(
       body([

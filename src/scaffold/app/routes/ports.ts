@@ -1,6 +1,8 @@
 // Written by mBoss when this project was created.
 // It is yours now — edit it freely.
 
+import { timingSafeEqual } from 'node:crypto';
+
 import type { Request, RequestHandler } from 'express';
 
 import type { WorkflowEntry } from '../contract.js';
@@ -27,6 +29,25 @@ import type { WorkflowEntry } from '../contract.js';
 export const SECRET_HEADER = 'x-mboss-events-secret';
 
 /**
+ * Comparing the header with the secret in constant
+ * time. It is a long-lived shared secret, and an
+ * ordinary comparison stops at the first byte that
+ * differs, which tells a caller how much of its
+ * guess was right.
+ *
+ * The length check is not a shortcut past that —
+ * `timingSafeEqual` throws on buffers of unequal
+ * length — and the length of a secret is not the
+ * part worth hiding.
+ */
+function matches(presented: string, expected: string): boolean {
+  const a = Buffer.from(presented, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
  * The guard, as the first handler in a route's own
  * chain rather than as a mounted middleware.
  * Written that way so it is visible in the line
@@ -36,7 +57,7 @@ export const SECRET_HEADER = 'x-mboss-events-secret';
  */
 export function requireSecret(secret: string): RequestHandler {
   return (request, response, next) => {
-    if (request.header(SECRET_HEADER) !== secret) {
+    if (!matches(request.header(SECRET_HEADER) ?? '', secret)) {
       response.status(401).json({ error: 'unauthorized' });
       return;
     }

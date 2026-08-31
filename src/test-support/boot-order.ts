@@ -20,6 +20,12 @@ import ts from 'typescript';
  * `async function main()` wrapper: a call is
  * recorded wherever it is written.
  *
+ * Order alone would not be enough. Both of those
+ * boot steps return a promise, and a step whose
+ * promise is dropped has been started rather than
+ * done — so the code below records, for every call,
+ * whether anything waited for it.
+ *
  * This module is imported only by tests, but it is
  * not a `*.test.ts` — vitest would then try to run
  * it as a suite with no tests in it.
@@ -43,19 +49,36 @@ function calledName(node: ts.CallExpression): string | undefined {
   return undefined;
 }
 
-export function callNamesInOrder(source: string): string[] {
+/** One call in a boot sequence. */
+export type BootCall = { name: string; awaited: boolean };
+
+/**
+ * Every named call in a source, in the order it is
+ * written, each with whether it was awaited.
+ *
+ * `await x()` is awaited; `x()` and `void x()` are
+ * not. The reading is deliberately the immediate
+ * one — a promise held in a variable and awaited
+ * later reads as not awaited, which is the answer a
+ * boot sequence wants anyway.
+ */
+export function callsInOrder(source: string): BootCall[] {
   const file = ts.createSourceFile(
     'boot.ts',
     source,
     ts.ScriptTarget.ES2022,
+    // Parent links, which is how a call knows
+    // whether it is the operand of an `await`.
     true,
   );
-  const found: string[] = [];
+  const found: BootCall[] = [];
 
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
       const name = calledName(node);
-      if (name !== undefined) found.push(name);
+      if (name !== undefined) {
+        found.push({ name, awaited: ts.isAwaitExpression(node.parent) });
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -67,21 +90,27 @@ export function callNamesInOrder(source: string): string[] {
 /**
  * What is wrong with a boot sequence, if anything.
  *
- * Three orderings, and each of them fails in a way
- * that looks like something else. A datasource
- * whose schema is created after launch is invisible
- * until a crash recovery replays a workflow against
- * a table that was not there. A listener opened
- * before launch resolves accepts exactly the
- * requests that arrive during a deploy, and each
- * one throws inside `DBOS.startWorkflow` rather
- * than anywhere a reader would look.
+ * Each of these fails in a way that looks like
+ * something else. A datasource whose schema is
+ * created after launch is invisible until a crash
+ * recovery replays a workflow against a table that
+ * was not there. A listener opened before launch
+ * resolves accepts exactly the requests that arrive
+ * during a deploy, and each one throws inside
+ * `DBOS.startWorkflow` rather than anywhere a
+ * reader would look.
+ *
+ * A dropped `await` on either of the first two is
+ * the same two failures with the source still
+ * reading in the right order, so it is checked
+ * separately and named for what it is.
  */
 export function bootProblems(source: string): string[] {
-  const calls = callNamesInOrder(source);
-  const schema = calls.indexOf('initializeDBOSSchema');
-  const launch = calls.indexOf('launch');
-  const listen = calls.indexOf('listen');
+  const calls = callsInOrder(source);
+  const names = calls.map((call) => call.name);
+  const schema = names.indexOf('initializeDBOSSchema');
+  const launch = names.indexOf('launch');
+  const listen = names.indexOf('listen');
   const problems: string[] = [];
 
   if (schema === -1) problems.push('never creates the datasource schema');
@@ -93,6 +122,13 @@ export function bootProblems(source: string): string[] {
   }
   if (listen >= 0 && launch >= 0 && listen < launch) {
     problems.push('listens before DBOS.launch() resolves');
+  }
+
+  if (schema >= 0 && calls[schema]?.awaited !== true) {
+    problems.push('does not await the datasource schema creation');
+  }
+  if (launch >= 0 && calls[launch]?.awaited !== true) {
+    problems.push('does not await DBOS.launch()');
   }
 
   return problems;
