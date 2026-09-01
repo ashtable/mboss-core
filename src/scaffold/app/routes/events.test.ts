@@ -58,6 +58,8 @@ type Sent = {
 function harness(workflows: WorkflowEntry[]) {
   const started: Started[] = [];
   const sent: Sent[] = [];
+  /** Every key the route actually looked up. */
+  const looked: string[] = [];
   const correlations = new Map<
     string,
     { runId: string; nodeId: string; park: string }
@@ -73,6 +75,8 @@ function harness(workflows: WorkflowEntry[]) {
       sent.push({ runId, message, nodeId, key });
     },
     async findWaitCorrelation(topic, key) {
+      looked.push(`${topic} ${key}`);
+
       return correlations.get(`${topic} ${key}`) ?? null;
     },
   };
@@ -80,7 +84,7 @@ function harness(workflows: WorkflowEntry[]) {
   const app = express();
   app.use(eventRoutes(deps));
 
-  return { app, started, sent, correlations };
+  return { app, started, sent, looked, correlations };
 }
 
 async function post(
@@ -340,6 +344,186 @@ describe('an event a sleeping run is waiting for', () => {
     );
 
     expect(response.status).toBe(401);
+    expect(sent).toEqual([]);
+  });
+});
+
+/**
+ * How the key an event is matched by is read out
+ * of the payload.
+ *
+ * It decides which sleeping run a webhook wakes,
+ * so every one of these is the difference between
+ * a run that carries on and a run that sleeps to
+ * its timeout with the answer already dropped.
+ */
+describe('the correlation key an event is matched by', () => {
+  function waitingOn(correlationPath: string, storedUnder: string) {
+    const built = harness([
+      entry({
+        eventWaits: [
+          { nodeId: 'await_reply', topic: 'twilio.reply', correlationPath },
+        ],
+      }),
+    ]);
+    built.correlations.set(`twilio.reply ${storedUnder}`, {
+      runId: 'wf_1',
+      nodeId: 'await_reply',
+      park: 'park_one',
+    });
+
+    return built;
+  }
+
+  it('walks a dot path into the payload', async () => {
+    // The workflow side resolves a nested path when
+    // it parks, so an author who writes one gets a
+    // run registered under the nested value. An
+    // ingress that looked up the literal string
+    // would 404 every delivery for good.
+    const { app, sent } = waitingOn('customer.phone', '+15551234');
+    const response = await post(app, '/events/twilio.reply', {
+      customer: { phone: '+15551234' },
+    });
+
+    expect(response.status).toBe(202);
+    expect(sent.map((one) => one.runId)).toEqual(['wf_1']);
+  });
+
+  it('matches a number against the digits it was stored under', async () => {
+    const { app, sent } = waitingOn('bookingId', '4021');
+    const response = await post(app, '/events/twilio.reply', {
+      bookingId: 4021,
+    });
+
+    expect(response.status).toBe(202);
+    expect(sent.map((one) => one.runId)).toEqual(['wf_1']);
+  });
+
+  it('matches a boolean the same way', async () => {
+    const { app, sent } = waitingOn('accepted', 'true');
+    const response = await post(app, '/events/twilio.reply', {
+      accepted: true,
+    });
+
+    expect(response.status).toBe(202);
+    expect(sent.map((one) => one.runId)).toEqual(['wf_1']);
+  });
+
+  it('treats an empty string as no key at all', async () => {
+    // Two unrelated runs that both registered an
+    // empty key would otherwise wake each other.
+    const { app, sent, looked } = waitingOn('from', '');
+    const response = await post(app, '/events/twilio.reply', { from: '' });
+
+    expect(response.status).toBe(404);
+    expect(looked).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  it('refuses an object, which is not one value to compare', async () => {
+    const { app, sent, looked } = waitingOn('from', 'anything');
+    const response = await post(app, '/events/twilio.reply', {
+      from: { number: '+15551234' },
+    });
+
+    expect(response.status).toBe(404);
+    expect(looked).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  it('refuses an array for the same reason', async () => {
+    const { app, sent, looked } = waitingOn('from', 'anything');
+    const response = await post(app, '/events/twilio.reply', {
+      from: ['+15551234'],
+    });
+
+    expect(response.status).toBe(404);
+    expect(looked).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  it('is not found when the path leads through nothing', async () => {
+    const { app, sent, looked } = waitingOn('customer.phone', '+15551234');
+    const response = await post(app, '/events/twilio.reply', {
+      customer: null,
+    });
+
+    expect(response.status).toBe(404);
+    expect(looked).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+});
+
+/**
+ * Two workflows waiting on one topic.
+ *
+ * The same provider webhook feeding two flows is
+ * the ordinary case, and two adapters may read the
+ * key out of differently named fields. Every
+ * declared path has to be tried, or one of the two
+ * workflows has runs that can never be reached and
+ * nothing anywhere says why.
+ */
+describe('one topic two workflows wait on', () => {
+  function pair() {
+    return harness([
+      entry({
+        name: 'a_flow',
+        eventWaits: [
+          { nodeId: 'await_a', topic: 'twilio.reply', correlationPath: 'from' },
+        ],
+      }),
+      entry({
+        name: 'b_flow',
+        eventWaits: [
+          { nodeId: 'await_b', topic: 'twilio.reply', correlationPath: 'From' },
+        ],
+      }),
+    ]);
+  }
+
+  it('reaches the first workflow through its own path', async () => {
+    const { app, sent, correlations } = pair();
+    correlations.set('twilio.reply +1555A', {
+      runId: 'wf_a',
+      nodeId: 'await_a',
+      park: 'park_one',
+    });
+
+    const response = await post(app, '/events/twilio.reply', {
+      from: '+1555A',
+    });
+
+    expect(response.status).toBe(202);
+    expect(sent.map((one) => one.runId)).toEqual(['wf_a']);
+  });
+
+  it('reaches the second one through its own too', async () => {
+    const { app, sent, correlations } = pair();
+    correlations.set('twilio.reply +1555B', {
+      runId: 'wf_b',
+      nodeId: 'await_b',
+      park: 'park_one',
+    });
+
+    const response = await post(app, '/events/twilio.reply', {
+      From: '+1555B',
+    });
+
+    expect(response.status).toBe(202);
+    expect(sent.map((one) => one.runId)).toEqual(['wf_b']);
+  });
+
+  it('is not found only once every declared path came up empty', async () => {
+    const { app, sent, looked } = pair();
+    const response = await post(app, '/events/twilio.reply', {
+      from: '+1555A',
+      From: '+1555B',
+    });
+
+    expect(response.status).toBe(404);
+    expect(looked).toEqual(['twilio.reply +1555A', 'twilio.reply +1555B']);
     expect(sent).toEqual([]);
   });
 });

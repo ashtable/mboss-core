@@ -31,6 +31,13 @@ import {
  * does.
  */
 
+/** A run parked on a wait, and where it parked. */
+export type WaitCorrelation = {
+  runId: string;
+  nodeId: string;
+  park: string;
+};
+
 export type EventDeps = {
   eventsSecret: string;
   workflows: readonly WorkflowEntry[];
@@ -39,7 +46,7 @@ export type EventDeps = {
   findWaitCorrelation: (
     topic: string,
     key: string,
-  ) => Promise<{ runId: string; nodeId: string; park: string } | null>;
+  ) => Promise<WaitCorrelation | null>;
 };
 
 export function eventRoutes(deps: EventDeps): Router {
@@ -114,18 +121,32 @@ async function deliver(
   payload: unknown,
   response: express.Response,
 ): Promise<void> {
-  const wait = deps.workflows
+  const waits = deps.workflows
     .flatMap((entry) => entry.eventWaits)
-    .find((candidate) => candidate.topic === topic);
+    .filter((candidate) => candidate.topic === topic);
 
-  if (!wait) {
+  if (waits.length === 0) {
     response.status(404).json({ error: 'unknown topic' });
     return;
   }
 
-  const key = valueAtPath(payload, wait.correlationPath);
-  const parked =
-    key === null ? null : await deps.findWaitCorrelation(topic, key);
+  // Two workflows may wait on one topic — the same
+  // provider webhook feeding two flows — and they
+  // may read the key out of differently named
+  // fields. Reading every delivery through the
+  // first one's path would leave the other's runs
+  // unreachable, and silently: the route would just
+  // go on answering 404.
+  const paths = [...new Set(waits.map((wait) => wait.correlationPath))];
+  let parked: WaitCorrelation | null = null;
+
+  for (const path of paths) {
+    const key = valueAtPath(payload, path);
+    if (key === null) continue;
+
+    parked = await deps.findWaitCorrelation(topic, key);
+    if (parked) break;
+  }
 
   if (!parked) {
     response.status(404).json({ error: 'no run is waiting for that' });
