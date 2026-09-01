@@ -104,6 +104,16 @@ export class SourceWriter {
    * A `//` comment, hard-wrapped so no line of it
    * passes fifty columns.
    *
+   * Fifty counted from column zero, the indent and
+   * the marker included — tighter than the house
+   * auditor, which measures the prose after the
+   * marker. That is deliberate rather than a
+   * disagreement: emitted comments sit at every
+   * depth from zero to three, and budgeting from
+   * column zero is what makes one read the same
+   * nested as it does at the top. Anything this
+   * emits satisfies the auditor too.
+   *
    * A single word wider than the budget is left
    * alone on its own line. Some things do not
    * wrap: a path, a URL, the document a generated
