@@ -47,9 +47,9 @@ color:#31506f}
 <label class="label" for="f-urgent">Is this urgent?</label>
 <div class="choice"><label><input type="radio" id="f-urgent" name="urgent" value="yes" required> Yes</label><label><input type="radio" name="urgent" value="no"> No</label></div>
 </div>
-<div class="field" data-field="deadline" data-show-if="{&quot;fieldId&quot;:&quot;urgent&quot;,&quot;op&quot;:&quot;eq&quot;,&quot;value&quot;:true}">
-<label class="label" for="f-deadline">When do you need it?</label>
-<input type="text" id="f-deadline" name="deadline">
+<div class="field" data-field="details" data-show-if="{&quot;fieldId&quot;:&quot;urgent&quot;,&quot;op&quot;:&quot;eq&quot;,&quot;value&quot;:true}">
+<label class="label" for="f-details">What is the deadline?</label>
+<textarea id="f-details" name="details" required></textarea>
 </div>
 <button type="submit">Submit &amp; resume the workflow</button>
 </form>

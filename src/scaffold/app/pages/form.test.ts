@@ -1,3 +1,5 @@
+import { runInNewContext } from 'node:vm';
+
 import { describe, expect, it } from 'vitest';
 
 import type { EmailFormField, WaitDescriptor } from '../contract.js';
@@ -334,6 +336,166 @@ describe('the page a link that does not verify lands on', () => {
   it('renders the page', async () => {
     await expect(renderInvalidPage('expired')).toMatchFileSnapshot(
       './__snapshots__/invalid.html',
+    );
+  });
+});
+
+/**
+ * The smallest document the reveal script touches.
+ *
+ * The script ships as text inside the page it
+ * scripts, so the only way to run it here is to
+ * hand it a stand-in for the two things it reads —
+ * the answers, and the wrappers carrying a
+ * condition — and watch what it writes. A radio
+ * group is one entry with one value here, which is
+ * what `form.elements` hands a browser too.
+ */
+type StubControl = { value: string; required: boolean; disabled: boolean };
+
+type StubField = {
+  id: string;
+  value?: string;
+  required?: boolean;
+  disabled?: boolean;
+  showIf?: unknown;
+};
+
+function scriptOf(page: string): string {
+  const start = page.indexOf('<script>') + '<script>'.length;
+
+  return page.slice(start, page.indexOf('</script>'));
+}
+
+function runRevealScript(page: string, fields: readonly StubField[]) {
+  const entries = fields.map((field) => ({
+    field,
+    control: {
+      value: field.value ?? '',
+      required: field.required ?? false,
+      disabled: field.disabled ?? false,
+    } satisfies StubControl,
+  }));
+  const wrappers = entries
+    .filter((entry) => entry.field.showIf !== undefined)
+    .map((entry) => ({
+      dataset: { showIf: JSON.stringify(entry.field.showIf) },
+      hidden: false,
+      querySelectorAll: () => [entry.control],
+    }));
+  const listeners: (() => void)[] = [];
+  const form = {
+    elements: Object.fromEntries(
+      entries.map((entry) => [entry.field.id, entry.control]),
+    ),
+    addEventListener(_type: string, listener: () => void) {
+      listeners.push(listener);
+    },
+  };
+
+  runInNewContext(scriptOf(page), {
+    document: {
+      querySelector: () => form,
+      querySelectorAll: () => wrappers,
+    },
+  });
+
+  const control = (id: string): StubControl => {
+    const found = entries.find((entry) => entry.field.id === id);
+    if (!found) throw new Error(`no stub field ${id}`);
+
+    return found.control;
+  };
+
+  return {
+    control,
+    wrappers,
+    /** What a keystroke in the browser does. */
+    answer(id: string, value: string): void {
+      control(id).value = value;
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+describe('a conditional field that is also required', () => {
+  const FOLLOW_UP: EmailFormField = {
+    id: 'details',
+    label: 'What is the deadline?',
+    type: 'textarea',
+    required: true,
+    multiple: false,
+    showIf: { fieldId: 'urgent', op: 'eq', value: true },
+  };
+
+  const required = renderFormPage({
+    appTitle: 'Sermon Helper',
+    runId: 'wf_81c2',
+    recipient: 'sam@hillsong.io',
+    action: '/f/tok-form',
+    wait: { ...WAIT, fields: [FIELDS[3] as EmailFormField, FOLLOW_UP] },
+    uploadsEnabled: true,
+  });
+
+  const stub = (answer: string) =>
+    runRevealScript(required, [
+      { id: 'urgent', value: answer },
+      { id: 'details', required: true, showIf: FOLLOW_UP.showIf },
+    ]);
+
+  it('keeps required in the markup, so scripting off asks for it', () => {
+    // With no scripting every field is visible, so
+    // every field is genuinely being asked.
+    expect(fieldBlock(required, 'details')).toContain('required');
+  });
+
+  it('clears required when it hides, so the form can be submitted', () => {
+    // A hidden control still validates. Left
+    // required it makes the form permanently
+    // invalid, and the browser cannot even show
+    // the bubble because the control is not
+    // focusable: the submit button does nothing at
+    // all and the run sleeps to its timeout.
+    const run = stub('no');
+
+    expect(run.wrappers[0]?.hidden).toBe(true);
+    expect(run.control('details').required).toBe(false);
+  });
+
+  it('disables what it hides, so a withdrawn answer is not posted', () => {
+    const run = stub('yes');
+
+    run.answer('details', 'by Friday');
+    run.answer('urgent', 'no');
+
+    expect(run.control('details').disabled).toBe(true);
+  });
+
+  it('asks for it again when the condition holds again', () => {
+    const run = stub('no');
+
+    run.answer('urgent', 'yes');
+
+    expect(run.wrappers[0]?.hidden).toBe(false);
+    expect(run.control('details').required).toBe(true);
+    expect(run.control('details').disabled).toBe(false);
+  });
+
+  it('leaves a control the page disabled on purpose disabled', () => {
+    // The dropzone of an app with no object store.
+    // Revealing it must not hand back a control
+    // this app cannot serve.
+    const run = runRevealScript(required, [
+      { id: 'urgent', value: 'yes' },
+      { id: 'details', disabled: true, showIf: FOLLOW_UP.showIf },
+    ]);
+
+    expect(run.control('details').disabled).toBe(true);
+  });
+
+  it('renders the page', async () => {
+    await expect(required).toMatchFileSnapshot(
+      './__snapshots__/form-conditional-required.html',
     );
   });
 });

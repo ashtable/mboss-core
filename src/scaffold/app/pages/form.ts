@@ -33,11 +33,29 @@ const NO_UPLOADS =
  * shows every field, which is a form that asks one
  * question too many rather than a form that cannot
  * be completed.
+ *
+ * Hiding a field is not enough on its own. A
+ * hidden control still validates, so a required
+ * one nobody can see refuses the submit with no
+ * bubble and nothing to click — a button that does
+ * nothing at all. It is still posted, too, so an
+ * answer the person withdrew still arrives. Only
+ * disabling stops both, so a field that hides is
+ * disabled and has its requiredness cleared, and
+ * both come back when it shows again.
  */
 const REVEAL_SCRIPT = `(function () {
   var form = document.querySelector('form');
   if (!form) return;
-  var nodes = document.querySelectorAll('[data-show-if]');
+
+  var groups = [];
+  document.querySelectorAll('[data-show-if]').forEach(function (node) {
+    var controls = [];
+    node.querySelectorAll('input, select, textarea').forEach(function (el) {
+      controls.push({ el: el, required: el.required, disabled: el.disabled });
+    });
+    groups.push({ node: node, controls: controls });
+  });
 
   function answer(id) {
     var field = form.elements[id];
@@ -70,8 +88,13 @@ const REVEAL_SCRIPT = `(function () {
   }
 
   function apply() {
-    nodes.forEach(function (node) {
-      node.hidden = !holds(JSON.parse(node.dataset.showIf));
+    groups.forEach(function (group) {
+      var show = holds(JSON.parse(group.node.dataset.showIf));
+      group.node.hidden = !show;
+      group.controls.forEach(function (each) {
+        each.el.required = show && each.required;
+        each.el.disabled = !show || each.disabled;
+      });
     });
   }
 
