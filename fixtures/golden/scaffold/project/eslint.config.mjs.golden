@@ -2,10 +2,13 @@ import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import prettier from 'eslint-config-prettier';
 
-// src/workflows is compiler-owned: a generated
-// schedule handler takes a context parameter it
-// does not use, and nobody can edit the file to
-// silence it. It is still type-checked.
+// src/workflows is compiler-owned. A step whose
+// output nothing reads is still bound to a name,
+// and a schedule handler takes a context it does
+// not use — both errors under the recommended
+// set, in files nobody can edit to silence them.
+// The bindings are most of it. They are still
+// type-checked.
 const ignores = ['node_modules/**', 'coverage/**', 'src/workflows/**'];
 
 export default tseslint.config(

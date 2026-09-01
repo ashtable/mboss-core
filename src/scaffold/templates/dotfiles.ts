@@ -68,21 +68,26 @@ src/workflows
  * The four-line flat config the house uses, with
  * one addition: `src/workflows` is ignored.
  *
- * That directory is compiler-owned, and a
- * generated schedule handler takes a context
- * parameter it does not use — an error under the
- * recommended set, in a file nobody is allowed to
- * edit. `tsconfig.json` still includes it, so it
- * is type-checked either way.
+ * That directory is compiler-owned. Most of what
+ * the recommended set objects to there is a step
+ * output bound to a name nothing later reads; a
+ * generated schedule handler taking a context it
+ * does not use is one message of the set, not the
+ * whole of it. Nobody is allowed to edit those
+ * files to silence either. `tsconfig.json` still
+ * includes them, so they are type-checked anyway.
  */
 export const ESLINT_CONFIG_MJS = `import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import prettier from 'eslint-config-prettier';
 
-// src/workflows is compiler-owned: a generated
-// schedule handler takes a context parameter it
-// does not use, and nobody can edit the file to
-// silence it. It is still type-checked.
+// src/workflows is compiler-owned. A step whose
+// output nothing reads is still bound to a name,
+// and a schedule handler takes a context it does
+// not use — both errors under the recommended
+// set, in files nobody can edit to silence them.
+// The bindings are most of it. They are still
+// type-checked.
 const ignores = ['node_modules/**', 'coverage/**', 'src/workflows/**'];
 
 export default tseslint.config(

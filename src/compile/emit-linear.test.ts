@@ -5,11 +5,13 @@ import { describe, expect, it } from 'vitest';
 
 import { WorkflowIRSchema, type WorkflowIR } from '../ir/index.js';
 import { scanLib } from '../manifest/index.js';
+import { ESLINT_CONFIG_MJS } from '../scaffold/templates/dotfiles.js';
 import {
   expectGolden,
   fixturesRoot,
   readFixtureJson,
 } from '../test-support/fixtures.js';
+import { eslintProblems } from '../test-support/lint.js';
 import { makeIR, type EdgeSpec, type NodeSpec } from '../test-support/ir.js';
 import {
   relativeSpecifiersEndInJs,
@@ -1171,4 +1173,55 @@ describe('every compiled file', () => {
       });
     });
   }
+});
+
+/**
+ * What the lint a generated project ships would
+ * say about the directory it is told to skip.
+ *
+ * `eslint.config.mjs` ignores `src/workflows`, and
+ * the comment beside that ignore is the only place
+ * its cost is written down: the integration test
+ * runs the emitted config, and the emitted config
+ * ignores the directory, so nothing else in this
+ * suite ever points eslint at compiler output.
+ * This does, with the ignore lifted, so the
+ * comment is held to what actually comes back.
+ */
+describe('the lint a generated project ships', () => {
+  it('objects to compiler output for two reasons and no third', async () => {
+    const files = [
+      {
+        path: 'eslint.config.mjs',
+        contents: ESLINT_CONFIG_MJS.replace(", 'src/workflows/**'", ''),
+      },
+      ...GOLDENS.map(([name, ir]) => ({
+        path: `src/workflows/${name}.workflow.ts`,
+        contents: compile(ir),
+      })),
+    ];
+    const problems = await eslintProblems(files);
+    const named = problems.map((problem) => /'([^']+)'/.exec(problem)?.[1]);
+    const bindings = named.filter((name) => name?.endsWith('Out'));
+    const contexts = named.filter((name) => name === 'context');
+
+    // A clean run would mean the exemption costs
+    // nothing, which would be the more interesting
+    // result and is not this one.
+    expect(problems.length).toBeGreaterThan(10);
+
+    // The two the emitted comment names: a step
+    // output nothing reads is bound anyway, and a
+    // schedule handler is handed a context it does
+    // not use. A third kind reaching here is a
+    // compiler change the comment has stopped
+    // describing.
+    expect(bindings.length + contexts.length).toBe(problems.length);
+    expect(contexts).toEqual(['context']);
+
+    // And which of the two is the bulk of it. The
+    // comment used to name only the context, which
+    // is one message of the whole set.
+    expect(bindings.length).toBeGreaterThan(contexts.length);
+  }, 120_000);
 });
