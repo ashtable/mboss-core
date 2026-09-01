@@ -54,8 +54,24 @@ function matches(presented: string, expected: string): boolean {
  * that declares the route: a guard mounted
  * somewhere else is one a later route can be added
  * in front of.
+ *
+ * Refuses an empty secret up front. An absent
+ * header becomes `''` below, and `''` compares
+ * equal to an empty secret, so a guard built from
+ * one would authorize every request that sends no
+ * header at all. That is a fact about `matches`,
+ * not about whatever validated the secret before
+ * calling here — this is the one place the
+ * guarantee has to hold on its own.
  */
 export function requireSecret(secret: string): RequestHandler {
+  if (secret.length === 0) {
+    throw new Error(
+      'requireSecret: the events secret is empty; every ' +
+        'workflow-starting route would be open',
+    );
+  }
+
   return (request, response, next) => {
     if (!matches(request.header(SECRET_HEADER) ?? '', secret)) {
       response.status(401).json({ error: 'unauthorized' });
