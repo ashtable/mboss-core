@@ -97,9 +97,12 @@ const APPROVAL_WAIT: WaitDescriptor = {
 
 async function nothing(): Promise<void> {}
 
-function workflow(waits: WaitDescriptor[]): WorkflowEntry {
+function workflow(
+  waits: WaitDescriptor[],
+  name = 'groom_booking',
+): WorkflowEntry {
   return {
-    name: 'groom_booking',
+    name,
     title: 'Groom booking',
     workflowFn: nothing,
     trigger: { mode: 'manual' },
@@ -125,6 +128,9 @@ const STORE: ArtifactStore = {
 function harness(options: {
   waiting?: Set<string>;
   workflows?: WorkflowEntry[];
+  /** Which workflow each run belongs to, as DBOS
+   *  would answer it. */
+  runsIn?: Record<string, string>;
   store?: ArtifactStore | null;
 }) {
   const sent: Sent[] = [];
@@ -132,12 +138,24 @@ function harness(options: {
   const waiting = options.waiting ?? new Set(['wf_1 await_form']);
   const store = options.store === undefined ? STORE : options.store;
 
+  const workflows = options.workflows ?? [workflow([FORM_WAIT, APPROVAL_WAIT])];
+
   const deps: FormDeps = {
     appTitle: 'Sermon Helper',
     ring: RING,
-    workflows: options.workflows ?? [workflow([FORM_WAIT, APPROVAL_WAIT])],
+    workflows,
     async send(runId, message, nodeId, key) {
       sent.push({ runId, message, nodeId, key });
+    },
+    async workflowOf(runId) {
+      // Given a map, it is the whole truth: a run
+      // that is not in it is one DBOS has never
+      // heard of. Given none, every run belongs to
+      // the first workflow, which is what every
+      // single-workflow case here means.
+      return options.runsIn === undefined
+        ? (workflows[0]?.name ?? null)
+        : (options.runsIn[runId] ?? null);
     },
     async parkOf(runId, nodeId) {
       return waiting.has(`${runId} ${nodeId}`) ? 'park_one' : null;
@@ -580,5 +598,101 @@ describe('submitting a file', () => {
     expect(response.status).toBe(503);
     expect(response.body).toContain('File uploads are switched off');
     expect(sent).toEqual([]);
+  });
+});
+
+/**
+ * Node ids are unique inside one workflow, not
+ * across a project — so two workflows in one app
+ * may both call a wait `approve`, and the token
+ * says only which run and which node.
+ */
+describe('two workflows that named a wait the same', () => {
+  const SALARY_APPROVE: WaitDescriptor = {
+    nodeId: 'approve',
+    title: 'Approve the raise for Dana Whitfield to 185,000',
+    page: 'approval',
+    fields: [],
+    downstream: ['Tell payroll'],
+  };
+
+  const NEWSLETTER_APPROVE: WaitDescriptor = {
+    nodeId: 'approve',
+    title: 'Confirm your subscription',
+    page: 'form',
+    fields: [
+      {
+        id: 'request',
+        label: 'Anything you want to hear about?',
+        type: 'textarea',
+        required: false,
+        multiple: false,
+      },
+    ],
+    downstream: ['Add to the list'],
+  };
+
+  function twoWorkflows() {
+    return harness({
+      workflows: [
+        workflow([SALARY_APPROVE], 'salary_review'),
+        workflow([NEWSLETTER_APPROVE], 'newsletter'),
+      ],
+      runsIn: { 'newsletter-run-9': 'newsletter' },
+      waiting: new Set(['newsletter-run-9 approve']),
+    });
+  }
+
+  it('serves the wait belonging to the run the link names', async () => {
+    // Not the first workflow that happens to have
+    // a wait under this id. A subscriber holding a
+    // newsletter link would otherwise be shown a
+    // salary under review, which is somebody
+    // else's business entirely.
+    const { app } = twoWorkflows();
+    const response = await get(
+      app,
+      `/f/${formToken('newsletter-run-9', 'approve')}`,
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toContain('Confirm your subscription');
+    expect(response.body).not.toContain('Dana Whitfield');
+  });
+
+  it('wakes the run with the shape its own wait asked for', async () => {
+    // The descriptor decides more than the page:
+    // an approval turns a submit into `{approved}`
+    // and a form turns it into answers. Addressing
+    // the message by run and node is not enough on
+    // its own — it would arrive at the right run in
+    // the wrong shape.
+    const { app, sent } = twoWorkflows();
+
+    await postForm(app, `/f/${formToken('newsletter-run-9', 'approve')}`, {
+      decision: 'approve',
+      request: 'more about the choir',
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.message).toEqual({ request: 'more about the choir' });
+  });
+
+  it('opens nothing for a run the system database cannot name', async () => {
+    // A purged or invented run id. There is no
+    // workflow to look the wait up in, and
+    // guessing one is what this route stopped
+    // doing. Still listed as waiting, so the
+    // refusal is the lookup's and not the park
+    // check's.
+    const { app } = harness({
+      workflows: [workflow([NEWSLETTER_APPROVE], 'newsletter')],
+      runsIn: {},
+      waiting: new Set(['ghost-run approve']),
+    });
+    const response = await get(app, `/f/${formToken('ghost-run', 'approve')}`);
+
+    expect(response.status).toBe(400);
+    expect(response.body).not.toContain('Confirm your subscription');
   });
 });

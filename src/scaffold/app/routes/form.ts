@@ -39,12 +39,23 @@ import { pathParam, type SendToRun } from './ports.js';
  * page to serve is settled by the workflow's own
  * list of waits, never by the token.
  *
- * A wait's node id is looked up across every
- * workflow this app carries. Node ids are unique
- * within a workflow; two workflows that used the
- * same one for a wait would render the first's
- * form. What is submitted is unaffected either
- * way — it is addressed by run and node.
+ * The wait is looked up inside the workflow the
+ * run belongs to, which the run itself is asked
+ * for. Node ids are unique within a workflow but
+ * not across a project, so two workflows may both
+ * name a wait `approve`, and the token carries the
+ * run and the node — not which workflow they are
+ * in. Taking the first match would show one
+ * workflow's wait to the other's recipient, and it
+ * would do more than mislead them: the descriptor
+ * decides whether a submit becomes `{ approved }`
+ * or a set of answers, so the message would reach
+ * the right run in the wrong shape.
+ *
+ * Asking the run beats putting the workflow in the
+ * token. It is a fact about durable state rather
+ * than a claim the holder presents, and links
+ * already sent go on working.
  */
 
 /** As much of a form post as this will read. */
@@ -55,6 +66,10 @@ export type FormDeps = {
   ring: LinkKeyRing;
   workflows: readonly WorkflowEntry[];
   send: SendToRun;
+  /** Which workflow a run belongs to, by the name
+   *  its registry entry carries, or null when
+   *  there is no such run. */
+  workflowOf: (runId: string) => Promise<string | null>;
   parkOf: (runId: string, nodeId: string) => Promise<string | null>;
   store: ArtifactStore | null;
 };
@@ -132,12 +147,18 @@ async function open(
     return null;
   }
 
-  const wait = waitFor(deps.workflows, payload.node);
+  const wait = waitFor(
+    deps.workflows,
+    await deps.workflowOf(payload.run),
+    payload.node,
+  );
   if (!wait) {
     // The token verifies but names a wait this
     // app no longer has, which happens when a
     // workflow is redrawn under a link already
-    // sent.
+    // sent. A run the system database no longer
+    // knows lands here too, and the answer is the
+    // same: there is nothing this link opens.
     response.status(400).type('html').send(renderInvalidPage('unknown step'));
     return null;
   }
@@ -165,14 +186,14 @@ async function open(
 
 function waitFor(
   workflows: readonly WorkflowEntry[],
+  workflow: string | null,
   nodeId: string,
 ): WaitDescriptor | null {
-  for (const entry of workflows) {
-    const wait = entry.waits[nodeId];
-    if (wait) return wait;
-  }
+  if (workflow === null) return null;
 
-  return null;
+  return (
+    workflows.find((entry) => entry.name === workflow)?.waits[nodeId] ?? null
+  );
 }
 
 function pageFor(deps: FormDeps, opened: Opened, request: Request): string {

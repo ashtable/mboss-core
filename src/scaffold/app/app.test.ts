@@ -21,6 +21,9 @@ const deps: AppDeps = {
   workflows: [],
   async startWorkflow() {},
   async send() {},
+  async workflowOf() {
+    return null;
+  },
   async findWaitCorrelation() {
     return null;
   },

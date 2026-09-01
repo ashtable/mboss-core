@@ -104,6 +104,15 @@ async function main(): Promise<void> {
     async send(runId, message, nodeId, idempotencyKey) {
       await DBOS.send(runId, message, nodeId, idempotencyKey);
     },
+    async workflowOf(runId) {
+      // The name the registry entry carries:
+      // `registerWorkflow` is given it explicitly,
+      // and that is the name the status records.
+      // A run the system database has never heard
+      // of answers null, which the form host reads
+      // as a link that opens nothing.
+      return (await DBOS.getWorkflowStatus(runId))?.workflowName ?? null;
+    },
     findWaitCorrelation: (topic, key) => findWaitCorrelation(topic, key),
     parkOf: (runId, nodeId) => parkOf(runId, nodeId),
     store: artifactStoreFromEnv(env),
