@@ -19,15 +19,25 @@
 export type EnvSecrets = { linkKeys: string; eventsSecret: string };
 
 /**
- * The ring the house uses wherever a real one is
- * not wanted: all zeros but the last digit, which
- * parses, so a misconfigured app boots and fails
- * on a signature rather than on start-up.
+ * The two values the example file carries in place
+ * of the minted ones.
+ *
+ * Neither of them works, and that is the whole
+ * point. `.env` is gitignored, so the second
+ * person to clone a generated project has none and
+ * copies the example; a ring that parsed and a
+ * secret that matched would bring their app up
+ * green with every form and artifact link in the
+ * world forgeable by anybody who has read mBoss's
+ * source, and its event ingress open to them too.
+ * The ring is not sixty-four hex characters and
+ * the secret is empty, so an app started from the
+ * example dies on start-up naming the variable it
+ * is missing.
  */
-export const PLACEHOLDER_LINK_KEYS =
-  'k1:0000000000000000000000000000000000000000000000000000000000000001';
+export const PLACEHOLDER_LINK_KEYS = 'k1:replace-me';
 
-export const PLACEHOLDER_EVENTS_SECRET = 'dev-events-secret';
+export const PLACEHOLDER_EVENTS_SECRET = '';
 
 export function envFile(name: string, secrets: EnvSecrets): string {
   return `# Written by mBoss when this project was created.
@@ -67,11 +77,15 @@ PORT="3000"
 # of them verifying. Rotate by prepending a new
 # pair and dropping the old one once the links it
 # signed have expired. Replacing it outright
-# invalidates every link already sent.
+# invalidates every link already sent. The example
+# file carries no key at all, so an app copied
+# from it stops on start-up instead of signing
+# with one anybody could guess.
 LINK_KEYS="${secrets.linkKeys}"
 
 # The header an event sender has to present to
-# start a workflow.
+# start a workflow. Empty in the example file, and
+# the app refuses to boot without it.
 EVENTS_SECRET="${secrets.eventsSecret}"
 
 # The mail API key pair, then the API root. Point

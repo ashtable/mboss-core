@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { EnvSchema, readEnv } from './app/env.js';
+import { parseKeyRing } from './app/signed-links.js';
 import { scaffoldFiles } from './files.js';
 
 /**
@@ -95,8 +96,24 @@ describe('the example file', () => {
     expect(EXAMPLE).not.toContain('test-events-secret');
   });
 
-  it('carries a key ring that parses, so a boot fails on a signature', () => {
-    expect(readEnv(settingsIn(EXAMPLE)).LINK_KEYS).toMatch(/^k1:[0-9a-f]{64}$/);
+  it('refuses to boot, rather than serving links anyone can forge', () => {
+    // `.env` is gitignored, so the second person to
+    // clone a generated project has none and copies
+    // this one. Values that worked would bring the
+    // app up green with every form and artifact
+    // token in the world forgeable by anybody who
+    // has read mBoss's source, and its event
+    // ingress open to them too.
+    expect(() => readEnv(settingsIn(EXAMPLE))).toThrow(/EVENTS_SECRET/);
+  });
+
+  it('carries no signing ring either, and dies naming the entry', () => {
+    // The app parses the ring during start-up, so
+    // this one stops there rather than on the first
+    // link it tries to mint.
+    expect(() => parseKeyRing(settingsIn(EXAMPLE).LINK_KEYS ?? '')).toThrow(
+      /64-character hex key/,
+    );
   });
 });
 
@@ -111,6 +128,7 @@ describe('the real file', () => {
 
     expect(env.PORT).toBe(3000);
     expect(env.APP_BASE_URL).toBe('http://localhost:3000');
+    expect(parseKeyRing(env.LINK_KEYS).active.kid).toBe('k1');
   });
 
   it('starts the app off named after the project', () => {
