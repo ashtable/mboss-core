@@ -594,7 +594,7 @@ export {
   workflowsDir,
 } from './paths.js';
 
-export type { AtomicWriteHooks } from './atomic-write.js';
+export type { AtomicWriteOptions } from './atomic-write.js';
 export type { DiffSummary, Diffable } from './diff.js';
 export type { ApplyError, Failure } from './errors.js';
 export type { Snapshot } from './history.js';

@@ -1,6 +1,6 @@
 .claude/skills/mboss/
 .dockerignore
-.env
+.env (0600)
 .env.example
 .github/workflows/ci.yml
 .gitignore

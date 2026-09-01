@@ -20,14 +20,31 @@ import { basename, dirname, join } from 'node:path';
  * see `lock.ts`.
  */
 
-/**
- * Seams for a test to observe the instant between
- * the two steps of the write, which is the only
- * moment at which the guarantee above could fail
- * and the only moment no caller can otherwise
- * see.
- */
-export type AtomicWriteHooks = {
+export type AtomicWriteOptions = {
+  /**
+   * The mode to create the file at, when the
+   * default is too generous.
+   *
+   * It goes on the temp sibling rather than on the
+   * destination afterwards, because the sibling
+   * holds the same bytes and lives in the same
+   * directory: setting the mode after the rename
+   * would leave a secrets file readable by
+   * everyone for as long as both steps take. A
+   * caller that needs an exact mode still has to
+   * `chmod` — this only says the file is never
+   * created more permissively than asked, which is
+   * the half a umask cannot undo.
+   */
+  mode?: number;
+
+  /**
+   * Seams for a test to observe the instant
+   * between the two steps of the write, which is
+   * the only moment at which the guarantee above
+   * could fail and the only moment no caller can
+   * otherwise see.
+   */
   beforeRename?: (tempPath: string) => void | Promise<void>;
 };
 
@@ -42,7 +59,7 @@ export type AtomicWriteHooks = {
 export async function writeFileAtomic(
   path: string,
   text: string,
-  hooks?: AtomicWriteHooks,
+  options?: AtomicWriteOptions,
 ): Promise<void> {
   const tempPath = join(
     dirname(path),
@@ -50,8 +67,11 @@ export async function writeFileAtomic(
   );
 
   try {
-    await writeFile(tempPath, text, 'utf8');
-    await hooks?.beforeRename?.(tempPath);
+    await writeFile(tempPath, text, {
+      encoding: 'utf8',
+      ...(options?.mode === undefined ? {} : { mode: options.mode }),
+    });
+    await options?.beforeRename?.(tempPath);
     await rename(tempPath, path);
   } catch (error) {
     // A temp file left behind would be swept up by

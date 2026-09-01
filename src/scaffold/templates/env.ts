@@ -39,6 +39,13 @@ export const PLACEHOLDER_LINK_KEYS = 'k1:replace-me';
 
 export const PLACEHOLDER_EVENTS_SECRET = '';
 
+/** Readable by its owner and nobody else. This
+ *  file holds the app's HMAC signing ring and the
+ *  secret guarding its event ingress, and the
+ *  default 0644 hands both to every other account
+ *  on a shared host, a build box or a CI runner. */
+export const ENV_MODE = 0o600;
+
 export function envFile(name: string, secrets: EnvSecrets): string {
   return `# Written by mBoss when this project was created.
 #

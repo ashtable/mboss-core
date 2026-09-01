@@ -99,6 +99,20 @@ describe('scaffoldProject', () => {
     expect(statSync(path).mode & 0o777).toBe(0o755);
   });
 
+  it('writes the secrets file so only its owner can read it', async () => {
+    // `.env` carries the freshly minted signing
+    // ring and the events secret. At the default
+    // 0644 every other account on a build host, a
+    // CI runner or a shared machine can read both,
+    // and the scaffolder already has the mechanism
+    // it needs — it just was not using it here.
+    await scaffoldProject(project.projectDir, { name: 'my_app' });
+
+    const path = join(project.projectDir, '.env');
+
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
   it('mints a key ring and an events secret when none were given', async () => {
     await scaffoldProject(project.projectDir, { name: 'my_app' });
     const env = readFileSync(join(project.projectDir, '.env'), 'utf8');

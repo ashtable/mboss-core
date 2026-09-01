@@ -107,13 +107,17 @@ describe('the emitted tree', () => {
     ]);
   });
 
-  it('marks the entrypoint executable and nothing else', () => {
-    const executable = FILES.filter((file) => file.mode !== undefined);
+  it('declares a mode on the two files that need one, and no other', () => {
+    // The entrypoint has to be executable. `.env`
+    // holds the minted signing ring and the events
+    // secret, and everything else here is content
+    // anybody on the machine may read.
+    const moded = FILES.filter((file) => file.mode !== undefined);
 
-    expect(executable.map((file) => file.path)).toEqual([
-      'docker-entrypoint.sh',
+    expect(moded.map((file) => [file.path, file.mode])).toEqual([
+      ['.env', 0o600],
+      ['docker-entrypoint.sh', 0o755],
     ]);
-    expect(executable[0]?.mode).toBe(0o755);
   });
 });
 

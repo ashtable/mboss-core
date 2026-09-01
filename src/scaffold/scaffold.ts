@@ -71,7 +71,7 @@ export async function scaffoldProject(
     const path = join(dir, file.path);
 
     await mkdir(dirname(path), { recursive: true });
-    await writeFileAtomic(path, file.contents);
+    await writeFileAtomic(path, file.contents, { mode: file.mode });
     if (file.mode !== undefined) await chmod(path, file.mode);
   }
 }
