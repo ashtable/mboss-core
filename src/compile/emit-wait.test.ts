@@ -406,6 +406,32 @@ describe('a step whose callback is one call', () => {
   });
 });
 
+/**
+ * Where a needle sits in emitted source, asserting
+ * that it is there at all.
+ *
+ * `indexOf` and `findIndex` both answer -1 when
+ * the needle is absent, and -1 is below every real
+ * index — so an ordering written on a bare one
+ * passes when the statement it orders has been
+ * deleted, which is the one defect these orderings
+ * exist to catch.
+ */
+function at(source_: string, needle: string): number {
+  const found = source_.indexOf(needle);
+  expect(found, `${needle} is not in the emitted source`).toBeGreaterThan(-1);
+
+  return found;
+}
+
+/** The same, over lines rather than characters. */
+function atLine(lines: readonly string[], needle: string): number {
+  const found = lines.findIndex((line) => line.includes(needle));
+  expect(found, `no line holds ${needle}`).toBeGreaterThan(-1);
+
+  return found;
+}
+
 describe('a durable wait', () => {
   const wait = {
     local: 'awaitFormOut',
@@ -430,9 +456,7 @@ describe('a durable wait', () => {
     // nothing to look the run up by, and the run
     // would sleep until its timeout with the
     // answer already delivered and dropped.
-    expect(source_.indexOf('.register')).toBeLessThan(
-      source_.indexOf('DBOS.recv'),
-    );
+    expect(at(source_, '.register')).toBeLessThan(at(source_, 'DBOS.recv'));
   });
 
   it('clears after it wakes and before it asks what arrived', () => {
@@ -440,10 +464,8 @@ describe('a durable wait', () => {
     // that the form route's "is this run still
     // waiting?" check reads a row nothing ever
     // deletes, and its 410 can never fire.
-    expect(source_.indexOf('DBOS.recv')).toBeLessThan(
-      source_.indexOf('.clear'),
-    );
-    expect(source_.indexOf('.clear')).toBeLessThan(source_.indexOf('=== null'));
+    expect(at(source_, 'DBOS.recv')).toBeLessThan(at(source_, '.clear'));
+    expect(at(source_, '.clear')).toBeLessThan(at(source_, '=== null'));
   });
 
   it('calls recv with an options object and never a bare number', () => {
@@ -522,22 +544,18 @@ describe('a wait that sends a reminder', () => {
     // it has to have moved before the step runs or
     // the first and second reminders record the
     // same one.
-    expect(reminder.indexOf('awaitFormResends += 1;')).toBeLessThan(
-      reminder.indexOf('sendNodeEmail'),
+    expect(at(reminder, 'awaitFormResends += 1;')).toBeLessThan(
+      at(reminder, 'sendNodeEmail'),
     );
   });
 
   it('still registers once, outside the loop, and clears once after', () => {
     const lines = reminder.split('\n');
-    const loop = lines.findIndex((line) => line.includes('for (;;) {'));
+    const loop = atLine(lines, 'for (;;) {');
     const end = lines.findIndex((line) => line.trim() === '}');
 
-    expect(lines.findIndex((line) => line.includes('.register'))).toBeLessThan(
-      loop,
-    );
-    expect(lines.findIndex((line) => line.includes('.clear'))).toBeGreaterThan(
-      end,
-    );
+    expect(atLine(lines, '.register')).toBeLessThan(loop);
+    expect(atLine(lines, '.clear')).toBeGreaterThan(end);
   });
 });
 
@@ -1541,13 +1559,16 @@ describe('the order the statements of a wait come in', () => {
     // agree with itself while the run parked before
     // it had written the row that wakes it.
     const shape = shapeOf(compile(fixture('form_intake')));
-    const at = (needle: string): number =>
-      shape.findIndex((line) => line.includes(needle));
 
-    expect(at('registerWaitCorrelation')).toBeGreaterThanOrEqual(0);
-    expect(at('registerWaitCorrelation')).toBeLessThan(at('DBOS.recv'));
-    expect(at('DBOS.recv')).toBeLessThan(at('clearWaitCorrelation'));
-    expect(at('clearWaitCorrelation')).toBeLessThan(shape.lastIndexOf('if'));
+    expect(atLine(shape, 'registerWaitCorrelation')).toBeLessThan(
+      atLine(shape, 'DBOS.recv'),
+    );
+    expect(atLine(shape, 'DBOS.recv')).toBeLessThan(
+      atLine(shape, 'clearWaitCorrelation'),
+    );
+    expect(atLine(shape, 'clearWaitCorrelation')).toBeLessThan(
+      shape.lastIndexOf('if'),
+    );
   });
 });
 
