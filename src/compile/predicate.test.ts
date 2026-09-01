@@ -100,6 +100,19 @@ describe('literal', () => {
     expect(literal('a\nb')).toBe("'a\\nb'");
   });
 
+  it('escapes a control character instead of passing it through', () => {
+    // A raw NUL here would still be legal
+    // TypeScript, but it makes git classify the
+    // generated file as binary, so it stops
+    // showing up in diffs and grep skips it.
+    expect(literal(`sub${String.fromCharCode(0)}ject`)).toBe(
+      "'sub\\u0000ject'",
+    );
+    expect(literal(String.fromCharCode(0x1f))).toBe("'\\u001f'");
+    expect(literal(String.fromCharCode(0x7f))).toBe("'\\u007f'");
+    expect(literal(String.fromCharCode(0x9f))).toBe("'\\u009f'");
+  });
+
   it('emits what prettier itself leaves alone', async () => {
     // The table above is the rule as a reader can
     // check it; this is the rule as prettier
@@ -112,6 +125,7 @@ describe('literal', () => {
       'it\'s a "quote" and a "second"',
       'a\\b',
       'a\nb',
+      `sub${String.fromCharCode(0)}ject`,
     ];
 
     for (const text of texts) {

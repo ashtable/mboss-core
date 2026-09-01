@@ -142,7 +142,32 @@ function quote(text: string): string {
     .replaceAll('\r', '\\r')
     .replaceAll('\t', '\\t');
 
-  return `${delimiter}${escaped}${delimiter}`;
+  return `${delimiter}${escapeControls(escaped)}${delimiter}`;
+}
+
+/**
+ * Any control character prettier would otherwise
+ * leave raw, written as a `\uXXXX` escape
+ * instead.
+ *
+ * `\n`/`\r`/`\t` are already gone by the
+ * time this runs, so what is left is the ones
+ * nobody types on purpose. A raw one here would
+ * still be legal TypeScript, but a NUL makes git
+ * classify the generated file as binary — it
+ * stops showing up in diffs and grep skips it,
+ * which is worse than an escape a reader can see.
+ */
+function escapeControls(text: string): string {
+  return [...text]
+    .map((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      const isControl = code < 0x20 || (code >= 0x7f && code <= 0x9f);
+      if (!isControl) return character;
+
+      return `\\u${code.toString(16).padStart(4, '0')}`;
+    })
+    .join('');
 }
 
 function countOf(text: string, character: string): number {
