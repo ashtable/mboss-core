@@ -54,7 +54,8 @@ export type CarriedValue = {
 
 /** What happens when a loop runs out of rounds. */
 export type Exhaustion =
-  { kind: 'abort'; rounds: number; problem: string } | { kind: 'continue' };
+  | { kind: 'abort'; rounds: number; problem: string }
+  | { kind: 'continue'; rounds: number };
 
 /**
  * The cases in the order the author wrote them,
@@ -111,17 +112,26 @@ export function writeBranch(
  * compares that name on replay, so two rounds of
  * one block have to be two different names.
  *
- * `resume` is what tells the two ways out apart.
- * A run that left by an exit set it; a run that
- * fell out of the bottom did not, and that is the
- * case the author asked to abort or to carry on
- * from.
+ * Both shapes run to the same bound. What
+ * `onExhausted` decides is what follows the loop:
+ * a throw, or nothing at all.
+ *
+ * `resume` is what that throw reads. It tells the
+ * two ways out apart — a run that left by an exit
+ * set it; a run that used up its rounds did not,
+ * and that is the case the author asked to abort
+ * on. A loop told to carry on has nothing after it
+ * to ask, so it declares no flag: the run goes on
+ * to whatever came next, which is what carrying on
+ * means.
  */
 export function writeBackEdgeLoop(
   writer: SourceWriter,
   opts: {
     round: string;
-    resume: string;
+    /** Named only where a throw follows the loop
+     *  and has to read it. */
+    resume: string | undefined;
     carried: readonly CarriedValue[];
     workflow: string;
     unreachable: string;
@@ -130,7 +140,9 @@ export function writeBackEdgeLoop(
   },
 ): void {
   writer.line(`let ${opts.round} = 0;`);
-  writer.line(`let ${opts.resume} = false;`);
+  if (opts.resume !== undefined) {
+    writer.line(`let ${opts.resume} = false;`);
+  }
   writeCarried(writer, opts.carried);
   writer.blank();
 
@@ -139,29 +151,23 @@ export function writeBackEdgeLoop(
   writer.blank();
   opts.body();
 
-  // A bound the author asked to abort on is the
-  // loop's own condition. One they asked to carry
-  // on from is folded into the case instead, so
-  // that the last round falls through to whatever
-  // the branch says comes next.
-  writer.close(
-    opts.exhaustion.kind === 'abort'
-      ? `} while (${opts.round} < ${opts.exhaustion.rounds});`
-      : `} while (!${opts.resume});`,
-  );
+  // The bound is the loop's own condition either
+  // way. A case told to carry on when its rounds
+  // run out also carries the bound in its own
+  // predicate, so the last round falls through to
+  // whatever the branch says comes next rather
+  // than to here.
+  writer.close(`} while (${opts.round} < ${opts.exhaustion.rounds});`);
   writer.blank();
 
+  // Only the abort shape has anything to say here.
   if (opts.exhaustion.kind === 'abort') {
     writer.open(`if (!${opts.resume}) {`);
     writeThrow(writer, opts.exhaustion.problem);
     writer.close('}');
-  } else {
-    // Reached only when every way out of the
-    // branch ended the run.
-    writer.line(`if (!${opts.resume}) return;`);
+    writer.blank();
   }
 
-  writer.blank();
   writeCarriedChecks(writer, opts);
 }
 

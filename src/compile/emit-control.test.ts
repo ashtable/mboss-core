@@ -32,6 +32,9 @@ const UNREACHABLE =
   'Unreachable: every route out of the loop that sets resume has ' +
   'already assigned this.';
 
+const FELL_OUT =
+  'Unreachable: every route out of the loop has already assigned this.';
+
 function write(fill: (writer: SourceWriter) => void): string[] {
   const writer = new SourceWriter();
 
@@ -167,28 +170,30 @@ describe('writeBackEdgeLoop', () => {
     const lines = write((writer) => {
       writeBackEdgeLoop(writer, {
         round: 'round',
-        resume: 'resume',
+        resume: undefined,
         carried: [],
         workflow: 'groom_booking',
-        unreachable: UNREACHABLE,
-        exhaustion: { kind: 'continue' },
+        unreachable: FELL_OUT,
+        exhaustion: { kind: 'continue', rounds: 10 },
         body: () => {
           writer.line('work();');
         },
       });
     });
 
+    // The same loop as the abort shape, and
+    // nothing after it. It declares no `resume`
+    // either: the flag exists to tell the throw
+    // whether the run left by an exit, and there
+    // is no throw here to read it.
     expect(lines).toEqual([
       'let round = 0;',
-      'let resume = false;',
       '',
       'do {',
       '  round += 1;',
       '',
       '  work();',
-      '} while (!resume);',
-      '',
-      'if (!resume) return;',
+      '} while (round < 10);',
     ]);
   });
 
@@ -201,18 +206,20 @@ describe('writeBackEdgeLoop', () => {
     const lines = write((writer) => {
       writeBackEdgeLoop(writer, {
         round: 'round',
-        resume: 'resume',
+        resume: undefined,
         carried: CARRIED,
         workflow: 'groom_booking',
-        unreachable: UNREACHABLE,
-        exhaustion: { kind: 'continue' },
+        unreachable: FELL_OUT,
+        exhaustion: { kind: 'continue', rounds: 10 },
         body: () => {
           writer.line('work();');
         },
       });
     });
 
-    expect(lines[2]).toBe('let findSlotCarried: SlotGrid | undefined;');
+    // Straight after `round`, with no `resume`
+    // between them any more.
+    expect(lines[1]).toBe('let findSlotCarried: SlotGrid | undefined;');
     expect(lines).toContain('if (findSlotCarried === undefined) {');
     expect(lines.at(-2)).toBe(
       "  throw new Error('groom_booking: find_slot produced no result.');",
@@ -357,10 +364,22 @@ describe('a loop drawn as a wire back, told to carry on', () => {
     );
   });
 
-  it('repeats until something leaves, and never throws', () => {
-    expect(source).toContain('} while (!resume);');
-    expect(source).toContain('if (!resume) return;');
+  it('runs to the same bound as the abort shape, and never throws', () => {
+    expect(source).toContain('} while (round < 10);');
     expect(source).not.toContain('repeated 10 times');
+  });
+
+  it('carries no resume flag, because nothing after the loop reads one', () => {
+    // The loop used to close on `!resume` and be
+    // followed by `if (!resume) return;` under a
+    // comment claiming that line was reached when
+    // every way out of the branch ended the run.
+    // Those ways out return from inside the body
+    // and never reach it, and `while (!resume)`
+    // lets nothing past with the flag false — so
+    // the guard was dead, and with it gone the
+    // flag had no reader at all.
+    expect(source).not.toContain('resume');
   });
 
   it('still checks the value it carried out', () => {

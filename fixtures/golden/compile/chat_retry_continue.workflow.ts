@@ -29,7 +29,6 @@ async function chatRetryContinueFn(evt: WebhookEvent): Promise<void> {
   });
 
   let round = 0;
-  let resume = false;
   let findSlotCarried: SlotGrid | undefined;
 
   do {
@@ -48,7 +47,6 @@ async function chatRetryContinueFn(evt: WebhookEvent): Promise<void> {
     findSlotCarried = findSlotOut;
 
     if (findSlotOut.requestedSlotFree === true) {
-      resume = true;
       break;
     }
 
@@ -79,21 +77,18 @@ async function chatRetryContinueFn(evt: WebhookEvent): Promise<void> {
     }
 
     if (readReplyOut.intent === 'book') {
-      resume = true;
       break;
     }
 
     return;
-  } while (!resume);
-
-  if (!resume) return;
+  } while (round < 10);
 
   if (findSlotCarried === undefined) {
-    // Unreachable: every way out of the loop that
-    // sets resume has already assigned this. The
-    // check is here because the type says so and
-    // a cast would be a lie about which of the
-    // two is authoritative.
+    // Unreachable: every way out of the loop has
+    // already assigned this. The check is here
+    // because the type says so and a cast would
+    // be a lie about which of the two is
+    // authoritative.
     throw new Error('chat_retry_continue: find_slot produced no result.');
   }
 

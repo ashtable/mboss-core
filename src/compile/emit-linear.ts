@@ -184,7 +184,7 @@ class Emitter {
    */
   readonly #open: {
     round: string;
-    resume: string;
+    resume: string | undefined;
     foldTo: number | undefined;
   }[] = [];
 
@@ -538,15 +538,21 @@ class Emitter {
         return true;
 
       case 'leave': {
+        // Only a loop with a throw after it
+        // declares the flag, and only that throw
+        // reads it.
+        //
         // A way out of a loop only exists inside
-        // one. Naming the flag anyway, rather than
-        // guarding a state the plan cannot
-        // produce, means a mistake here reaches
-        // the type-check gate as an undeclared
-        // name rather than as quietly wrong code.
-        const resume = this.#open.at(-1)?.resume ?? 'resume';
+        // one. Naming a flag anyway where no loop
+        // is open, rather than guarding a state
+        // the plan cannot produce, means a mistake
+        // here reaches the type-check gate as an
+        // undeclared name rather than as quietly
+        // wrong code.
+        const loop = this.#open.at(-1);
+        const resume = loop === undefined ? 'resume' : loop.resume;
 
-        this.#body.line(`${resume} = true;`);
+        if (resume !== undefined) this.#body.line(`${resume} = true;`);
         this.#body.line('break;');
         return true;
       }
@@ -598,9 +604,9 @@ class Emitter {
 
   #emitRepeat(item: Extract<PlanItem, { kind: 'repeat' }>): void {
     const round = this.#locals.take('round');
-    const resume = this.#locals.take('resume');
-    const carried = this.#hoist(item.carried);
     const abort = item.onExhausted === 'abort';
+    const resume = abort ? this.#locals.take('resume') : undefined;
+    const carried = this.#hoist(item.carried);
 
     writeBackEdgeLoop(this.#body, {
       round,
@@ -608,9 +614,10 @@ class Emitter {
       carried,
       workflow: this.#ir.name,
       unreachable:
-        `Unreachable: every way out of the loop that sets ${resume} has ` +
-        'already assigned this. The check is here because the type says ' +
-        'so and a cast would be a lie about which of the two is ' +
+        `Unreachable: every way out of the loop ${
+          resume === undefined ? '' : `that sets ${resume} `
+        }has already assigned this. The check is here because the type ` +
+        'says so and a cast would be a lie about which of the two is ' +
         'authoritative.',
       exhaustion: abort
         ? {
@@ -620,7 +627,7 @@ class Emitter {
               `${item.branch.id}: ${item.port} repeated ${item.rounds} ` +
               `times without a result.`,
           }
-        : { kind: 'continue' },
+        : { kind: 'continue', rounds: item.rounds },
       body: () => {
         this.#rounds.push(round);
         this.#open.push({
