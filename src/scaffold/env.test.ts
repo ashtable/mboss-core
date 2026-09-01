@@ -168,6 +168,25 @@ describe('the real file', () => {
   });
 });
 
+describe('the deploy command in the README', () => {
+  it('sets exactly the variables the app cannot run without', () => {
+    // The README section exists to stop a
+    // deployment that comes up and dies naming
+    // variables nobody was told to set. Derived
+    // from the schema rather than listed, so a
+    // variable that quietly becomes required fails
+    // here instead of in somebody's first deploy.
+    expect(setNamesIn(contentsOf('README.md'))).toEqual(requiredKeys());
+  });
+});
+
+/** The variables the README's deploy block sets. */
+function setNamesIn(text: string): string[] {
+  return [...text.matchAll(/--set ([A-Z][A-Z0-9_]*)=/g)]
+    .map((match) => match[1] ?? '')
+    .sort();
+}
+
 /**
  * Which variables the schema refuses to do
  * without: drop one from a working environment and

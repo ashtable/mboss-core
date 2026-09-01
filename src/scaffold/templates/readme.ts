@@ -6,8 +6,8 @@
  * outcome: `railway domain`, without which a
  * healthy deployed service has no address;
  * `railway variables`, without which it boots with
- * none of its configuration and dies naming eight
- * missing variables; and `npm install` before the
+ * none of its configuration and dies naming every
+ * variable it needs; and `npm install` before the
  * first compose build, because the Dockerfile
  * copies a lock file that npm has to write first.
  */
@@ -61,6 +61,7 @@ railway variables \\
   --set DATABASE_URL=... \\
   --set DBOS_SYSTEM_DATABASE_URL=... \\
   --set APP_BASE_URL=https://your-domain \\
+  --set APP_NAME=... \\
   --set LINK_KEYS=... \\
   --set EVENTS_SECRET=... \\
   --set MAIL_FROM=... \\

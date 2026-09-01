@@ -47,6 +47,7 @@ railway variables \
   --set DATABASE_URL=... \
   --set DBOS_SYSTEM_DATABASE_URL=... \
   --set APP_BASE_URL=https://your-domain \
+  --set APP_NAME=... \
   --set LINK_KEYS=... \
   --set EVENTS_SECRET=... \
   --set MAIL_FROM=... \
