@@ -251,6 +251,11 @@ describe('compileRegistry', () => {
       { name: 'a_first', title: 'A', scheduled: false },
     ]);
 
+    // Checked present first: `indexOf` answers -1
+    // for a name that is not there, and -1 is
+    // below every real index.
+    expect(source).toContain('a_first');
+    expect(source).toContain('b_second');
     expect(source.indexOf('a_first')).toBeLessThan(source.indexOf('b_second'));
   });
 });
@@ -327,6 +332,9 @@ describe('compileProject', () => {
     );
     expect(registry).toContain('  nightlySweep.schedule,');
     expect(registry).toContain("    name: 'nightly_sweep',");
+    // The one place a workflow's human title
+    // crosses from its document into emitted code.
+    expect(registry).toContain("    title: 'Nightly sweep',");
   });
 
   it('writes one file per workflow, plus the registry', async () => {
@@ -345,6 +353,15 @@ describe('compileProject', () => {
       ],
       removed: [],
     });
+
+    // These documents carry no title, and a
+    // registry entry has to have one: the name is
+    // the only answer there is.
+    const registry = await read(
+      join(project.projectDir, 'src/workflows/index.ts'),
+      'utf8',
+    );
+    expect(registry).toContain("    title: 'first_flow',");
   });
 
   it('regenerates byte for byte', async () => {

@@ -212,6 +212,23 @@ describe('a scaffolded project with three workflows applied', () => {
     ]);
   });
 
+  it('carries each document title into the registry, not the slug', async () => {
+    // The titles are what a person reads, and this
+    // is the only place one crosses from a workflow
+    // document into emitted code. Every other
+    // assertion about the registry here is about a
+    // name, which is what a broken derivation would
+    // produce anyway.
+    const registry = await readFile(
+      join(project.projectDir, 'src', 'workflows', 'index.ts'),
+      'utf8',
+    );
+
+    expect(registry).toContain("    title: 'Expense approval',");
+    expect(registry).toContain("    title: 'Intake form',");
+    expect(registry).toContain("    title: 'Groom booking',");
+  });
+
   it.each(WORKFLOWS)('opens %s with the do-not-edit header', async (name) => {
     const source = await readFile(
       join(project.projectDir, 'src', 'workflows', `${name}.workflow.ts`),
