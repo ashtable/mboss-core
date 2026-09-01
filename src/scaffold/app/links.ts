@@ -21,11 +21,15 @@ import { mintLink, type LinkKeyRing } from './signed-links.js';
 
 /**
  * The longest a form link lasts, whatever the wait
- * it opens is configured for. A wait can be set to
- * a year; a credential sitting in an inbox for a
- * year, with nothing that can revoke it, is a
- * different proposition from one that expires
- * while the person is still likely to act on it.
+ * it opens is configured for.
+ *
+ * A credential sitting in an inbox for a year,
+ * with nothing that can revoke it, is a different
+ * proposition from one that expires while the
+ * person is still likely to act on it. mBoss
+ * refuses to compile a wait longer than this, so
+ * nothing it generates reaches the clamp below —
+ * that one is here for a caller of your own.
  */
 export const FORM_LINK_MAX_SECONDS = 2592000;
 

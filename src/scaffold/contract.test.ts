@@ -4,8 +4,11 @@ import { join } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { FORM_LINK_MAX_SECONDS } from '../app-contract/limits.js';
 import { RUNTIME } from '../app-contract/runtime.js';
 import { specifiersOf } from '../test-support/specifiers.js';
+
+import { FORM_LINK_MAX_SECONDS as RUNTIME_FORM_LINK_MAX_SECONDS } from './app/links.js';
 
 /**
  * The compiler's idea of the runtime, checked
@@ -81,6 +84,18 @@ const MODULES = Object.entries(RUNTIME);
 const written = MODULES.filter(([, entry]) =>
   existsSync(fileFor(entry.specifier)),
 );
+
+describe('the link cap both halves know', () => {
+  it('is the same number in the contract and in the runtime', () => {
+    // The compiler refuses a wait longer than this
+    // and the runtime clamps a link to it. Two
+    // copies that drifted apart would put the
+    // compiler back to emitting a lifetime the
+    // runtime silently refuses, which is what the
+    // refusal exists to stop.
+    expect(FORM_LINK_MAX_SECONDS).toBe(RUNTIME_FORM_LINK_MAX_SECONDS);
+  });
+});
 
 describe('the runtime table against the runtime', () => {
   it('has every module the table names, so none is checked vacuously', () => {

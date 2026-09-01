@@ -1,3 +1,4 @@
+import { FORM_LINK_MAX_SECONDS } from '../app-contract/limits.js';
 import type { LibManifest } from '../manifest/index.js';
 import type {
   FormField,
@@ -103,6 +104,9 @@ const SECONDS_PER_DAY = 86400;
  * it opens.
  */
 const DEFAULT_WAIT_DAYS = 7;
+
+/** The link cap, in days, for a message about it. */
+const FORM_LINK_MAX_DAYS = FORM_LINK_MAX_SECONDS / SECONDS_PER_DAY;
 
 /**
  * How many reminders a wait sends when the author
@@ -1005,6 +1009,8 @@ class Emitter {
     const resend = this.#resend(node);
     const days = config.timeoutDays ?? DEFAULT_WAIT_DAYS;
 
+    if (config.source.kind === 'form') this.#refuseLongerThanLink(node, days);
+
     this.#want(waitsImport('registerWaitCorrelation'));
     this.#want(waitsImport('clearWaitCorrelation'));
 
@@ -1279,6 +1285,31 @@ class Emitter {
     ]);
   }
 
+  /**
+   * Refuses a wait a link could not stay open for.
+   *
+   * A form or approval is asked by a link minted
+   * for that one wait, and the runtime caps how
+   * long one of those lasts however long the wait
+   * is. Emitting a longer wait writes two numbers
+   * that disagree: the person's only way in dies
+   * at the cap, the run sleeps on, and the message
+   * it finally aborts with names a number that was
+   * never true. Better to say so while there is
+   * still somebody looking at the drawing.
+   */
+  #refuseLongerThanLink(node: WorkflowNode, days: number): void {
+    if (days <= FORM_LINK_MAX_DAYS) return;
+
+    throw new UnsupportedIR(
+      `this waits ${days} days for an answer, and the link that asks ` +
+        `for it lasts ${FORM_LINK_MAX_DAYS} days at most — the only way ` +
+        `in would die while the run was still waiting. Set the wait to ` +
+        `${FORM_LINK_MAX_DAYS} days or fewer.`,
+      node.id,
+    );
+  }
+
   /** How long the link into a wait outlives its
    *  sending, which is as long as the wait runs. */
   #waitSeconds(waitId: string): number {
@@ -1408,6 +1439,9 @@ class Emitter {
 
     const config = node.config;
     const days = config.timeoutDays ?? DEFAULT_WAIT_DAYS;
+
+    this.#refuseLongerThanLink(node, days);
+
     const seconds = days * SECONDS_PER_DAY;
     const local = this.#local(node);
 

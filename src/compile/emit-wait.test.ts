@@ -1550,6 +1550,70 @@ describe('an approval beside the three blocks it is sugar for', () => {
   });
 });
 
+/**
+ * A wait longer than the link that opens it.
+ *
+ * A form or approval link is minted for one wait
+ * and the runtime caps how long one lasts, however
+ * long the wait it opens is. A longer wait would
+ * emit two numbers that disagree: the person's only
+ * way in dies, the run sleeps on, and the message
+ * it finally aborts with names a number that was
+ * never true.
+ */
+describe('a wait that would outlive the link that opens it', () => {
+  function waitingDays(
+    name: string,
+    nodeId: string,
+    timeoutDays: number,
+  ): WorkflowIR {
+    const ir = fixture(name);
+
+    return WorkflowIRSchema.parse({
+      ...ir,
+      nodes: ir.nodes.map((node) =>
+        node.id === nodeId
+          ? { ...node, config: { ...node.config, timeoutDays } }
+          : node,
+      ),
+    });
+  }
+
+  it('refuses a form wait set past the cap', () => {
+    const result = refuse(waitingDays('form_intake', 'await_details', 45));
+
+    expect(result.reason).toBe('UNSUPPORTED');
+    if (result.reason !== 'UNSUPPORTED') return;
+    expect(result.nodeId).toBe('await_details');
+    expect(result.message).toContain('45');
+    expect(result.message).toContain('30');
+  });
+
+  it('refuses an approval set past it the same way', () => {
+    const result = refuse(waitingDays('approval_flow', 'manager_ok', 60));
+
+    expect(result.reason).toBe('UNSUPPORTED');
+    if (result.reason !== 'UNSUPPORTED') return;
+    expect(result.nodeId).toBe('manager_ok');
+    expect(result.message).toContain('60');
+  });
+
+  it('takes one set exactly at the cap, and both numbers agree', () => {
+    const written_ = compile(waitingDays('form_intake', 'await_details', 30));
+
+    expect(written_).toContain('expiresInSeconds: 2592000,');
+    expect(written_).toContain('timeoutSeconds: 2592000,');
+  });
+
+  it('leaves an event wait alone, because nobody was sent a link', () => {
+    // Its way back in is the provider's webhook,
+    // which does not expire.
+    const written_ = compile(waitingDays('groom_booking', 'await_reply', 400));
+
+    expect(written_).toContain('timeoutSeconds: 34560000,');
+  });
+});
+
 describe('the order the statements of a wait come in', () => {
   it('registers, parks, clears, then asks — read off the parse tree', () => {
     // Read off the statements rather than searched
