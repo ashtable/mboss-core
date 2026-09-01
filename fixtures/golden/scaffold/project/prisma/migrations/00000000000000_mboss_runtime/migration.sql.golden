@@ -1,0 +1,17 @@
+-- CreateSchema
+CREATE SCHEMA IF NOT EXISTS "public";
+
+-- CreateTable
+CREATE TABLE "mboss_wait_correlations" (
+    "runId" TEXT NOT NULL,
+    "nodeId" TEXT NOT NULL,
+    "topic" TEXT NOT NULL,
+    "key" TEXT NOT NULL,
+    "park" TEXT NOT NULL,
+
+    CONSTRAINT "mboss_wait_correlations_pkey" PRIMARY KEY ("runId","nodeId")
+);
+
+-- CreateIndex
+CREATE INDEX "mboss_wait_correlations_topic_key_idx"
+    ON "mboss_wait_correlations"("topic", "key");

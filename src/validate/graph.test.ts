@@ -4,7 +4,14 @@ import { WorkflowIRSchema, type WorkflowIR } from '../ir/index.js';
 import { readFixtureJson } from '../test-support/fixtures.js';
 import { makeIR } from '../test-support/ir.js';
 
-import { buildGraph, dominators, isDag, reachableFrom } from './graph.js';
+import {
+  buildGraph,
+  dominators,
+  isDag,
+  joinOf,
+  reachableFrom,
+  topologicalOrder,
+} from './graph.js';
 
 function groomBooking(): WorkflowIR {
   return WorkflowIRSchema.parse(
@@ -140,5 +147,136 @@ describe('dominators', () => {
     const doms = dominators(buildGraph(groomBooking()), 'booking_requested');
 
     expect(doms.get('find_slot')?.has('reply_decision')).toBe(false);
+  });
+});
+
+describe('topologicalOrder', () => {
+  it('puts every node after the ones a run reaches it through', () => {
+    const order = topologicalOrder(
+      buildGraph(groomBooking()),
+      'booking_requested',
+    );
+
+    expect(order).toEqual([
+      'booking_requested',
+      'parse_request',
+      'find_slot',
+      'slot_open',
+      'twilio_chat',
+      'await_reply',
+      'reply_decision',
+      'book_appointment',
+      'record_booking',
+      'send_confirmation',
+    ]);
+  });
+
+  it('holds the join back until both arms have been placed', () => {
+    // Both arms are ready at once, so this also
+    // pins how a tie is broken: the order the
+    // document lists its nodes in. Two arms that
+    // could be placed either way have to be placed
+    // the same way twice, or the join a branch
+    // compiles to would move between runs.
+    expect(topologicalOrder(buildGraph(diamond()), 'a')).toEqual([
+      'a',
+      'b',
+      'c',
+      'd',
+    ]);
+  });
+
+  it('leaves out what the root cannot reach', () => {
+    expect(topologicalOrder(buildGraph(chainWithIsland()), 'a')).toEqual([
+      'a',
+      'b',
+      'c',
+    ]);
+  });
+});
+
+/**
+ * Two arms that split and meet again, with a third
+ * that stops where it is. The terminal arm is the
+ * canonical workflow's shape: a branch port with no
+ * edge at all ends the run, and nothing
+ * post-dominates it.
+ */
+function branchWithTerminalArm(): WorkflowIR {
+  return makeIR({
+    nodes: [
+      { id: 'start' },
+      {
+        id: 'pick',
+        kind: 'branch',
+        config: {
+          cases: [
+            { port: 'yes', when: { path: 'a', op: 'exists' } },
+            { port: 'maybe', when: { path: 'b', op: 'exists' } },
+          ],
+          elsePort: 'stop',
+        },
+      },
+      { id: 'x' },
+      { id: 'y' },
+      { id: 'join' },
+    ],
+    edges: [
+      { from: 'start', to: 'pick' },
+      { from: 'pick', port: 'yes', to: 'x' },
+      { from: 'pick', port: 'maybe', to: 'y' },
+      { from: 'x', to: 'join' },
+      { from: 'y', to: 'join' },
+    ],
+  });
+}
+
+describe('joinOf', () => {
+  it('finds where the arms of the canonical branch meet again', () => {
+    // The `yes` arm reaches `book_appointment`
+    // directly and the `no` arm reaches it the long
+    // way round, so that is where the two meet.
+    expect(joinOf(buildGraph(groomBooking()), 'slot_open')).toBe(
+      'book_appointment',
+    );
+  });
+
+  it('still finds the join when one arm ends where it is', () => {
+    expect(joinOf(buildGraph(branchWithTerminalArm()), 'pick')).toBe('join');
+  });
+
+  it('finds nothing when the arms never meet', () => {
+    const ir = makeIR({
+      nodes: [
+        { id: 'start' },
+        {
+          id: 'pick',
+          kind: 'branch',
+          config: {
+            cases: [{ port: 'yes', when: { path: 'a', op: 'exists' } }],
+            elsePort: 'no',
+          },
+        },
+        { id: 'x' },
+        { id: 'y' },
+      ],
+      edges: [
+        { from: 'start', to: 'pick' },
+        { from: 'pick', port: 'yes', to: 'x' },
+        { from: 'pick', port: 'no', to: 'y' },
+      ],
+    });
+
+    expect(joinOf(buildGraph(ir), 'pick')).toBeUndefined();
+  });
+
+  it('ignores the loop-closing arm, which goes back rather than on', () => {
+    // `reply_decision` leaves by a back edge, by an
+    // edge to the join and by a port with no edge
+    // at all. Only one arm goes forward, so there
+    // is nowhere two of them meet.
+    expect(
+      joinOf(buildGraph(groomBooking()), 'reply_decision'),
+    ).toBeUndefined();
   });
 });

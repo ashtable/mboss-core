@@ -1,0 +1,13 @@
+# The mBoss MCP server goes here
+
+`.mcp.json` in the project root registers an MCP server at
+`.mboss/mcp/server.js`. That file is not here yet, and until it is the
+server will not connect — a coding agent reports it as failed rather than
+as missing, which is a confusing way to find out.
+
+The bundle is built and shipped by the mBoss VS Code extension. Install the
+extension and reopen this project, or copy `server.js` and `VERSION` here
+out of an mBoss release.
+
+The two skill slots — `.mboss/skills/mboss/` and `.claude/skills/mboss/` —
+are filled from the same place and are empty for the same reason.

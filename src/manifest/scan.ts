@@ -17,7 +17,13 @@ import {
 } from 'ts-morph';
 
 import { readLibSources, sourceHashOf, toPosix } from './hash.js';
-import type { LibFunction, LibManifest, ManifestError } from './types.js';
+import { nonSerializableMembers } from './serializable.js';
+import type {
+  LibFunction,
+  LibManifest,
+  ManifestError,
+  NonSerializable,
+} from './types.js';
 
 /**
  * Where Node's global declarations are read from.
@@ -86,6 +92,7 @@ export function scanLib(libDir: string): LibManifest {
 
   const functions: LibFunction[] = [];
   const typeSources = new Map<string, string>();
+  const nonSerializable: NonSerializable[] = [];
 
   for (const file of scanned) {
     const rel = relativeTo(projectDir, file);
@@ -95,11 +102,30 @@ export function scanLib(libDir: string): LibManifest {
       if (entry) functions.push(entry);
     }
 
+    // Classes are here beside interfaces and
+    // aliases because a node may declare one as
+    // its input or output, and because a class
+    // instance is the one shape whose methods are
+    // lost on the way between two blocks — a fault
+    // nothing could report about a type the canvas
+    // was never offered.
     for (const declaration of [
       ...file.getInterfaces(),
       ...file.getTypeAliases(),
+      ...file.getClasses(),
     ]) {
-      if (declaration.isExported()) typeSources.set(declaration.getName(), rel);
+      const name = declaration.getName();
+
+      // A class exported as the default has no name
+      // at the import site, so it is no more usable
+      // as a declared type than a default-exported
+      // function is as a handler.
+      if (name === undefined || !declaration.isExported()) continue;
+
+      typeSources.set(name, rel);
+      nonSerializable.push(
+        ...nonSerializableMembers(name, declaration.getType()),
+      );
     }
   }
 
@@ -109,8 +135,21 @@ export function scanLib(libDir: string): LibManifest {
     functions,
     types: [...typeSources.keys()].sort(),
     typeSources: Object.fromEntries([...typeSources].sort()),
+    nonSerializable: nonSerializable.sort(byTypeThenPath),
     errors: errorsOf(project.getPreEmitDiagnostics(), projectDir),
   };
+}
+
+/**
+ * Findings sort by the type they are about and
+ * then by where in it they are, so a manifest does
+ * not change merely because two files were read in
+ * a different order.
+ */
+function byTypeThenPath(a: NonSerializable, b: NonSerializable): number {
+  if (a.type !== b.type) return a.type < b.type ? -1 : 1;
+
+  return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
 }
 
 /**

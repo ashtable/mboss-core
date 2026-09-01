@@ -38,6 +38,12 @@ export type EdgeSpec = {
 };
 
 export function makeIR(parts: {
+  /** Defaults to `test_workflow`. Named when the
+   *  document's own name is what the test is
+   *  about — a compiled file carries it in its
+   *  header, its function and its registration. */
+  name?: string;
+  title?: string;
   nodes?: readonly NodeSpec[];
   edges?: readonly EdgeSpec[];
 }): WorkflowIR {
@@ -60,7 +66,8 @@ export function makeIR(parts: {
     $schema: 'https://mboss.dev/schemas/workflow-v1.json',
     version: 1,
     revision: 1,
-    name: 'test_workflow',
+    name: parts.name ?? 'test_workflow',
+    ...(parts.title === undefined ? {} : { title: parts.title }),
     nodes,
     edges,
   });

@@ -100,6 +100,27 @@ describe('loadOrScan', () => {
     expect(calls()).toBe(1);
   });
 
+  it('rescans a cache written before the shape gained a field', () => {
+    // This is what an upgrade looks like from
+    // disk: a cache that is entirely well formed
+    // and merely older. It is rejected on shape
+    // rather than on a version number, which is
+    // why no version number is written.
+    const { scan, calls } = countingScan();
+
+    loadOrScan(projectDir, { scan });
+
+    const stale = JSON.parse(readFileSync(cachePath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    delete stale['nonSerializable'];
+    writeFileSync(cachePath, JSON.stringify(stale));
+
+    expect(loadOrScan(projectDir, { scan }).nonSerializable).toEqual([]);
+    expect(calls()).toBe(2);
+  });
+
   /**
    * Git does not track an empty directory and the
    * scaffold writes a file per handler-bearing

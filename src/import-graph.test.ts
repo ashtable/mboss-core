@@ -1,57 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 
-import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { specifiersOf } from './test-support/specifiers.js';
+
 const SRC = import.meta.dirname;
-
-/**
- * Every module specifier in one file: static
- * imports, type-only imports, `export … from`,
- * `import(…)` and `require(…)`. A regex over the
- * source would be fooled by a string literal and
- * would miss the last two, so this uses the
- * compiler's own parser.
- */
-function specifiersOf(source: string): string[] {
-  const file = ts.createSourceFile(
-    'm.ts',
-    source,
-    ts.ScriptTarget.ES2022,
-    true,
-  );
-  const found: string[] = [];
-
-  const visit = (node: ts.Node): void => {
-    if (
-      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      found.push(node.moduleSpecifier.text);
-    }
-    if (
-      ts.isImportEqualsDeclaration(node) &&
-      ts.isExternalModuleReference(node.moduleReference) &&
-      ts.isStringLiteral(node.moduleReference.expression)
-    ) {
-      found.push(node.moduleReference.expression.text);
-    }
-    if (ts.isCallExpression(node)) {
-      const isRequire =
-        ts.isIdentifier(node.expression) && node.expression.text === 'require';
-      const isDynamic = node.expression.kind === ts.SyntaxKind.ImportKeyword;
-      const [arg] = node.arguments;
-      if ((isRequire || isDynamic) && arg && ts.isStringLiteral(arg))
-        found.push(arg.text);
-    }
-    ts.forEachChild(node, visit);
-  };
-
-  visit(file);
-  return found;
-}
 
 /**
  * Resolves an ESM-style relative specifier
@@ -155,23 +109,91 @@ describe.each(SUBPATHS)('the $name import graph', ({ name, external }) => {
   });
 });
 
-describe('the walker', () => {
-  it('finds every form of import, which is what makes the assertions above trustworthy', () => {
-    const fixture = [
-      "import a from 'static-import';",
-      "import type { B } from 'type-only-import';",
-      "export * from 'export-star';",
-      "const c = await import('dynamic-import');",
-      "const d = require('require-call');",
-      "const notAnImport = 'this is only a string literal';",
-    ].join('\n');
+/**
+ * The scaffold's own graph.
+ *
+ * It ships a runtime tree — express, the DBOS SDK,
+ * a Prisma client — and it must never *import*
+ * one. Those files are read off disk with
+ * `readFileSync`, so that nesting this library
+ * costs a consumer nothing but what it already
+ * pays for. An ordinary import would put all three
+ * packages into the type graph of every repo that
+ * uses the barrel.
+ */
+describe('the scaffold import graph', () => {
+  const dir = join(SRC, 'scaffold');
+  const entry = join(dir, 'index.ts');
 
-    expect(specifiersOf(fixture).sort()).toEqual([
-      'dynamic-import',
-      'export-star',
-      'require-call',
-      'static-import',
-      'type-only-import',
-    ]);
+  it('never imports the runtime tree it copies', () => {
+    const { visited } = walk(entry, dir);
+    const runtime = visited.filter(
+      (file) =>
+        file.startsWith(join(dir, 'app') + sep) ||
+        file.startsWith(join(dir, 'workflows') + sep),
+    );
+
+    expect(visited.length).toBeGreaterThan(1);
+    expect(runtime).toEqual([]);
+  });
+
+  it('keeps the packages that runtime needs out of its own surface', () => {
+    const { external } = walk(entry, dir);
+
+    // Non-vacuous: the scaffold does reach for
+    // the filesystem, which is how it reads the
+    // tree rather than importing it.
+    expect(external).toContain('node:fs');
+    for (const name of [
+      'express',
+      'pg',
+      'dotenv',
+      '@dbos-inc/dbos-sdk',
+      '@dbos-inc/prisma-datasource',
+      '@prisma/client',
+      '@prisma/adapter-pg',
+    ]) {
+      expect(external).not.toContain(name);
+    }
+  });
+});
+
+/**
+ * The compiler's own graph.
+ *
+ * `src/compile/` is shipped source that the MCP
+ * server and the extension consume, so it may not
+ * reach for a devDependency: it parses and
+ * type-checks with the compiler ts-morph bundles,
+ * which is an ordinary runtime dependency. It also
+ * emits imports of the DBOS SDK, Express and a
+ * Prisma client without importing any of them — a
+ * generated project needs those, and a library
+ * that nests this one does not.
+ */
+describe('the compiler import graph', () => {
+  const dir = join(SRC, 'compile');
+  const entry = join(dir, 'index.ts');
+
+  it('parses with the compiler ts-morph brings, not the devDependency', () => {
+    const { external, visited } = walk(entry, dir);
+
+    expect(visited.length).toBeGreaterThan(1);
+    expect(external).toContain('ts-morph');
+    expect(external).not.toContain('typescript');
+  });
+
+  it('imports none of the packages it emits imports of', () => {
+    const { external } = walk(entry, dir);
+
+    for (const name of [
+      'express',
+      'prettier',
+      '@dbos-inc/dbos-sdk',
+      '@dbos-inc/prisma-datasource',
+      '@prisma/client',
+    ]) {
+      expect(external).not.toContain(name);
+    }
   });
 });

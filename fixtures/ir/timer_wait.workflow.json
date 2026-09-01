@@ -1,0 +1,22 @@
+{
+  "$schema": "https://mboss.dev/schemas/workflow-v1.json",
+  "version": 1,
+  "revision": 1,
+  "name": "timer_wait",
+  "title": "Settle before recording",
+  "nodes": [
+    { "id": "booking_placed", "kind": "trigger", "title": "Booking placed",
+      "config": { "mode": "event", "topic": "booking.placed" },
+      "out": "Booking" },
+    { "id": "settle_delay", "kind": "durableWait", "title": "Let it settle",
+      "config": { "source": { "kind": "timer", "seconds": 900 },
+        "onTimeout": "abort" } },
+    { "id": "record_booking", "kind": "transaction", "title": "Record booking",
+      "handler": { "export": "recordBooking" }, "in": "Booking", "out": "Booking",
+      "config": {} }
+  ],
+  "edges": [
+    { "id": "e1", "from": { "node": "booking_placed", "port": "out" }, "to": { "node": "settle_delay" }, "type": "Booking" },
+    { "id": "e2", "from": { "node": "settle_delay", "port": "out" }, "to": { "node": "record_booking" }, "type": "Booking" }
+  ]
+}

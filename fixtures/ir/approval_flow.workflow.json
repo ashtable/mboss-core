@@ -1,0 +1,37 @@
+{
+  "$schema": "https://mboss.dev/schemas/workflow-v1.json",
+  "version": 1,
+  "revision": 1,
+  "name": "approval_flow",
+  "title": "Expense approval",
+  "nodes": [
+    { "id": "claim_filed", "kind": "trigger", "title": "Claim filed",
+      "config": { "mode": "event", "topic": "expense.filed",
+        "idempotencyKeyPath": "claimId", "requesterEmailPath": "submitter.email" },
+      "out": "ExpenseClaim" },
+    { "id": "manager_ok", "kind": "approval", "title": "Manager decides",
+      "config": { "to": "ops@example.com", "subject": "Approve this expense",
+        "message": "Please take a look when you can.", "timeoutDays": 4 } },
+    { "id": "pay_claim", "kind": "step", "title": "Pay the claim",
+      "handler": { "export": "payClaim" }, "in": "ExpenseClaim", "out": "Payment",
+      "config": {} },
+    { "id": "send_receipt", "kind": "emailSend", "title": "Send the receipt",
+      "in": "Payment",
+      "config": { "to": "requestingUser", "subject": "Your expense was paid",
+        "bodyMarkdown": "The receipt is attached below.",
+        "attach": { "type": "artifactLink", "artifactPath": "receiptKey" } } },
+    { "id": "file_refusal", "kind": "step", "title": "File the refusal",
+      "handler": { "export": "fileRefusal" }, "in": "ExpenseClaim", "out": "Refusal",
+      "config": {} },
+    { "id": "close_claim", "kind": "step", "title": "Close the claim",
+      "handler": { "export": "closeClaim" }, "config": {} }
+  ],
+  "edges": [
+    { "id": "e1", "from": { "node": "claim_filed", "port": "out" }, "to": { "node": "manager_ok" }, "type": "ExpenseClaim" },
+    { "id": "e2", "from": { "node": "manager_ok", "port": "approved" }, "to": { "node": "pay_claim" }, "type": "ExpenseClaim" },
+    { "id": "e3", "from": { "node": "pay_claim", "port": "out" }, "to": { "node": "send_receipt" }, "type": "Payment" },
+    { "id": "e4", "from": { "node": "send_receipt", "port": "out" }, "to": { "node": "close_claim" } },
+    { "id": "e5", "from": { "node": "manager_ok", "port": "rejected" }, "to": { "node": "file_refusal" }, "type": "ExpenseClaim" },
+    { "id": "e6", "from": { "node": "file_refusal", "port": "out" }, "to": { "node": "close_claim" } }
+  ]
+}

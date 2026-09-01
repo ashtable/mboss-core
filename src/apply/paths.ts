@@ -98,6 +98,36 @@ export function historyFile(
 }
 
 /**
+ * The MCP bundle a consumer drops in. `mboss-core`
+ * cannot produce those bytes — they are built in
+ * the MCP server's own CI and shipped inside the
+ * extension — so a fresh project gets the
+ * directory and a note saying where the bundle
+ * comes from.
+ */
+export function mcpDir(mbossDir: string): string {
+  return join(mbossDir, 'mcp');
+}
+
+/**
+ * The agent-skills slot beside it, filled from the
+ * same place and empty until then.
+ */
+export function skillsDir(mbossDir: string): string {
+  return join(mbossDir, 'skills');
+}
+
+/**
+ * The code-behind conventions, written once when
+ * the project is created. It is the project's own
+ * document from then on, so nothing regenerates
+ * it.
+ */
+export function conventionsFile(mbossDir: string): string {
+  return join(mbossDir, 'conventions.md');
+}
+
+/**
  * The derived `/lib` manifest cache. Gitignored: it
  * is a cache of the code beside it.
  */

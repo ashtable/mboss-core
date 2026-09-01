@@ -1,0 +1,151 @@
+import prettier from 'prettier';
+import { describe, expect, it } from 'vitest';
+
+import { PredicateSchema, type Predicate } from '../ir/index.js';
+
+import { literal, pathExpression, predicateExpression } from './predicate.js';
+import { UnsupportedIR } from './unsupported.js';
+
+function predicate(parts: {
+  path: string;
+  op: Predicate['op'];
+  value?: unknown;
+}): Predicate {
+  return PredicateSchema.parse(parts);
+}
+
+describe('pathExpression', () => {
+  it('reads a single field off the root binding', () => {
+    expect(pathExpression('evt', 'requestId')).toBe('evt.requestId');
+  });
+
+  it('chains optionally below the root, never on it', () => {
+    // The root is the local the value was just
+    // bound to, so it is there. Everything under
+    // it came out of a payload somebody else sent.
+    expect(pathExpression('evt', 'customer.email')).toBe('evt.customer?.email');
+    expect(pathExpression('evt', 'a.b.c')).toBe('evt.a?.b?.c');
+  });
+
+  it('refuses a path that is not a series of identifiers', () => {
+    expect(() => pathExpression('evt', 'items[0]')).toThrow(UnsupportedIR);
+    expect(() => pathExpression('evt', 'a..b')).toThrow(UnsupportedIR);
+    expect(() => pathExpression('evt', '')).toThrow(UnsupportedIR);
+    expect(() => pathExpression('evt', '2fast')).toThrow(UnsupportedIR);
+  });
+
+  it('says what it could not compile', () => {
+    expect(() => pathExpression('evt', 'items[0]')).toThrow(/items\[0\]/);
+  });
+});
+
+describe('predicateExpression', () => {
+  it('compiles every operator the catalog has', () => {
+    const cases: [Predicate, string][] = [
+      [
+        predicate({ path: 'requestedSlotFree', op: 'eq', value: true }),
+        'gridOut.requestedSlotFree === true',
+      ],
+      [
+        predicate({ path: 'intent', op: 'neq', value: 'cancel' }),
+        "gridOut.intent !== 'cancel'",
+      ],
+      [predicate({ path: 'total', op: 'gt', value: 10 }), 'gridOut.total > 10'],
+      [
+        predicate({ path: 'total', op: 'gte', value: 10 }),
+        'gridOut.total >= 10',
+      ],
+      [predicate({ path: 'total', op: 'lt', value: 10 }), 'gridOut.total < 10'],
+      [
+        predicate({ path: 'total', op: 'lte', value: 10 }),
+        'gridOut.total <= 10',
+      ],
+      [
+        predicate({ path: 'customer.email', op: 'exists' }),
+        'gridOut.customer?.email !== undefined && ' +
+          'gridOut.customer?.email !== null',
+      ],
+      [
+        predicate({ path: 'alternatives', op: 'nonempty' }),
+        '(gridOut.alternatives?.length ?? 0) > 0',
+      ],
+    ];
+
+    for (const [input, expected] of cases) {
+      expect(predicateExpression('gridOut', input)).toBe(expected);
+    }
+  });
+
+  it('refuses a comparison against something that is not one value', () => {
+    expect(() =>
+      predicateExpression(
+        'gridOut',
+        predicate({ path: 'a', op: 'eq', value: { b: 1 } }),
+      ),
+    ).toThrow(UnsupportedIR);
+  });
+});
+
+describe('literal', () => {
+  it('writes strings the way prettier would', () => {
+    // The emitted file has to survive a
+    // prettier-idempotence check, and prettier
+    // picks whichever quote the text needs fewer
+    // escapes for, keeping single ones on a tie.
+    expect(literal('book')).toBe("'book'");
+    expect(literal("it's")).toBe('"it\'s"');
+    expect(literal('say "hi"')).toBe('\'say "hi"\'');
+    expect(literal('it\'s a "quote"')).toBe("'it\\'s a \"quote\"'");
+    expect(literal('a\\b')).toBe("'a\\\\b'");
+    expect(literal('a\nb')).toBe("'a\\nb'");
+  });
+
+  it('escapes a control character instead of passing it through', () => {
+    // A raw NUL here would still be legal
+    // TypeScript, but it makes git classify the
+    // generated file as binary, so it stops
+    // showing up in diffs and grep skips it.
+    expect(literal(`sub${String.fromCharCode(0)}ject`)).toBe(
+      "'sub\\u0000ject'",
+    );
+    expect(literal(String.fromCharCode(0x1f))).toBe("'\\u001f'");
+    expect(literal(String.fromCharCode(0x7f))).toBe("'\\u007f'");
+    expect(literal(String.fromCharCode(0x9f))).toBe("'\\u009f'");
+  });
+
+  it('emits what prettier itself leaves alone', async () => {
+    // The table above is the rule as a reader can
+    // check it; this is the rule as prettier
+    // actually applies it. An apostrophe in an
+    // email subject is the case that reaches here.
+    const texts = [
+      'book',
+      "We'd like a few details",
+      'say "hi"',
+      'it\'s a "quote" and a "second"',
+      'a\\b',
+      'a\nb',
+      `sub${String.fromCharCode(0)}ject`,
+    ];
+
+    for (const text of texts) {
+      const line = `const a = ${literal(text)};\n`;
+
+      expect(
+        await prettier.format(line, {
+          parser: 'typescript',
+          singleQuote: true,
+          semi: true,
+          printWidth: 80,
+        }),
+      ).toBe(line);
+    }
+  });
+
+  it('writes the other scalars as themselves', () => {
+    expect(literal(1)).toBe('1');
+    expect(literal(true)).toBe('true');
+    expect(literal(null)).toBe('null');
+    expect(literal(undefined)).toBe('undefined');
+  });
+});

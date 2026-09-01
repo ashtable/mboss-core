@@ -1,0 +1,9 @@
+# The image installs its own dependencies and
+# runs its own migrations at start, so the build
+# context carries source and nothing else.
+node_modules
+coverage
+.git
+.env
+*.tsbuildinfo
+.DS_Store

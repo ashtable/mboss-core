@@ -1,0 +1,7 @@
+node_modules
+coverage
+
+# Compiler-owned and compared byte for byte. A
+# reformat here would make the next generation
+# produce a diff that is not a change.
+src/workflows

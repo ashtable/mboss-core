@@ -24,13 +24,14 @@ import { RULES } from './rules.js';
  * in rule order.
  *
  * The `/lib` manifest is optional. Without it the
- * two rules that name it still do the work that
- * needs no manifest — an edge type is compared
- * against what its ends declare, a handler is
- * checked for being present — because validation
- * runs in tools that never scan a project, and a
- * document should not look clean merely because
- * nothing was there to check it.
+ * rules that name it still do the work that needs
+ * no manifest — an edge type is compared against
+ * what its ends declare, a handler is checked for
+ * being present — because validation runs in tools
+ * that never scan a project, and a document should
+ * not look clean merely because nothing was there
+ * to check it. The two rules that read only the
+ * scan report nothing at all.
  */
 export function validateWorkflow(
   ir: WorkflowIR,

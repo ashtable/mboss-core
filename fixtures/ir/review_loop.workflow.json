@@ -1,0 +1,26 @@
+{
+  "$schema": "https://mboss.dev/schemas/workflow-v1.json",
+  "version": 1,
+  "revision": 1,
+  "name": "review_loop",
+  "title": "Review rounds",
+  "nodes": [
+    { "id": "review_started", "kind": "trigger", "title": "Review started",
+      "config": { "mode": "event", "topic": "review.started" }, "out": "BookingReq" },
+    { "id": "draft_rounds", "kind": "loop", "title": "Draft and check",
+      "config": { "minRounds": 2, "maxRounds": 4, "body": ["find_slot", "twilio_chat"],
+        "models": { "drafter": "gloo/one", "reviewer": "gloo/two" } } },
+    { "id": "find_slot", "kind": "step", "title": "Find open slot",
+      "handler": { "export": "findSlot" }, "in": "BookingReq", "out": "SlotGrid", "config": {} },
+    { "id": "twilio_chat", "kind": "step", "title": "Text the customer",
+      "handler": { "export": "twilioChat" }, "in": "SlotGrid", "out": "ChatPrompt", "config": {} },
+    { "id": "read_reply", "kind": "step", "title": "Read the reply",
+      "handler": { "export": "readReply" }, "in": "ChatPrompt", "out": "ChatReply", "config": {} }
+  ],
+  "edges": [
+    { "id": "e1", "from": { "node": "review_started", "port": "out" }, "to": { "node": "draft_rounds" }, "type": "BookingReq" },
+    { "id": "e2", "from": { "node": "draft_rounds", "port": "out" }, "to": { "node": "find_slot" }, "type": "BookingReq" },
+    { "id": "e3", "from": { "node": "find_slot", "port": "out" }, "to": { "node": "twilio_chat" }, "type": "SlotGrid" },
+    { "id": "e4", "from": { "node": "twilio_chat", "port": "out" }, "to": { "node": "read_reply" }, "type": "ChatPrompt" }
+  ]
+}

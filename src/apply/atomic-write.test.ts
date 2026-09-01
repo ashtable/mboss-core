@@ -4,6 +4,7 @@ import {
   readdir,
   readFile,
   rm,
+  stat,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -46,6 +47,27 @@ describe('writeFileAtomic', () => {
 
     expect(await readFile(path, 'utf8')).toBe('new');
     expect(await readdir(dir)).toEqual([basename(path)]);
+  });
+
+  it('never creates the temp sibling more openly than asked', async () => {
+    // The scaffold writes `.env` — a signing ring
+    // and a shared secret — through here. Setting
+    // the mode after the rename would leave both
+    // the temp file and, for an instant, the file
+    // itself at the default 0644, which on a
+    // shared host is the whole exposure.
+    const secret = join(dir, 'secret.env');
+    let temp = 0;
+
+    await writeFileAtomic(secret, 'EVENTS_SECRET="s"\n', {
+      mode: 0o600,
+      beforeRename: async (tempPath) => {
+        temp = (await stat(tempPath)).mode & 0o777;
+      },
+    });
+
+    expect(temp).toBe(0o600);
+    expect((await stat(secret)).mode & 0o777).toBe(0o600);
   });
 
   it('creates a file that was not there before', async () => {

@@ -11,7 +11,13 @@
     "noEmit": true,
     "skipLibCheck": true,
     "isolatedModules": true,
+    "erasableSyntaxOnly": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "vitest.config.ts", "eslint.config.mjs"]
+  "include": [
+    "src",
+    "prisma.config.ts",
+    "vitest.config.ts",
+    "eslint.config.mjs"
+  ]
 }

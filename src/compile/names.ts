@@ -1,0 +1,158 @@
+/**
+ * What generated code calls things.
+ *
+ * Three separate jobs live here because all three
+ * have to agree with each other: the identifier a
+ * workflow function is exported under, the local a
+ * node's result is bound to, and the name a step
+ * is recorded under. The last of those is not
+ * cosmetic — DBOS compares the recorded name at
+ * each function id when it replays a run, and a
+ * name that moves turns every recovery into an
+ * error days after the change that caused it.
+ */
+
+/**
+ * `groom_booking` becomes `groomBooking`. Only the
+ * identifier changes: the name a workflow
+ * registers under stays the snake_case IR name,
+ * because that is the spelling the ingress route
+ * and anything enqueuing by name already knows.
+ */
+export function camelCase(name: string): string {
+  return name
+    .split('_')
+    .filter(Boolean)
+    .map((word, index) =>
+      index === 0 ? word : `${word.charAt(0).toUpperCase()}${word.slice(1)}`,
+    )
+    .join('');
+}
+
+/**
+ * Every binding a generated workflow body holds,
+ * so no two of them can be the same word.
+ *
+ * The reserved set starts with the imports, since
+ * a local named after the handler it calls would
+ * shadow it — the call would then be a recursive
+ * reference to a `const` in its own initialiser,
+ * which is a runtime error rather than a compile
+ * one.
+ */
+export class LocalNames {
+  readonly #taken: Set<string>;
+  readonly #byNode = new Map<string, string>();
+
+  constructor(reserved: readonly string[]) {
+    this.#taken = new Set(reserved);
+  }
+
+  /** The local a node's result is bound to. */
+  forNode(nodeId: string): string {
+    const existing = this.#byNode.get(nodeId);
+    if (existing !== undefined) return existing;
+
+    const name = this.take(`${camelCase(nodeId)}Out`);
+    this.#byNode.set(nodeId, name);
+
+    return name;
+  }
+
+  /**
+   * Whether a name is already spoken for.
+   *
+   * Asked before a handler is imported: the file
+   * declares the workflow under the camelCase of
+   * its own name, and one file cannot both import
+   * and declare a single identifier.
+   */
+  has(name: string): boolean {
+    return this.#taken.has(name);
+  }
+
+  /**
+   * A temporary, under the name asked for when it
+   * is free and a numbered one when it is not.
+   */
+  take(preferred: string): string {
+    if (!this.#taken.has(preferred)) {
+      this.#taken.add(preferred);
+      return preferred;
+    }
+
+    for (let suffix = 2; ; suffix += 1) {
+      const candidate = `${preferred}${suffix}`;
+
+      if (!this.#taken.has(candidate)) {
+        this.#taken.add(candidate);
+        return candidate;
+      }
+    }
+  }
+}
+
+/**
+ * One enclosing region of a step, as it appears in
+ * the step's recorded name.
+ *
+ * Every variable named here is derived from
+ * checkpointed control flow — a loop counter, a
+ * chunk offset — and never from a clock or a
+ * random value, which is what makes the name the
+ * same on a replay as it was on the first run.
+ */
+export type StepSegment =
+  | { kind: 'round'; name: string }
+  | { kind: 'item' }
+  /** The row that says which run is parked here. */
+  | { kind: 'register' }
+  /** Deleting that row once the run wakes. */
+  | { kind: 'clear' }
+  /** The mail an approval asks its question in. */
+  | { kind: 'ask' }
+  /** One reminder, counted so two are two names. */
+  | { kind: 'resend'; counter: string };
+
+/**
+ * The source text of a step's `name` option: a
+ * plain string when the step runs once, a template
+ * literal when it runs inside a region that
+ * numbers it.
+ */
+export function stepNameLiteral(
+  nodeId: string,
+  segments: readonly StepSegment[],
+): string {
+  const tail = segments.map(segmentText).join('');
+  const name = `${nodeId}${tail}`;
+
+  // Quoted rather than a template unless something
+  // in it is filled in at run time: prettier
+  // rewrites a template with no holes back to a
+  // plain string, and the emitted file has to
+  // already be formatted.
+  return tail.includes('${') ? `\`${name}\`` : `'${name}'`;
+}
+
+function segmentText(segment: StepSegment): string {
+  switch (segment.kind) {
+    case 'round':
+      return `.r\${${segment.name}}`;
+
+    case 'item':
+      return '[${offset + index}]';
+
+    case 'register':
+      return '.register';
+
+    case 'clear':
+      return '.clear';
+
+    case 'ask':
+      return '.ask';
+
+    case 'resend':
+      return `.resend.\${${segment.counter}}`;
+  }
+}
