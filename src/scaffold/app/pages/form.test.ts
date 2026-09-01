@@ -178,6 +178,17 @@ describe('a form with no object store behind it', () => {
     expect(fieldBlock(page, 'docs')).not.toContain('disabled');
   });
 
+  it('does not ask for a control the browser will not validate', () => {
+    // `docs` is required, and the enabled page says
+    // so. A disabled control is barred from
+    // constraint validation and is not posted at
+    // all, so the same attribute here would be
+    // inert markup reading as a demand this page
+    // never makes.
+    expect(fieldBlock(disabled, 'docs')).not.toContain('required');
+    expect(fieldBlock(page, 'docs')).toContain('required');
+  });
+
   it('says plainly why, in one sentence', () => {
     expect(disabled).toContain(
       'File uploads are switched off: this app has no object store ' +

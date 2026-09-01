@@ -175,9 +175,16 @@ function control(field: EmailFormField, uploadsEnabled: boolean): string {
             `${field.multiple ? ' multiple' : ''}${required}>` +
             `</div>`
         : // No `required` on a control nobody can
-          // fill in: the form would refuse to
-          // submit at all, which is a worse answer
-          // than an upload this app cannot take.
+          // fill in. A disabled control is barred
+          // from constraint validation and is not
+          // posted at all, so the attribute would
+          // be inert — markup that reads as a
+          // demand this page never makes. Hiding
+          // the field would be the opposite
+          // mistake: a hidden control still
+          // validates, which is why the conditional
+          // ones are disabled and not merely
+          // hidden.
           `<div class="drop off">` +
             `<input type="file" id="f-${id}" name="${id}" disabled>` +
             `<p class="note">${escapeHtml(NO_UPLOADS)}</p>` +

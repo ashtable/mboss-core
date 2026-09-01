@@ -10,10 +10,12 @@ import ts from 'typescript';
  * every registered datasource before it dispatches
  * recovery; and the HTTP listener must come after
  * launch, because the ingress route calls
- * `DBOS.startWorkflow` and that throws until
- * launch resolves. A request arriving in the boot
- * window is the failure, and it is invisible to a
- * type-check, to a lint and to a golden.
+ * `DBOS.startWorkflow`, which throws until launch
+ * is under way and then runs against an executor
+ * launch has not finished initialising. A request
+ * arriving anywhere in that window is the failure,
+ * and it is invisible to a type-check, to a lint
+ * and to a golden.
  *
  * Reading calls rather than statements is what
  * makes this survive reformatting and the ordinary
@@ -96,8 +98,9 @@ export function callsInOrder(source: string): BootCall[] {
  * recovery replays a workflow against a table that
  * was not there. A listener opened before launch
  * resolves accepts exactly the requests that arrive
- * during a deploy, and each one throws inside
- * `DBOS.startWorkflow` rather than anywhere a
+ * during a deploy, and each one either throws
+ * inside `DBOS.startWorkflow` or reaches a
+ * half-initialised executor — never anywhere a
  * reader would look.
  *
  * A dropped `await` on either of the first two is

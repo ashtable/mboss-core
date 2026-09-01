@@ -34,12 +34,17 @@ import { findWaitCorrelation, parkOf } from './waits.js';
  * and a recovered run reaches for that table
  * immediately.
  *
- * The listener comes last. The ingress route
- * starts workflows, and starting one throws until
- * launch has resolved — so a server that bound
- * earlier would fail exactly the requests that
- * arrive during a deployment, which are the ones
- * nobody is watching.
+ * The listener comes last, and the `await` in
+ * front of `launch` is part of that. The ingress
+ * route starts workflows; `DBOS.startWorkflow`
+ * throws only until launch is under way, because
+ * the flag it checks is set early — before launch
+ * has initialised its datasources or its executor.
+ * So a server bound before the await fails exactly
+ * the requests that arrive during a deployment,
+ * first with that throw and then, for the rest of
+ * launch, against an executor that is not ready,
+ * which fails less legibly than the throw.
  *
  * No queue is registered. Fan-out in a generated
  * workflow is a chunked `Promise.allSettled`
