@@ -1991,8 +1991,25 @@ class Emitter {
  */
 const APPROVAL_REPLY = '{ approved: boolean }';
 
-/** The table every wait on a person registers in. */
-const FORM_TOPIC = 'form';
+/**
+ * The topic every wait on a person registers
+ * under.
+ *
+ * Namespaced, because the other kind of wait
+ * registers under whatever topic its author typed,
+ * and both write into one `(topic, key)` table
+ * that the ingress route resolves by that pair
+ * alone — no column says which mechanism wrote the
+ * row. A bare `form` is a plausible name for a
+ * webhook from a forms provider, and an author who
+ * chose it would have deliveries land on runs
+ * parked on a page, waking them with a payload of
+ * the wrong shape whenever the correlation value
+ * matched a wait's node id. A prefix nobody types
+ * by accident costs one string and no rule the
+ * author has to learn.
+ */
+const FORM_TOPIC = 'mboss.form';
 
 function waitsImport(name: string): ImportEntry {
   return { specifier: '../app/waits.js', name, type: false };

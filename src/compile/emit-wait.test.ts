@@ -632,6 +632,18 @@ function fixture(name: string): WorkflowIR {
 }
 
 /** A trigger every small document below starts at. */
+/**
+ * The topic a form wait registers under, read out
+ * of the registration the emitter wrote.
+ */
+function formTopicOf(written: string): string {
+  const registration = /nodeId: 'await_details',\n\s*topic: '([^']+)'/.exec(
+    written,
+  );
+
+  return registration?.[1] ?? '';
+}
+
 const CLAIM_FILED: NodeSpec = {
   id: 'claim_filed',
   kind: 'trigger',
@@ -661,8 +673,10 @@ describe('a wait for a form', () => {
     // One mechanism for both sources rather than a
     // second one invented for forms: every run
     // waiting on this node registers the same key,
-    // and the form link carries the run.
-    expect(written_).toContain("topic: 'form',");
+    // and the form link carries the run. The topic
+    // is namespaced because the other source's is
+    // whatever its author typed.
+    expect(written_).toContain("topic: 'mboss.form',");
     expect(written_).toContain("key: 'await_details',");
   });
 
@@ -810,6 +824,60 @@ describe('a wait that names no limit of its own', () => {
 
     expect(written_).toContain('// Seven days, as seconds.');
     expect(prose).toContain('This wait set no limit of its own');
+  });
+});
+
+describe('an event wait that claims the name forms register under', () => {
+  const written_ = compile(
+    makeIR({
+      name: 'topic_clash',
+      nodes: [
+        CLAIM_FILED,
+        {
+          id: 'await_decision',
+          kind: 'durableWait',
+          title: 'Wait for a decision',
+          out: 'ExpenseClaim',
+          config: {
+            source: {
+              kind: 'event',
+              // A forms provider's webhook, named
+              // the obvious thing. `topic` is a
+              // plain string in the schema, so
+              // nothing stops an author writing
+              // this.
+              topic: 'form',
+              correlationPath: 'claimId',
+              correlateWith: 'claimId',
+            },
+            onTimeout: 'abort',
+          },
+        },
+      ],
+      edges: [
+        { from: 'claim_filed', to: 'await_decision', type: 'ExpenseClaim' },
+      ],
+    }),
+  );
+
+  it('keeps the topic the author asked for', () => {
+    expect(written_).toContain("topic: 'form',");
+    expect(written_).toContain(
+      "{ nodeId: 'await_decision', topic: 'form', " +
+        "correlationPath: 'claimId' },",
+    );
+  });
+
+  it('does not land in the namespace every form wait registers in', () => {
+    // Both kinds write into one (topic, key) table
+    // and the ingress route resolves a delivery by
+    // that pair alone — no column says which
+    // mechanism wrote the row. So a form wait
+    // registering under a bare `form` would put a
+    // webhook payload on a run parked on a page,
+    // whenever the correlation value happened to
+    // equal a wait's node id.
+    expect(formTopicOf(compile(fixture('form_intake')))).not.toBe('form');
   });
 });
 

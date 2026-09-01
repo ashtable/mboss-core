@@ -93,7 +93,7 @@ async function formIntakeFn(evt: IntakeRequest): Promise<void> {
       registerWaitCorrelation({
         runId,
         nodeId: 'await_details',
-        topic: 'form',
+        topic: 'mboss.form',
         key: 'await_details',
       }),
     {

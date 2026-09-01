@@ -62,7 +62,7 @@ async function approvalFlowFn(evt: ExpenseClaim): Promise<void> {
       registerWaitCorrelation({
         runId,
         nodeId: 'manager_ok',
-        topic: 'form',
+        topic: 'mboss.form',
         key: 'manager_ok',
       }),
     {
