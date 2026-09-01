@@ -125,6 +125,18 @@ describe('every emitted file', () => {
     },
   );
 
+  it('keeps it at the widest name the schema allows', () => {
+    // The name is interpolated into emitted prose,
+    // so `my_app` is the one input that proves
+    // nothing: six characters leave room in a
+    // sentence that forty-one do not.
+    const widest = scaffoldFiles({ ...OPTIONS, name: 'a'.repeat(41) });
+
+    for (const file of widest) {
+      expectHouseStyle(file.contents, file.path);
+    }
+  });
+
   it.each(FILES.map((file) => file.path))('%s ends in a newline', (path) => {
     const contents = contentsOf(path);
 

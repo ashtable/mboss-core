@@ -1,8 +1,8 @@
-# Code-behind conventions
+# Code-behind conventions for my_app
 
-How my_app is put together, and the handful of rules a handler in `lib/`
-has to follow. mBoss wrote this file once, when the project was created. It
-is yours now; nothing regenerates it.
+The handful of rules a handler in `lib/` has to follow. mBoss wrote this
+file once, when the project was created. It is yours now; nothing
+regenerates it.
 
 ## Who owns which directory
 

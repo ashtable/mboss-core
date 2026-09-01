@@ -17,11 +17,11 @@
  * settings have no compiled effect yet.
  */
 export function conventions(name: string): string {
-  return `# Code-behind conventions
+  return `# Code-behind conventions for ${name}
 
-How ${name} is put together, and the handful of rules a handler in \`lib/\`
-has to follow. mBoss wrote this file once, when the project was created. It
-is yours now; nothing regenerates it.
+The handful of rules a handler in \`lib/\` has to follow. mBoss wrote this
+file once, when the project was created. It is yours now; nothing
+regenerates it.
 
 ## Who owns which directory
 
