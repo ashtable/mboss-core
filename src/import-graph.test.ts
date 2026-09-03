@@ -159,6 +159,35 @@ describe('the scaffold import graph', () => {
 });
 
 /**
+ * The shared graph edits.
+ *
+ * `src/ir/edit.ts` is the one copy of what it
+ * means to rename, delete, start or rewire a
+ * block, and the extension imports it into a
+ * webview bundle. A relative import that reached
+ * into `apply/` would drag the apply engine — its
+ * locks, its atomic writes, `node:fs` — into that
+ * bundle, so the module takes its document
+ * arguments as structural types and stays inside
+ * `ir/`.
+ */
+describe('the graph edits import graph', () => {
+  const dir = join(SRC, 'ir');
+  const entry = join(dir, 'edit.ts');
+
+  it('reaches nothing a browser cannot have', () => {
+    const { external, visited } = walk(entry, dir);
+
+    expect(visited).toContain(entry);
+    expect(external).toEqual(['zod']);
+  });
+
+  it('never leaves the IR by a relative import', () => {
+    expect(walk(entry, dir).escaped).toEqual([]);
+  });
+});
+
+/**
  * The compiler's own graph.
  *
  * `src/compile/` is shipped source that the MCP

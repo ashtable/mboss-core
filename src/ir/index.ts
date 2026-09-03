@@ -8,6 +8,12 @@
  * downstream parses through these schemas rather
  * than trusting the file, because the file is
  * written by agents as well as by the canvas.
+ *
+ * Beside the schemas are the edits made to a
+ * document. The canvas edits it in every way an
+ * agent does, so renaming a node, deleting one and
+ * starting a new one have one implementation each
+ * and every surface calls it.
  */
 export {
   WorkflowNameSchema,
@@ -44,6 +50,16 @@ export {
   NODE_PALETTE,
 } from './catalog.js';
 export { WorkflowIRSchema } from './workflow.js';
+export {
+  renameNode,
+  deleteNode,
+  nextEdgeId,
+  starterNode,
+  starterId,
+  withDecisionCases,
+  carryPositions,
+  withoutPositions,
+} from './edit.js';
 
 export type {
   Predicate,
