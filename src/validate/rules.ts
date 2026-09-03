@@ -1,5 +1,6 @@
 import {
   portsOf,
+  type BranchCase,
   type NodeKind,
   type Predicate,
   type WorkflowIR,
@@ -15,13 +16,14 @@ import {
   type WorkflowGraph,
 } from './graph.js';
 import {
+  decisionValues,
   handlerFit,
   HANDLER_KINDS,
   type HandlerMisfit,
 } from './handler-fit.js';
 
 /**
- * The thirteen rules, one function each.
+ * The fourteen rules, one function each.
  *
  * They are separate functions rather than one pass
  * because they are read one at a time: a person
@@ -870,6 +872,156 @@ function mismatchMessage(
 }
 
 /**
+ * A branch that runs code has one case per answer
+ * that code can give.
+ *
+ * A branch with a handler is a decision: the
+ * function runs as a step of its own and the cases
+ * match what it returned. So a case here names one
+ * whole answer, where a branch without a handler
+ * reads a field out of the value that reached it.
+ * A case still shaped like a predicate is one
+ * written before the branch was given code, and it
+ * would compile into a test against something the
+ * decision is not.
+ *
+ * With a scan to read, the answers themselves are
+ * known: the function has to decide between values
+ * a case can name, every one of those values needs
+ * a case, and a case naming an answer the function
+ * never gives is a way out no run takes.
+ *
+ * The fall-through port is deliberately not
+ * required to be wired. Cases that cover every
+ * answer leave nothing to fall through to, and the
+ * arm compiles to a `return`, which is the right
+ * thing to do about a value the type said could
+ * not happen.
+ */
+export function v14DecisionBranches(ctx: RuleContext): Diagnostic[] {
+  const found: Diagnostic[] = [];
+
+  for (const node of ctx.ir.nodes) {
+    if (node.kind !== 'branch') continue;
+
+    const handler = node.handler?.export;
+    if (handler === undefined) continue;
+
+    const site = { nodeId: node.id };
+    const fn = ctx.manifest?.functions.find((each) => each.export === handler);
+
+    // No scan, or a handler the scan never saw —
+    // which is V07's finding — leaves the cases to
+    // be read on their own.
+    const answers = fn === undefined ? undefined : decisionValues(fn);
+
+    if (fn !== undefined && answers === undefined) {
+      found.push(
+        diagnostic(
+          'V14',
+          `\`${node.id}\` runs \`${handler}\`, which returns ` +
+            `\`${fn.returnType}\`. A branch's cases match what its code ` +
+            `decided, so that code returns a boolean or one of a set of ` +
+            `strings.`,
+          site,
+        ),
+      );
+    }
+
+    for (const branchCase of node.config.cases) {
+      const problem = decisionCaseProblem(
+        node.id,
+        handler,
+        branchCase,
+        answers,
+      );
+
+      if (problem !== undefined) {
+        found.push(diagnostic('V14', problem, site));
+      }
+    }
+
+    for (const answer of answers ?? []) {
+      // What a case matches is what makes it that
+      // answer's way out. A case reading a path or
+      // comparing with something other than `eq` is
+      // already reported above, and telling an
+      // author to add a second case for the answer
+      // it names would send them the wrong way.
+      const answered = node.config.cases.some(
+        (each) => each.when.value === answer,
+      );
+
+      if (answered) continue;
+
+      found.push(
+        diagnostic(
+          'V14',
+          `\`${handler}\` can decide \`${shown(answer)}\`, and ` +
+            `\`${node.id}\` has no case for it. Add one, so every answer ` +
+            `has a way out.`,
+          site,
+        ),
+      );
+    }
+  }
+
+  return found;
+}
+
+/**
+ * The first thing wrong with one case of a decision
+ * branch, or `undefined`. `answers` is what the
+ * handler decides between, or `undefined` wherever
+ * nothing has read it.
+ */
+function decisionCaseProblem(
+  nodeId: string,
+  handler: string,
+  branchCase: BranchCase,
+  answers: readonly (string | boolean)[] | undefined,
+): string | undefined {
+  const when = branchCase.when;
+
+  if (when.path !== '') {
+    return (
+      `\`${nodeId}\` runs \`${handler}\`, so its cases match what that ` +
+      `decided. The \`${branchCase.port}\` case reads \`${when.path}\` out ` +
+      `of the answer instead.`
+    );
+  }
+
+  if (when.op !== 'eq') {
+    return (
+      `\`${nodeId}\` runs \`${handler}\`, so its cases match one answer ` +
+      `each. The \`${branchCase.port}\` case compares with \`${when.op}\` ` +
+      `instead.`
+    );
+  }
+
+  if (
+    answers !== undefined &&
+    !answers.some((answer) => answer === when.value)
+  ) {
+    return (
+      `\`${nodeId}\` has a case for \`${shown(when.value)}\`, which ` +
+      `\`${handler}\` never decides. It decides ` +
+      `${answers.map((answer) => `\`${shown(answer)}\``).join(', ')}.`
+    );
+  }
+
+  return undefined;
+}
+
+/**
+ * An answer as the document writes it, so a string
+ * reads as a string and `true` as a boolean.
+ */
+function shown(value: unknown): string {
+  return JSON.stringify(value) ?? 'nothing';
+}
+
+/**
  * Every rule, in code order. The order is the
  * order findings come back in, so a document with
  * several problems reports them the same way every
@@ -889,4 +1041,5 @@ export const RULES: readonly Rule[] = [
   v11RequesterAddress,
   v12SerializableTypes,
   v13HandlerSignatures,
+  v14DecisionBranches,
 ];

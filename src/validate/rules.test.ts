@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { WorkflowIRSchema, type WorkflowIR } from '../ir/index.js';
+import {
+  WorkflowIRSchema,
+  type Predicate,
+  type WorkflowIR,
+} from '../ir/index.js';
 import { LibManifestSchema, type LibManifest } from '../manifest/index.js';
 import { readFixtureJson } from '../test-support/fixtures.js';
 import { makeIR, type NodeSpec } from '../test-support/ir.js';
@@ -24,6 +28,7 @@ import {
   v11RequesterAddress,
   v12SerializableTypes,
   v13HandlerSignatures,
+  v14DecisionBranches,
   type RuleContext,
 } from './rules.js';
 
@@ -983,11 +988,221 @@ describe('V13 handler signatures', () => {
   });
 });
 
+describe('V14 decision branches', () => {
+  const manifest = manifestWith({
+    types: ['SlotGrid'],
+    functions: [
+      {
+        export: 'hasMore',
+        file: 'lib/hasMore.ts',
+        params: [],
+        returnType: 'boolean',
+        decision: [true, false],
+      },
+      {
+        export: 'readIntent',
+        file: 'lib/readIntent.ts',
+        params: [],
+        returnType: 'Intent',
+        decision: ['book', 'reschedule'],
+      },
+      {
+        export: 'findSlot',
+        file: 'lib/findSlot.ts',
+        params: [],
+        returnType: 'SlotGrid',
+      },
+    ],
+  });
+
+  /**
+   * A branch running code, with the cases a test
+   * needs it to carry. The fall-through port is
+   * never wired in these documents, which is what a
+   * decision's cases make of it.
+   */
+  function deciding(
+    handler: string,
+    cases: { port: string; when: Predicate }[],
+  ): NodeSpec {
+    return {
+      id: 'decide',
+      kind: 'branch',
+      handler: { export: handler },
+      config: { cases, elsePort: 'else' },
+    };
+  }
+
+  const COUNTER_BRANCH = deciding('hasMore', [
+    { port: 'again', when: { path: '', op: 'eq', value: true } },
+    { port: 'done', when: { path: '', op: 'eq', value: false } },
+  ]);
+
+  it('accepts a branch with one case per answer its handler gives', () => {
+    const ir = makeIR({ nodes: [COUNTER_BRANCH] });
+
+    expect(check(v14DecisionBranches, ir, manifest)).toEqual([]);
+    expect(check(v14DecisionBranches, ir)).toEqual([]);
+  });
+
+  it('says nothing about a branch that runs no code of its own', () => {
+    // Its cases test the value that reached it,
+    // which is what a predicate is for.
+    const ir = makeIR({ nodes: [YES_NO_BRANCH] });
+
+    expect(check(v14DecisionBranches, ir, manifest)).toEqual([]);
+    expect(check(v14DecisionBranches, ir)).toEqual([]);
+  });
+
+  it('rejects a case that reads a path out of the answer', () => {
+    const ir = makeIR({
+      nodes: [
+        deciding('hasMore', [
+          { port: 'again', when: { path: 'ok', op: 'eq', value: true } },
+          { port: 'done', when: { path: '', op: 'eq', value: false } },
+        ]),
+      ],
+    });
+    const found = check(v14DecisionBranches, ir);
+
+    expect(codes(found)).toEqual(['V14']);
+    expect(found[0]?.severity).toBe('error');
+    expect(found[0]?.nodeId).toBe('decide');
+    expect(found[0]?.message).toContain('`ok`');
+
+    // A scan changes nothing about a case shaped
+    // like a predicate: the document says it on its
+    // own.
+    expect(codes(check(v14DecisionBranches, ir, manifest))).toEqual(['V14']);
+  });
+
+  it('rejects a case that compares the answer instead of matching one', () => {
+    const ir = makeIR({
+      nodes: [
+        deciding('readIntent', [
+          { port: 'book', when: { path: '', op: 'neq', value: 'book' } },
+          { port: 'later', when: { path: '', op: 'eq', value: 'reschedule' } },
+        ]),
+      ],
+    });
+    const found = check(v14DecisionBranches, ir);
+
+    expect(codes(found)).toEqual(['V14']);
+    expect(found[0]?.message).toContain('`neq`');
+    expect(codes(check(v14DecisionBranches, ir, manifest))).toEqual(['V14']);
+  });
+
+  it('rejects a handler that decides nothing a case could match', () => {
+    const ir = makeIR({
+      nodes: [
+        deciding('findSlot', [
+          { port: 'again', when: { path: '', op: 'eq', value: true } },
+        ]),
+      ],
+    });
+    const found = check(v14DecisionBranches, ir, manifest);
+
+    expect(codes(found)).toEqual(['V14']);
+    expect(found[0]?.nodeId).toBe('decide');
+    expect(found[0]?.message).toContain('`SlotGrid`');
+
+    // Nothing has read `findSlot` here, and a
+    // document does not look wrong merely because
+    // nothing looked at it.
+    expect(check(v14DecisionBranches, ir)).toEqual([]);
+  });
+
+  it('rejects an answer no case has a way out for', () => {
+    const ir = makeIR({
+      nodes: [
+        deciding('hasMore', [
+          { port: 'again', when: { path: '', op: 'eq', value: true } },
+        ]),
+      ],
+    });
+    const found = check(v14DecisionBranches, ir, manifest);
+
+    expect(codes(found)).toEqual(['V14']);
+    expect(found[0]?.nodeId).toBe('decide');
+    expect(found[0]?.message).toContain('`false`');
+    expect(check(v14DecisionBranches, ir)).toEqual([]);
+  });
+
+  it('rejects a case for an answer the handler never gives', () => {
+    const ir = makeIR({
+      nodes: [
+        deciding('readIntent', [
+          { port: 'book', when: { path: '', op: 'eq', value: 'book' } },
+          { port: 'later', when: { path: '', op: 'eq', value: 'reschedule' } },
+          { port: 'stop', when: { path: '', op: 'eq', value: 'cancel' } },
+        ]),
+      ],
+    });
+    const found = check(v14DecisionBranches, ir, manifest);
+
+    expect(codes(found)).toEqual(['V14']);
+    expect(found[0]?.message).toContain('`"cancel"`');
+    expect(check(v14DecisionBranches, ir)).toEqual([]);
+  });
+
+  it('rejects a case that matches no answer at all', () => {
+    // Legal to write and impossible to take: the
+    // case names nothing for the decision to equal.
+    const ir = makeIR({
+      nodes: [
+        deciding('hasMore', [
+          { port: 'again', when: { path: '', op: 'eq', value: true } },
+          { port: 'done', when: { path: '', op: 'eq' } },
+        ]),
+      ],
+    });
+    const found = check(v14DecisionBranches, ir, manifest);
+
+    expect(codes(found)).toEqual(['V14', 'V14']);
+    expect(found[0]?.message).toContain('`nothing`');
+    expect(found[1]?.message).toContain('`false`');
+  });
+
+  it('says nothing about a handler the scan never saw', () => {
+    // A function that is not there yet is V07's
+    // finding, and one thing to fix rather than two.
+    const ir = makeIR({
+      nodes: [
+        deciding('notThere', [
+          { port: 'again', when: { path: '', op: 'eq', value: true } },
+        ]),
+      ],
+    });
+
+    expect(check(v14DecisionBranches, ir, manifest)).toEqual([]);
+  });
+
+  it('accepts a loop closed on the true case of a decision', () => {
+    // The loop leaves by a case port, which is what
+    // V05 requires and where the compiled loop reads
+    // its bound. The fall-through stays unwired
+    // because the two cases already cover every
+    // answer.
+    const ir = makeIR({
+      nodes: [EVENT_TRIGGER, { id: 'work' }, COUNTER_BRANCH],
+      edges: [
+        { from: 'start', to: 'work' },
+        { from: 'work', to: 'decide' },
+        { from: 'decide', port: 'again', to: 'work', back: true },
+      ],
+    });
+
+    expect(check(v05BackEdges, ir)).toEqual([]);
+    expect(check(v14DecisionBranches, ir, manifest)).toEqual([]);
+  });
+});
+
 describe('the rule list', () => {
-  it('ends with the two rules that read the scan’s structure, in order', () => {
-    expect(RULES.slice(-2)).toEqual([
+  it('ends with the three rules that read what the scan recorded, in order', () => {
+    expect(RULES.slice(-3)).toEqual([
       v12SerializableTypes,
       v13HandlerSignatures,
+      v14DecisionBranches,
     ]);
   });
 });
