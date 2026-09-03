@@ -1,6 +1,5 @@
 import {
   portsOf,
-  TypeNameSchema,
   type NodeKind,
   type Predicate,
   type WorkflowIR,
@@ -15,6 +14,11 @@ import {
   reachableFrom,
   type WorkflowGraph,
 } from './graph.js';
+import {
+  handlerFit,
+  HANDLER_KINDS,
+  type HandlerMisfit,
+} from './handler-fit.js';
 
 /**
  * The thirteen rules, one function each.
@@ -49,10 +53,15 @@ export type Rule = (ctx: RuleContext) => Diagnostic[];
 type TriggerNode = Extract<WorkflowNode, { kind: 'trigger' }>;
 
 /**
- * The kinds that run code of the author's, and so
- * need a handler to name it.
+ * The kinds that are unfinished until a handler
+ * names their code.
+ *
+ * A branch may run code and is deliberately not
+ * here: it tests the value that reached it until
+ * somebody gives it a function of its own, so a
+ * branch with no handler is missing nothing.
  */
-const HANDLER_KINDS: ReadonlySet<NodeKind> = new Set<NodeKind>([
+const NEEDS_HANDLER: ReadonlySet<NodeKind> = new Set<NodeKind>([
   'step',
   'transaction',
   'apiCall',
@@ -407,24 +416,32 @@ export function v06EdgeTypes(ctx: RuleContext): Diagnostic[] {
  * declared types. Compilation is where a missing
  * handler becomes fatal, since there is nothing to
  * call.
+ *
+ * The two findings run over different sets of
+ * kinds. Every kind that can name a function is
+ * held to naming one that exists, a branch
+ * included; only the kinds that are nothing without
+ * code are told they have none yet.
  */
 export function v07Handlers(ctx: RuleContext): Diagnostic[] {
   const found: Diagnostic[] = [];
 
   for (const node of ctx.ir.nodes) {
-    if (!HANDLER_KINDS.has(node.kind)) continue;
-
     const handler = node.handler;
 
     if (handler === undefined) {
-      found.push(
-        diagnostic('V07', `\`${node.id}\` has no handler yet.`, {
-          nodeId: node.id,
-        }),
-      );
+      if (NEEDS_HANDLER.has(node.kind)) {
+        found.push(
+          diagnostic('V07', `\`${node.id}\` has no handler yet.`, {
+            nodeId: node.id,
+          }),
+        );
+      }
+
       continue;
     }
 
+    if (!HANDLER_KINDS.has(node.kind)) continue;
     if (ctx.manifest === undefined) continue;
 
     const exists = ctx.manifest.functions.some(
@@ -774,13 +791,25 @@ export function v12SerializableTypes(ctx: RuleContext): Diagnostic[] {
  * author cannot edit; with it, it is a finding on
  * the block that says it.
  *
+ * The comparison is `handlerFit`'s, so a function
+ * the picker offers is never one this rule then
+ * rejects. Only the two misfits about declared
+ * types are reported. A handler on a kind that
+ * runs none is dropped by the emitter and never
+ * offered in the first place. A return type
+ * nothing can be a case of is about a branch's
+ * cases rather than about a signature. And a
+ * function taking more than one value is already
+ * refused at the picker, at the drop target and by
+ * the generated code's own type-check — saying it
+ * a fourth time, off a cache that may have
+ * recorded nothing about which parameters a call
+ * can leave out, would put an error on a handler
+ * that compiles.
+ *
  * It stays quiet wherever it cannot know: with no
- * scan, with no handler, with a handler the scan
- * never saw — that one is V07's to report — on a
- * node that fans out, where the handler takes one
- * item while the node takes the collection, and
- * wherever the handler's type is written as
- * anything but a plain name.
+ * scan, with no handler, and with a handler the
+ * scan never saw, which is V07's to report.
  */
 export function v13HandlerSignatures(ctx: RuleContext): Diagnostic[] {
   const manifest = ctx.manifest;
@@ -790,35 +819,20 @@ export function v13HandlerSignatures(ctx: RuleContext): Diagnostic[] {
 
   for (const node of ctx.ir.nodes) {
     const handler = node.handler;
-    if (handler === undefined || node.forEach !== undefined) continue;
+    if (handler === undefined) continue;
 
     const fn = manifest.functions.find(
       (each) => each.export === handler.export,
     );
     if (fn === undefined) continue;
 
-    if (disagree(node.in, fn.params[0]?.type)) {
-      found.push(
-        diagnostic(
-          'V13',
-          `\`${node.id}\` takes \`${node.in}\`, but its code-behind ` +
-            `\`${fn.export}\` takes \`${fn.params[0]?.type}\`. The ` +
-            `generated code would hand it the wrong value.`,
-          { nodeId: node.id },
-        ),
-      );
-    }
+    const fit = handlerFit(node, fn);
+    if (fit.fits) continue;
 
-    if (disagree(node.out, fn.returnType)) {
-      found.push(
-        diagnostic(
-          'V13',
-          `\`${node.id}\` produces \`${node.out}\`, but its code-behind ` +
-            `\`${fn.export}\` returns \`${fn.returnType}\`. The generated ` +
-            `code would pass on the wrong value.`,
-          { nodeId: node.id },
-        ),
-      );
+    const message = mismatchMessage(node.id, fn.export, fit.reason);
+
+    if (message !== undefined) {
+      found.push(diagnostic('V13', message, { nodeId: node.id }));
     }
   }
 
@@ -826,20 +840,33 @@ export function v13HandlerSignatures(ctx: RuleContext): Diagnostic[] {
 }
 
 /**
- * Whether two type names contradict each other.
- *
- * Only plain names are compared. A generic, an
- * array or an inline object literal says something
- * the node's own declaration has no way to say
- * back, so a textual comparison there would report
- * a disagreement that is only a difference in
- * notation.
+ * What to tell an author about a misfit, or
+ * `undefined` for the three this rule leaves to
+ * somebody else.
  */
-function disagree(declared: string | undefined, written?: string): boolean {
-  if (declared === undefined || written === undefined) return false;
-  if (!TypeNameSchema.safeParse(written).success) return false;
+function mismatchMessage(
+  nodeId: string,
+  handler: string,
+  reason: HandlerMisfit,
+): string | undefined {
+  switch (reason.kind) {
+    case 'input-mismatch':
+      return (
+        `\`${nodeId}\` takes \`${reason.declared}\`, but its code-behind ` +
+        `\`${handler}\` takes \`${reason.takes}\`. The generated code ` +
+        `would hand it the wrong value.`
+      );
 
-  return declared !== written;
+    case 'output-mismatch':
+      return (
+        `\`${nodeId}\` produces \`${reason.declared}\`, but its code-behind ` +
+        `\`${handler}\` returns \`${reason.returns}\`. The generated code ` +
+        `would pass on the wrong value.`
+      );
+
+    default:
+      return undefined;
+  }
 }
 
 /**

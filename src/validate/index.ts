@@ -82,9 +82,11 @@ export {
   DiagnosticSeveritySchema,
   DiagnosticSchema,
 } from './diagnostic.js';
+export { handlerFit, decisionValues } from './handler-fit.js';
 
 export type {
   Diagnostic,
   DiagnosticCode,
   DiagnosticSeverity,
 } from './diagnostic.js';
+export type { HandlerFit, HandlerMisfit } from './handler-fit.js';

@@ -445,6 +445,35 @@ describe('V07 handlers', () => {
     expect(codes(found)).toEqual(['V07']);
     expect(found[0]?.severity).toBe('warning');
   });
+
+  it('warns about a branch running a function the code-behind does not export', () => {
+    const ir = makeIR({
+      nodes: [{ ...YES_NO_BRANCH, handler: { export: 'checkDone' } }],
+    });
+    const manifest = manifestWith({
+      functions: [
+        {
+          export: 'parseRequest',
+          file: 'lib/parseRequest.ts',
+          params: [],
+          returnType: 'BookingReq',
+        },
+      ],
+    });
+    const found = check(v07Handlers, ir, manifest);
+
+    expect(codes(found)).toEqual(['V07']);
+    expect(found[0]?.nodeId).toBe('decide');
+  });
+
+  it('says nothing about a branch with no handler', () => {
+    // A branch tests the value that reached it
+    // until somebody gives it code of its own, so a
+    // branch without a handler is not missing one.
+    const ir = makeIR({ nodes: [YES_NO_BRANCH] });
+
+    expect(check(v07Handlers, ir, manifestWith({}))).toEqual([]);
+  });
 });
 
 describe('V08 loop bodies', () => {
@@ -806,6 +835,15 @@ describe('V13 handler signatures', () => {
         params: [],
         returnType: 'SlotGrid',
       },
+      {
+        export: 'pairUp',
+        file: 'lib/pairUp.ts',
+        params: [
+          { name: 'req', type: 'BookingReq' },
+          { name: 'grid', type: 'SlotGrid' },
+        ],
+        returnType: 'Booking',
+      },
     ],
   });
 
@@ -914,6 +952,21 @@ describe('V13 handler signatures', () => {
           forEach: { itemsPath: 'items' },
         },
       ],
+    });
+
+    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);
+  });
+
+  it('says nothing about a handler that takes more than one value', () => {
+    // Such a function is greyed in the picker and
+    // refused at the drop target, and the generated
+    // code's own type-check refuses it a third
+    // time. A diagnostic here would be read off a
+    // cache that may not have recorded which
+    // parameters a call may leave out, and would
+    // put an error on a handler that compiles.
+    const ir = makeIR({
+      nodes: [{ id: 'pair_up', in: 'SlotGrid', handler: { export: 'pairUp' } }],
     });
 
     expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);

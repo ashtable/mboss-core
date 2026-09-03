@@ -188,6 +188,32 @@ describe('the graph edits import graph', () => {
 });
 
 /**
+ * The one rule for whether a function fits a node.
+ *
+ * The picker, the drop target and validation all
+ * have to give the same answer, so they all call
+ * `handlerFit` — and the first two run in a webview
+ * bundle. It reads the IR and the manifest's shapes
+ * and nothing else: `manifest/index.ts` would bring
+ * the scan and ts-morph with it, and reaching the
+ * layout module would bring ELK.
+ */
+describe('the handler-fit import graph', () => {
+  const entry = join(SRC, 'validate', 'handler-fit.ts');
+
+  it('reaches nothing a browser cannot have', () => {
+    const { external, visited } = walk(entry, SRC);
+
+    // Non-vacuous: the walk really did read the
+    // module, and really did follow it as far as
+    // the manifest's shapes.
+    expect(visited).toContain(entry);
+    expect(visited).toContain(join(SRC, 'manifest', 'types.ts'));
+    expect(external).toEqual(['zod']);
+  });
+});
+
+/**
  * The compiler's own graph.
  *
  * `src/compile/` is shipped source that the MCP
