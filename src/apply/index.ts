@@ -4,6 +4,7 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import {
   WorkflowIRSchema,
   WorkflowNameSchema,
+  carryPositions,
   type WorkflowIR,
 } from '../ir/index.js';
 import type { LibManifest } from '../manifest/index.js';
@@ -45,10 +46,11 @@ import {
  * write-temp → rename, and inside that lock the
  * revision check means what it says.
  *
- * Nothing here knows about layout. An apply is
- * about what a workflow *is*, and where its blocks
- * sit on a canvas is recomputed by whoever draws
- * it.
+ * Nothing here lays anything out, but a write
+ * does carry the coordinates a person set: an
+ * apply is about what a workflow *is*, and a spec
+ * silent about where a block sits is not asking
+ * for it to move.
  */
 
 /**
@@ -349,9 +351,23 @@ type Edit = {
  * precisely so that the read it is based on
  * happened inside the same critical section as the
  * write.
+ *
+ * The one place positions are carried, because
+ * it is the one place a spec becomes the
+ * document: an agent's write, an approved
+ * proposal and an undo's restore all pass through
+ * here, and none of them is asked to know about
+ * coordinates. `proposeSpec` deliberately does
+ * not carry — a proposal is filed as the agent
+ * wrote it, and the layout it lands in is the one
+ * on disk when it lands.
  */
 async function writeSpec(mbossDir: string, edit: Edit): Promise<ApplyOutcome> {
-  const next = documentFrom(edit.name, edit.spec, edit.current);
+  const next = documentFrom(
+    edit.name,
+    carryPositions(edit.current, edit.spec),
+    edit.current,
+  );
 
   const diagnostics = validateWorkflow(next, { manifest: edit.manifest });
 
