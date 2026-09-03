@@ -496,10 +496,14 @@ const GOLDENS = [
   ['branch_three_ways', fixture('branch_three_ways')],
   ['chat_retry_abort', fixture('chat_retry_abort')],
   ['chat_retry_continue', fixture('chat_retry_continue')],
+  ['decision_three_ways', fixture('decision_three_ways')],
+  ['decision_yes_no', fixture('decision_yes_no')],
   ['form_intake', fixture('form_intake')],
   ['form_retry', fixture('form_retry')],
   ['groom_booking', fixture('groom_booking')],
   ['review_loop', fixture('review_loop')],
+  ['slot_retry_abort', fixture('slot_retry_abort')],
+  ['slot_retry_continue', fixture('slot_retry_continue')],
   ['timer_wait', fixture('timer_wait')],
   ['event_trigger', EVENT_TRIGGER],
   ['manual_trigger', MANUAL_TRIGGER],
@@ -1007,6 +1011,150 @@ describe('a run of nodes behind one condition', () => {
 
     expect(result.nodeId).toBe('sweep_stale');
     expect(result.message).toContain('parse_request');
+  });
+});
+
+/**
+ * A branch carrying a retry policy of its own.
+ *
+ * Every branch on disk leaves the schema's defaults
+ * in place, so this is the only place the decision
+ * step's retry options are measured against
+ * something the author wrote.
+ */
+const DECISION_RETRY = workflow({
+  name: 'decision_retry',
+  nodes: [
+    {
+      id: 'claim_filed',
+      kind: 'trigger',
+      title: 'Claim filed',
+      out: 'ExpenseClaim',
+      config: { mode: 'event', topic: 'expense.filed' },
+    },
+    {
+      id: 'auto_approve',
+      kind: 'branch',
+      title: 'Pay it without asking?',
+      in: 'ExpenseClaim',
+      handler: { export: 'autoApprove' },
+      retry: { maxAttempts: 1 },
+      config: {
+        cases: [
+          { port: 'yes', when: { path: '', op: 'eq', value: true } },
+          { port: 'no', when: { path: '', op: 'eq', value: false } },
+        ],
+        elsePort: 'else',
+      },
+    },
+  ],
+  edges: [{ from: 'claim_filed', to: 'auto_approve', type: 'ExpenseClaim' }],
+});
+
+describe('a branch that runs code of its own', () => {
+  const source = compile(fixture('decision_yes_no'));
+
+  it('runs the handler as a step, into a local named for the block', () => {
+    expect(source).toContain(
+      [
+        '  const autoApproveDecision = await DBOS.runStep(' +
+          'async () => autoApprove(evt), {',
+        "    name: 'auto_approve',",
+        '    retriesAllowed: true,',
+        '    maxAttempts: 3,',
+        '    intervalSeconds: 1,',
+        '    backoffRate: 2,',
+        '  });',
+      ].join('\n'),
+    );
+  });
+
+  it('tests the decision itself, one case at a time', () => {
+    expect(source).toContain('  if (autoApproveDecision === true) {');
+    expect(source).toContain('  } else if (autoApproveDecision === false) {');
+    expect(source).toContain(['  } else {', '    return;', '  }'].join('\n'));
+  });
+
+  it('hands the blocks below the value that was flowing, not the answer', () => {
+    // A branch produces nothing, so a block on
+    // either arm reads whatever reached the branch.
+    expect(source).toContain('async () => payClaim(evt),');
+    expect(source).toContain('async () => fileRefusal(evt),');
+    expect(source).not.toContain('(autoApproveDecision)');
+  });
+
+  it('writes the retry policy the block carries', () => {
+    const source = compile(DECISION_RETRY);
+
+    expect(source).toContain(
+      [
+        '  const autoApproveDecision = await DBOS.runStep(' +
+          'async () => autoApprove(evt), {',
+        "    name: 'auto_approve',",
+        '    retriesAllowed: false,',
+        '  });',
+      ].join('\n'),
+    );
+  });
+});
+
+describe('a branch deciding between three answers', () => {
+  const source = compile(fixture('decision_three_ways'));
+
+  it('chains one case per answer and returns on anything else', () => {
+    expect(source).toContain("  if (routeClaimDecision === 'pay') {");
+    expect(source).toContain("  } else if (routeClaimDecision === 'refuse') {");
+    expect(source).toContain("  } else if (routeClaimDecision === 'hold') {");
+    expect(source).toContain(['  } else {', '    return;', '  }'].join('\n'));
+  });
+});
+
+describe('a loop closed by a decision', () => {
+  const abort = compile(fixture('slot_retry_abort'));
+  const carryOn = compile(fixture('slot_retry_continue'));
+
+  it('records the round in the decision step’s name', () => {
+    // DBOS compares the recorded name at each
+    // function id on replay, so two rounds of one
+    // block have to record two different names.
+    expect(abort).toContain('name: `look_again.r${round}`,');
+    expect(carryOn).toContain('name: `look_again.r${round}`,');
+  });
+
+  it('leaves the bound out of the case that goes round again', () => {
+    // A predicate branch folds the bound into that
+    // case so the last round falls through to the
+    // wired `else`. A decision's fall-through is a
+    // `return`, so folding here would end the run
+    // instead of carrying it on; the `while` is
+    // what bounds the loop.
+    expect(carryOn).toContain(
+      ['    if (lookAgainDecision === true) {', '      continue;'].join('\n'),
+    );
+    expect(carryOn).not.toContain('round < 10 &&');
+    expect(carryOn).toContain('} while (round < 10);');
+  });
+
+  it('carries the run on past the loop when the rounds run out', () => {
+    expect(carryOn).not.toContain('resume');
+    expect(carryOn).toContain('async () => bookAppointment(findSlotCarried),');
+  });
+
+  it('still throws after the loop where the author asked it to', () => {
+    expect(abort).toContain('  if (!resume) {');
+    expect(abort).toContain(
+      "'look_again: again repeated 10 times without a result.'",
+    );
+  });
+
+  it('leaves a predicate branch in a loop folding, as it always did', () => {
+    // The fold is right for a predicate branch and
+    // wrong for a decision, so the two shapes have
+    // to be told apart rather than one rule
+    // replacing the other.
+    expect(compile(fixture('chat_retry_continue'))).toContain(
+      "if (round < 10 && readReplyOut.intent === 'reschedule') {",
+    );
   });
 });
 

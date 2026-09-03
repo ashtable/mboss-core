@@ -41,6 +41,7 @@ function withoutScannedAt(
 describe('scanLib', () => {
   it('offers exactly the handlers the code-behind exports', () => {
     expect(manifest.functions.map((fn) => fn.export).sort()).toEqual([
+      'autoApprove',
       'bookAppointment',
       'closeClaim',
       'confirmSlot',
@@ -51,7 +52,9 @@ describe('scanLib', () => {
       'readReply',
       'recordBooking',
       'recordIntake',
+      'routeClaim',
       'sweepStale',
+      'tryAgain',
       'twilioChat',
     ]);
   });
@@ -116,6 +119,7 @@ describe('scanLib', () => {
       'IntakeRequest',
       'Payment',
       'Refusal',
+      'Routing',
       'SlotGrid',
       'WebhookEvent',
     ]);

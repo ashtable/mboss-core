@@ -5,3 +5,13 @@ coverage
 # reformat here would make the next generation
 # produce a diff that is not a change.
 src/workflows
+
+# Written by mBoss and never by hand: JSON with a
+# stable key order, so a diff in one is a change
+# rather than a reformat. Git ignores all four,
+# and formatting a file nobody may edit would only
+# ever fail the lint.
+.mboss/proposals
+.mboss/history
+.mboss/manifest.json
+.mboss/state.json

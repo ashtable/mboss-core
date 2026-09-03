@@ -465,16 +465,56 @@ class Emitter {
    * A branch, as its cases in the order the author
    * wrote them.
    *
-   * The condition reads the value that was flowing
-   * when the run arrived here, which is the nearest
-   * block above the branch that every run passes
-   * through — a branch itself produces nothing.
+   * A branch with no code of its own reads the
+   * value that was flowing when the run arrived
+   * here, which is the nearest block above it that
+   * every run passes through — a branch itself
+   * produces nothing. A branch with a handler reads
+   * what that handler decided instead.
    */
   #emitBranch(item: Extract<PlanItem, { kind: 'branch' }>): void {
-    const root = this.#valueOf(item.node);
-    if (root === undefined) throw this.#unreachableValue(item.node);
+    const node = item.node;
 
-    this.#writeArms(root, item.arms);
+    if (node.handler !== undefined) {
+      this.#writeArms(this.#emitDecision(node), item.arms, false);
+      return;
+    }
+
+    const root = this.#valueOf(node);
+    if (root === undefined) throw this.#unreachableValue(node);
+
+    this.#writeArms(root, item.arms, true);
+  }
+
+  /**
+   * The handler behind a branch, run as a step,
+   * into the local its cases test.
+   *
+   * It is the author's code and may do anything, so
+   * it runs as a step like every other handler:
+   * recording its round inside a loop and honouring
+   * the retry policy the block carries. The local
+   * is deliberately not put in scope — nothing
+   * downstream may read what a branch decided, and
+   * a block on either arm reads the value that was
+   * flowing when the run arrived.
+   */
+  #emitDecision(node: WorkflowNode): string {
+    const local = this.#locals.take(`${camelCase(node.id)}Decision`);
+    const call = this.#handlerCall(node, this.#valueOf(node));
+
+    expandedCall(
+      this.#body,
+      `const ${local} = await DBOS.runStep`,
+      `async () => ${call}`,
+      [
+        `name: ${stepNameLiteral(node.id, this.#segments([]))},`,
+        ...retryOptions(node.retry),
+      ],
+    );
+    this.#body.blank();
+
+    return local;
   }
 
   /**
@@ -485,14 +525,20 @@ class Emitter {
    * Shared with the approval, whose two ways out
    * are a branch in everything but where the value
    * they test came from.
+   *
+   * `fold` is whether a case that closes a loop may
+   * carry the loop's bound in its own condition,
+   * which `#armCondition` explains.
    */
-  #writeArms(root: string, arms: readonly PlanArm[]): void {
+  #writeArms(root: string, arms: readonly PlanArm[], fold: boolean): void {
     writeBranch(
       this.#body,
       arms.map((arm) => ({
         ...(arm.when === undefined
           ? {}
-          : { condition: this.#armCondition(root, arm.when, arm.target) }),
+          : {
+              condition: this.#armCondition(root, arm.when, arm.target, fold),
+            }),
         body: () => this.#emitArm(arm),
       })),
     );
@@ -509,12 +555,24 @@ class Emitter {
    * run takes whichever way out the branch offers
    * next. That is what "as if the case had not
    * matched" has to mean in code.
+   *
+   * A decision's ways out are not folded. What the
+   * run takes next there is the fall-through, and a
+   * decision's fall-through is a `return` — folding
+   * would end the run on the last round instead of
+   * carrying it on. The `do … while` around the
+   * loop already bounds it.
    */
-  #armCondition(root: string, when: Predicate, target: ArmTarget): string {
+  #armCondition(
+    root: string,
+    when: Predicate,
+    target: ArmTarget,
+    fold: boolean,
+  ): string {
     const condition = predicateExpression(root, when);
     const loop = this.#open.at(-1);
 
-    if (target.kind !== 'again' || loop?.foldTo === undefined) {
+    if (!fold || target.kind !== 'again' || loop?.foldTo === undefined) {
       return condition;
     }
 
@@ -1531,7 +1589,7 @@ class Emitter {
     });
     this.#body.blank();
 
-    this.#writeArms(local, item.arms);
+    this.#writeArms(local, item.arms, true);
   }
 
   /** The title the emails say this workflow is. */

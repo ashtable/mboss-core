@@ -55,6 +55,39 @@
       "returnType": "void"
     },
     {
+      "decision": [
+        true,
+        false
+      ],
+      "doc": "Whether the claim can be paid without anybody looking at it.",
+      "export": "autoApprove",
+      "file": "lib/expense.ts",
+      "params": [
+        {
+          "name": "claim",
+          "type": "ExpenseClaim"
+        }
+      ],
+      "returnType": "boolean"
+    },
+    {
+      "decision": [
+        "pay",
+        "refuse",
+        "hold"
+      ],
+      "doc": "Which desk the claim goes to. Written as an alias rather than a union spelled out here, because that is the shape a manifest cannot read off the return type's text.",
+      "export": "routeClaim",
+      "file": "lib/expense.ts",
+      "params": [
+        {
+          "name": "claim",
+          "type": "ExpenseClaim"
+        }
+      ],
+      "returnType": "Routing"
+    },
+    {
       "doc": "Looks up availability around the requested time.",
       "export": "findSlot",
       "file": "lib/findSlot.ts",
@@ -65,6 +98,22 @@
         }
       ],
       "returnType": "SlotGrid"
+    },
+    {
+      "decision": [
+        true,
+        false
+      ],
+      "doc": "Whether the run should look again. Availability moves while a run is waiting, so asking the same question a second time is worth doing — which is what makes this a decision a loop can close on.",
+      "export": "tryAgain",
+      "file": "lib/findSlot.ts",
+      "params": [
+        {
+          "name": "grid",
+          "type": "SlotGrid"
+        }
+      ],
+      "returnType": "boolean"
     },
     {
       "export": "recordIntake",
@@ -134,7 +183,7 @@
     }
   ],
   "nonSerializable": [],
-  "sourceHash": "917135503b6b80f1828ab69cb135b30b7552fcf23440a55ec74acae4f842045f",
+  "sourceHash": "6367c1cbf5bcd34fe178367c7602947d05af1abfb8302e6af97fa3a2d64eebe3",
   "typeSources": {
     "Booking": "lib/types.ts",
     "BookingReq": "lib/types.ts",
@@ -146,6 +195,7 @@
     "IntakeRequest": "lib/intake.ts",
     "Payment": "lib/expense.ts",
     "Refusal": "lib/expense.ts",
+    "Routing": "lib/expense.ts",
     "SlotGrid": "lib/types.ts",
     "WebhookEvent": "lib/types.ts"
   },
@@ -160,6 +210,7 @@
     "IntakeRequest",
     "Payment",
     "Refusal",
+    "Routing",
     "SlotGrid",
     "WebhookEvent"
   ]

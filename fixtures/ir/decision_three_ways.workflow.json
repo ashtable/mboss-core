@@ -1,0 +1,36 @@
+{
+  "$schema": "https://mboss.dev/schemas/workflow-v1.json",
+  "version": 1,
+  "revision": 1,
+  "name": "decision_three_ways",
+  "title": "Claim, routed in code",
+  "nodes": [
+    { "id": "claim_filed", "kind": "trigger", "title": "Claim filed",
+      "config": { "mode": "event", "topic": "expense.filed",
+        "idempotencyKeyPath": "claimId" },
+      "out": "ExpenseClaim" },
+    { "id": "route_claim", "kind": "branch", "title": "Which desk?",
+      "in": "ExpenseClaim", "handler": { "export": "routeClaim" },
+      "config": { "cases": [
+        { "port": "pay",    "when": { "path": "", "op": "eq", "value": "pay" } },
+        { "port": "refuse", "when": { "path": "", "op": "eq", "value": "refuse" } },
+        { "port": "hold",   "when": { "path": "", "op": "eq", "value": "hold" } } ],
+        "elsePort": "else" } },
+    { "id": "pay_claim", "kind": "step", "title": "Pay the claim",
+      "handler": { "export": "payClaim" }, "in": "ExpenseClaim", "out": "Payment",
+      "config": {} },
+    { "id": "file_refusal", "kind": "step", "title": "File the refusal",
+      "handler": { "export": "fileRefusal" }, "in": "ExpenseClaim", "out": "Refusal",
+      "config": {} },
+    { "id": "close_claim", "kind": "step", "title": "Close the claim",
+      "handler": { "export": "closeClaim" }, "config": {} }
+  ],
+  "edges": [
+    { "id": "e1", "from": { "node": "claim_filed", "port": "out" }, "to": { "node": "route_claim" }, "type": "ExpenseClaim" },
+    { "id": "e2", "from": { "node": "route_claim", "port": "pay" }, "to": { "node": "pay_claim" }, "type": "ExpenseClaim" },
+    { "id": "e3", "from": { "node": "route_claim", "port": "refuse" }, "to": { "node": "file_refusal" }, "type": "ExpenseClaim" },
+    { "id": "e4", "from": { "node": "route_claim", "port": "hold" }, "to": { "node": "close_claim" } },
+    { "id": "e5", "from": { "node": "pay_claim", "port": "out" }, "to": { "node": "close_claim" } },
+    { "id": "e6", "from": { "node": "file_refusal", "port": "out" }, "to": { "node": "close_claim" } }
+  ]
+}
