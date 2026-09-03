@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { constantTimeProblems } from '../../../test-support/constant-time.js';
 
-import { requireSecret } from './ports.js';
+import { requireSecret, type StartWorkflow } from './ports.js';
 
 /**
  * `requireSecret` is the one gate every
@@ -39,5 +39,29 @@ describe('the secret comparison', () => {
     const source = readFileSync(PORTS, 'utf8');
 
     expect(constantTimeProblems(source, 'matches')).toEqual([]);
+  });
+});
+
+/**
+ * Starting a run, as a route is handed it.
+ *
+ * Both routes answer with the id the run was filed
+ * under, and when the caller named none only the
+ * SDK knows it — so the id has to come back
+ * through this port. A start that resolved to
+ * nothing would leave a route with nothing to echo
+ * and its caller with no name for the run it just
+ * asked for.
+ *
+ * The assertion below is the type-check's rather
+ * than vitest's: `tsc --noEmit` reads this file
+ * and fails on a directive that found no error.
+ */
+describe('the start port', () => {
+  it('does not accept a start that resolves to nothing', () => {
+    // @ts-expect-error a start answers with an id.
+    const resolvesToNothing: StartWorkflow = async (): Promise<void> => {};
+
+    void resolvesToNothing;
   });
 });

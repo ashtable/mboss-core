@@ -19,7 +19,9 @@ const deps: AppDeps = {
   eventsSecret: 'shh',
   ring: parseKeyRing(`k1:${'ab'.repeat(32)}`),
   workflows: [],
-  async startWorkflow() {},
+  async startWorkflow() {
+    return 'wf_1';
+  },
   async send() {},
   async workflowOf() {
     return null;

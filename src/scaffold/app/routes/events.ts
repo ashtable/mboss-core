@@ -111,8 +111,8 @@ async function start(
   const workflowID =
     check.key === undefined ? undefined : `${topic}:${entry.name}:${check.key}`;
 
-  await deps.startWorkflow(entry, workflowID, payload);
-  response.status(202).json({ ok: true });
+  const filedAs = await deps.startWorkflow(entry, workflowID, payload);
+  response.status(202).json({ ok: true, workflowID: filedAs });
 }
 
 async function deliver(
@@ -164,7 +164,12 @@ async function deliver(
     parked.nodeId,
     `${parked.runId}:${parked.nodeId}:${parked.park}`,
   );
-  response.status(202).json({ ok: true });
+
+  // The run the event reached, under the same key
+  // as a started one. One answer shape either way:
+  // a caller that got `{ ok: true }` alone could
+  // not tell which of the two had happened.
+  response.status(202).json({ ok: true, workflowID: parked.runId });
 }
 
 /**

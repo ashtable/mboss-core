@@ -43,6 +43,9 @@ function entry(over: Partial<WorkflowEntry> = {}): WorkflowEntry {
   };
 }
 
+/** What the SDK names a run the route did not. */
+const MINTED = 'wf_minted';
+
 type Started = {
   workflow: string;
   workflowID: string | undefined;
@@ -70,6 +73,8 @@ function harness(workflows: WorkflowEntry[]) {
     workflows,
     async startWorkflow(target, workflowID, payload) {
       started.push({ workflow: target.name, workflowID, payload });
+
+      return workflowID ?? MINTED;
     },
     async send(runId, message, nodeId, key) {
       sent.push({ runId, message, nodeId, key });
@@ -204,6 +209,18 @@ describe('a payload the trigger refuses', () => {
 });
 
 describe('an event that starts a workflow', () => {
+  /** A trigger that names no idempotency key. */
+  function noKey(): WorkflowEntry {
+    return entry({
+      trigger: { mode: 'event', topic: 'booking.requested' },
+      checkPayload: (): PayloadCheck => ({
+        ok: true,
+        key: undefined,
+        requesterEmail: undefined,
+      }),
+    });
+  }
+
   it('gives the run an id built from the topic, name and key', async () => {
     // The id is the whole of the idempotency: a
     // redelivered webhook carrying the same key
@@ -224,26 +241,42 @@ describe('an event that starts a workflow', () => {
     ]);
   });
 
+  it('answers with the id the run was filed under', async () => {
+    const { app } = harness([entry()]);
+    const response = await post(app, '/events/booking.requested', {
+      requestId: 'r1',
+    });
+
+    expect(JSON.parse(response.body)).toEqual({
+      ok: true,
+      workflowID: 'booking.requested:groom_booking:r1',
+    });
+  });
+
   it('leaves the id to the SDK when the trigger names no key', async () => {
     // At-most-once per delivery, and no dedup
     // across deliveries. That is what a trigger
     // without an idempotency key is asking for,
     // and inventing one here would be a guess at
     // which field identified the event.
-    const { app, started } = harness([
-      entry({
-        trigger: { mode: 'event', topic: 'booking.requested' },
-        checkPayload: (): PayloadCheck => ({
-          ok: true,
-          key: undefined,
-          requesterEmail: undefined,
-        }),
-      }),
-    ]);
+    const { app, started } = harness([noKey()]);
 
     await post(app, '/events/booking.requested', { requestId: 'r1' });
 
     expect(started[0]?.workflowID).toBeUndefined();
+  });
+
+  it('answers with the SDK s id when it named none itself', async () => {
+    // The caller has no other way to learn it, and
+    // this is the shape a trigger without an
+    // idempotency key always takes.
+    const { app } = harness([noKey()]);
+    const response = await post(app, '/events/booking.requested', {});
+
+    expect(JSON.parse(response.body)).toEqual({
+      ok: true,
+      workflowID: MINTED,
+    });
   });
 });
 
@@ -283,6 +316,22 @@ describe('an event a sleeping run is waiting for', () => {
         key: 'wf_1:await_reply:park_one',
       },
     ]);
+  });
+
+  it('answers with the run the event was delivered to', async () => {
+    // The same answer shape either way. A caller
+    // that got `{ ok: true }` alone could not tell
+    // an app that echoes ids from one built before
+    // it did.
+    const { app } = waiting();
+    const response = await post(app, '/events/twilio.reply', {
+      from: '+15551234',
+    });
+
+    expect(JSON.parse(response.body)).toEqual({
+      ok: true,
+      workflowID: 'wf_1',
+    });
   });
 
   it('keys each park apart, so a later one is still wakeable', async () => {

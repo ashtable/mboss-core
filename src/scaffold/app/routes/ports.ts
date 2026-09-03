@@ -102,12 +102,19 @@ export function pathParam(request: Request, name: string): string {
  * Starting a run. `workflowID` absent means the
  * SDK mints one, which is at-most-once per
  * delivery and no more.
+ *
+ * It answers with the id the run was filed under —
+ * the one that was passed in, or the one the SDK
+ * minted — because the routes echo it. A caller
+ * that named no id has no other way to learn it,
+ * and without it there is nothing to watch the run
+ * by.
  */
 export type StartWorkflow = (
   target: WorkflowEntry,
   workflowID: string | undefined,
   payload: unknown,
-) => Promise<void>;
+) => Promise<string>;
 
 /**
  * Waking a run that is asleep on a node. The key
