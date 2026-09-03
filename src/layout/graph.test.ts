@@ -81,8 +81,8 @@ describe('toElkGraph', () => {
     const graph = toElkGraph(groomBooking());
 
     for (const child of graph.children ?? []) {
-      expect(child.width).toBe(240);
-      expect(child.height).toBeGreaterThan(0);
+      expect(child.width).toBe(230);
+      expect(child.height).toBe(60);
     }
   });
 });

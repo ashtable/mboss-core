@@ -27,18 +27,26 @@ import type { NodeKind } from '../ir/catalog.js';
  * into columns and a column of ragged widths reads
  * as noise rather than as structure.
  */
-export const NODE_WIDTH = 240;
+export const NODE_WIDTH = 230;
 
 /**
- * Room for the title and the kind chip above the
- * first config row.
+ * One height for every kind too. A node draws an
+ * icon, a title and a single line of mono,
+ * whatever it does, so there is nothing left for a
+ * kind to make room for.
  */
-export const NODE_BASE_HEIGHT = 56;
+export const NODE_HEIGHT = 60;
 
 /**
- * One line of the node's config summary.
+ * The gap between two nodes that were not laid out
+ * against each other — the column `place` parks
+ * unplaced blocks in.
+ *
+ * It matches the space the layout engine leaves
+ * between two layers, so a parked column reads at
+ * the same rhythm as an arranged one.
  */
-export const CONFIG_ROW_HEIGHT = 22;
+export const LOOSE_GAP = 72;
 
 /**
  * How much of a title a node shows. Titles are
@@ -49,41 +57,21 @@ export const CONFIG_ROW_HEIGHT = 22;
 export const TITLE_MAX_CHARS = 32;
 
 /**
- * How many lines of config summary each kind draws
- * under its title.
- *
- * The count is per kind rather than per node so
- * that editing a branch's cases or an email's
- * subject moves nothing on the canvas — a node
- * that changed height on every keystroke would
- * reflow the whole graph while the author typed.
- */
-const CONFIG_ROWS: Record<NodeKind, number> = {
-  trigger: 2, // how it fires, and on what
-  step: 1, // the handler it runs
-  transaction: 1, // the handler it runs
-  apiCall: 2, // the service, and the handler
-  branch: 2, // the cases, and the else port
-  loop: 2, // the round bounds, and the body
-  durableWait: 2, // what it waits for, and how long
-  approval: 2, // who decides, and how long they have
-  emailSend: 3, // recipient, subject, attachment
-  codeStep: 1, // the handler it runs
-};
-
-/**
  * The box a node of this kind occupies. This is
  * the only size layout ever uses, so two runs on
  * the same IR start from the same boxes.
+ *
+ * Every kind gets the same box. The parameter
+ * stays because a caller has a node in hand and
+ * asks the metrics table how big to draw it, and
+ * because this is where a kind would get its own
+ * size back if one ever earned it.
  */
-export function nodeSize(kind: NodeKind): {
+export function nodeSize(_kind: NodeKind): {
   width: number;
   height: number;
 } {
-  return {
-    width: NODE_WIDTH,
-    height: NODE_BASE_HEIGHT + CONFIG_ROWS[kind] * CONFIG_ROW_HEIGHT,
-  };
+  return { width: NODE_WIDTH, height: NODE_HEIGHT };
 }
 
 /**
