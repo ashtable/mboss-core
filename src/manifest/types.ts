@@ -22,12 +22,34 @@ import { z } from 'zod';
  * with `Promise` already unwrapped, so a node's
  * declared `out` compares against it directly
  * whether the handler is async or not.
+ *
+ * `optional` and `decision` are optional in the
+ * schema, and not merely absent when they do not
+ * apply: this file is keyed on the sources' hash
+ * rather than on the build that wrote it, so a
+ * cache an older build left behind is served
+ * unchanged until `lib/` next changes. Whoever
+ * reads either field reads its absence as "the
+ * scan did not say".
  */
 export const LibFunctionSchema = z.object({
   export: z.string(),
   file: z.string(),
-  params: z.array(z.object({ name: z.string(), type: z.string() })),
+  params: z.array(
+    z.object({
+      name: z.string(),
+      type: z.string(),
+      /** A `?` or a default: a call may leave it out. */
+      optional: z.boolean().optional(),
+    }),
+  ),
   returnType: z.string(),
+  /**
+   * The values the function decides between, read
+   * off its resolved return type. Absent for a
+   * function that decides nothing.
+   */
+  decision: z.array(z.union([z.string(), z.boolean()])).optional(),
   doc: z.string().optional(),
 });
 
