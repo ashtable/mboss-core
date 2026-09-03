@@ -17,6 +17,7 @@ export {
   RetrySchema,
   FanOutSchema,
   HandlerRefSchema,
+  PositionSchema,
   NodeBase,
   EdgeSchema,
 } from './types.js';
@@ -49,6 +50,7 @@ export type {
   Retry,
   FanOut,
   HandlerRef,
+  Position,
   WorkflowEdge,
 } from './types.js';
 export type {

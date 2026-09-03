@@ -7,11 +7,13 @@ import { EdgeSchema, WorkflowNameSchema } from './types.js';
  * One workflow document, as it sits on disk in
  * `.mboss/workflows/<name>.workflow.json`.
  *
- * It has no coordinate fields anywhere, and that
- * is the point: layout is recomputed from the
- * graph at render time, so there is nothing here
- * for an agent to emit and nothing to drift out
- * of date.
+ * A node's `position` is optional, and it is a
+ * person's to set by moving a block; a node
+ * without one is laid out from the graph at
+ * render time. Anything that does not know about
+ * coordinates leaves the ones it reads alone, so
+ * what is on disk is a person's arrangement or
+ * nothing at all.
  *
  * `revision` counts edits and only ever goes up,
  * including through an undo. Two writers holding

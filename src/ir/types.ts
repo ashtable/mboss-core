@@ -80,6 +80,18 @@ export const FanOutSchema = z.object({
 export const HandlerRefSchema = z.object({ export: z.string() });
 
 /**
+ * Where a node sits on the canvas, in whole
+ * pixels. A stored `412.33333` would diff on
+ * every drag and lay out differently on machines
+ * that round the last bit differently, so the
+ * canvas rounds before it writes.
+ */
+export const PositionSchema = z.object({
+  x: z.number().int(),
+  y: z.number().int(),
+});
+
+/**
  * Everything every node has, whatever its kind.
  * The catalog extends this with the `kind`
  * literal and the matching `config`, which is why
@@ -94,6 +106,7 @@ export const NodeBase = z.object({
   forEach: FanOutSchema.optional(),
   retry: RetrySchema.optional(),
   handler: HandlerRefSchema.optional(),
+  position: PositionSchema.optional(),
 });
 
 /**
@@ -118,4 +131,5 @@ export type Predicate = z.infer<typeof PredicateSchema>;
 export type Retry = z.infer<typeof RetrySchema>;
 export type FanOut = z.infer<typeof FanOutSchema>;
 export type HandlerRef = z.infer<typeof HandlerRefSchema>;
+export type Position = z.infer<typeof PositionSchema>;
 export type WorkflowEdge = z.infer<typeof EdgeSchema>;
