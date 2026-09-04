@@ -2,6 +2,7 @@ import {
   portsOf,
   buildGraph,
   dominators,
+  forwardFrom,
   joinOf,
   reachableFrom,
   sameGuard,
@@ -553,29 +554,10 @@ class Planner {
     const members = new Set<string>();
 
     for (const id of forward) {
-      if (this.#reaches(id, branch)) members.add(id);
+      if (forwardFrom(this.#graph, id).has(branch)) members.add(id);
     }
 
     return members;
-  }
-
-  #reaches(from: string, to: string): boolean {
-    const seen = new Set<string>();
-    const pending = [from];
-
-    while (pending.length > 0) {
-      const id = pending.pop();
-      if (id === undefined || seen.has(id)) continue;
-      seen.add(id);
-      if (id === to) return true;
-
-      for (const edge of this.#graph.outgoing.get(id) ?? []) {
-        if (edge.back) continue;
-        if (this.#graph.nodes.has(edge.to.node)) pending.push(edge.to.node);
-      }
-    }
-
-    return false;
   }
 
   /**

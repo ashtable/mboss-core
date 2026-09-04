@@ -74,6 +74,25 @@ export function reachableFrom(graph: WorkflowGraph, root: string): Set<string> {
 }
 
 /**
+ * Every node a run reaches from `root` without
+ * going round a loop.
+ *
+ * The twin of the one above, and which one a
+ * caller wants is the difference between two
+ * questions. What a run *executes* from here
+ * includes everything around the loop. What lies
+ * *ahead* of here — the blocks a loop's body
+ * holds, whether one block leads to another —
+ * does not: a loop-closing edge leads back to
+ * blocks the run has already been through, and
+ * following it would wrap the answer around the
+ * loop and take in the whole workflow.
+ */
+export function forwardFrom(graph: WorkflowGraph, root: string): Set<string> {
+  return walk(graph, root, false);
+}
+
+/**
  * Whether the graph is acyclic once the
  * loop-closing edges are set aside.
  *

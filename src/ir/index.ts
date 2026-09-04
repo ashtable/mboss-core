@@ -69,6 +69,7 @@ export {
 export {
   buildGraph,
   reachableFrom,
+  forwardFrom,
   isDag,
   dominators,
   topologicalOrder,
