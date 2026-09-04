@@ -221,10 +221,12 @@ class Planner {
       (node): node is TriggerNode => node.kind === 'trigger',
     );
 
+    // `canCompile` requires exactly one trigger and
+    // runs before this does, so a document reaching
+    // here without one came from a caller that
+    // skipped the gate rather than from a drawing.
     if (trigger === undefined) {
-      throw new UnsupportedIR(
-        'this workflow has no trigger, so it never runs.',
-      );
+      throw new Error('plan: this workflow has no trigger.');
     }
 
     this.#trigger = trigger;
@@ -460,11 +462,16 @@ class Planner {
         ? branch.config.cases.find((each) => each.port === edge.from.port)
         : undefined;
 
+    // V05 refuses a loop-closing wire that leaves
+    // from anything but one of a branch's cases,
+    // and it runs first. The bound below is the
+    // case's to carry, so there is nothing to fall
+    // back to and nothing to say about it that
+    // validation has not said.
     if (found === undefined) {
-      throw new UnsupportedIR(
-        `\`${branch.id}\` wires back to \`${entry}\` from a way out that ` +
-          `is not one of its cases.`,
-        branch.id,
+      throw new Error(
+        `plan: \`${branch.id}\` wires back to \`${entry}\` from a port ` +
+          `that is not one of its cases.`,
       );
     }
 
@@ -802,13 +809,10 @@ class Planner {
     const edge = outgoing[0];
     if (edge === undefined) return undefined;
 
-    if (!this.#graph.nodes.has(edge.to.node)) {
-      throw new UnsupportedIR(
-        `\`${id}\` wires to \`${edge.to.node}\`, which is not a block in ` +
-          `this workflow.`,
-        id,
-      );
-    }
+    // A wire naming a block the document does not
+    // hold leads nowhere, which is what V02 says
+    // about it before this ever runs.
+    if (!this.#graph.nodes.has(edge.to.node)) return undefined;
 
     return edge.to.node;
   }
@@ -816,8 +820,14 @@ class Planner {
   #node(id: string): WorkflowNode {
     const node = this.#graph.nodes.get(id);
 
+    // Not a refusal: the walk only ever steps onto
+    // ids the graph holds, and V02 has already
+    // refused a document naming one it does not.
+    // An `UnsupportedIR` here would be this
+    // compiler claiming it cannot emit something
+    // nobody can draw.
     if (node === undefined) {
-      throw new UnsupportedIR(`\`${id}\` is not a block in this workflow.`, id);
+      throw new Error(`plan: no block called \`${id}\` in this workflow.`);
     }
 
     return node;
