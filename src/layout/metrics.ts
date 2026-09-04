@@ -1,4 +1,4 @@
-import type { NodeKind } from '../ir/catalog.js';
+import type { NodeKind } from '../ir/index.js';
 
 /**
  * The fixed geometry every node is drawn and laid

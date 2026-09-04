@@ -1,15 +1,15 @@
 import { FORM_LINK_MAX_SECONDS } from '../app-contract/limits.js';
-import type { LibManifest } from '../manifest/index.js';
-import type {
-  FormField,
-  Predicate,
-  Recipient,
-  Retry,
-  WaitSource,
-  WorkflowIR,
-  WorkflowNode,
+import {
+  sameGuard,
+  type FormField,
+  type Predicate,
+  type Recipient,
+  type Retry,
+  type WaitSource,
+  type WorkflowIR,
+  type WorkflowNode,
 } from '../ir/index.js';
-import { sameGuard } from '../validate/rules.js';
+import type { LibManifest } from '../manifest/index.js';
 
 import {
   expandedCall,

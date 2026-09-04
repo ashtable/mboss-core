@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { WorkflowIRSchema, type WorkflowIR } from '../ir/index.js';
 import { readFixtureJson } from '../test-support/fixtures.js';
 import { makeIR } from '../test-support/ir.js';
 
@@ -12,6 +11,7 @@ import {
   reachableFrom,
   topologicalOrder,
 } from './graph.js';
+import { WorkflowIRSchema, type WorkflowIR } from './index.js';
 
 function groomBooking(): WorkflowIR {
   return WorkflowIRSchema.parse(

@@ -1,20 +1,18 @@
-import type {
-  NodeKind,
-  Predicate,
-  WorkflowEdge,
-  WorkflowIR,
-  WorkflowNode,
-} from '../ir/index.js';
-import { portsOf } from '../ir/index.js';
 import {
+  portsOf,
   buildGraph,
   dominators,
   joinOf,
   reachableFrom,
+  sameGuard,
   topologicalOrder,
+  type NodeKind,
+  type Predicate,
+  type WorkflowEdge,
   type WorkflowGraph,
-} from '../validate/graph.js';
-import { sameGuard } from '../validate/rules.js';
+  type WorkflowIR,
+  type WorkflowNode,
+} from '../ir/index.js';
 
 import { UnsupportedIR } from './unsupported.js';
 

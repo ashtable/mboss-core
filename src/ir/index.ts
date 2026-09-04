@@ -14,6 +14,12 @@
  * agent does, so renaming a node, deleting one and
  * starting a new one have one implementation each
  * and every surface calls it.
+ *
+ * Beside the edits is the graph work validation
+ * and the compiler both do over a document —
+ * reachability, dominance, topological order — so
+ * the two agree about what a document's shape
+ * means.
  */
 export {
   WorkflowNameSchema,
@@ -60,6 +66,15 @@ export {
   carryPositions,
   withoutPositions,
 } from './edit.js';
+export {
+  buildGraph,
+  reachableFrom,
+  isDag,
+  dominators,
+  topologicalOrder,
+  joinOf,
+} from './graph.js';
+export { sameGuard } from './guard.js';
 
 export type {
   Predicate,
@@ -69,6 +84,7 @@ export type {
   Position,
   WorkflowEdge,
 } from './types.js';
+export type { WorkflowGraph } from './graph.js';
 export type {
   NodeKind,
   BranchCase,

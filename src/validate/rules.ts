@@ -1,20 +1,18 @@
 import {
   portsOf,
+  dominators,
+  isDag,
+  reachableFrom,
+  sameGuard,
   type BranchCase,
   type NodeKind,
-  type Predicate,
+  type WorkflowGraph,
   type WorkflowIR,
   type WorkflowNode,
 } from '../ir/index.js';
 import type { LibManifest, NonSerializableReason } from '../manifest/index.js';
 
 import { diagnostic, warning, type Diagnostic } from './diagnostic.js';
-import {
-  dominators,
-  isDag,
-  reachableFrom,
-  type WorkflowGraph,
-} from './graph.js';
 import {
   decisionValues,
   handlerFit,
@@ -657,16 +655,6 @@ export function v10GuardedConsumers(ctx: RuleContext): Diagnostic[] {
   }
 
   return found;
-}
-
-export function sameGuard(a?: Predicate, b?: Predicate): boolean {
-  if (a === undefined || b === undefined) return a === b;
-
-  return (
-    a.path === b.path &&
-    a.op === b.op &&
-    JSON.stringify(a.value ?? null) === JSON.stringify(b.value ?? null)
-  );
 }
 
 /**

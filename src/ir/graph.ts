@@ -1,14 +1,21 @@
-import type { WorkflowEdge, WorkflowIR, WorkflowNode } from '../ir/index.js';
+import type { WorkflowNode } from './catalog.js';
+import type { WorkflowEdge } from './types.js';
+import type { WorkflowIR } from './workflow.js';
 
 /**
- * The graph work three of the validation rules
- * share.
+ * The graph work validation and the compiler both
+ * do over a document.
  *
- * Reachability, cycle detection and dominance are
- * each asked for once per validation run, over the
- * same adjacency — so the adjacency is built once
- * and handed to all of them rather than each rule
- * walking `ir.edges` again.
+ * Reachability, cycle detection, dominance,
+ * topological order and join-finding are each
+ * asked for more than once, over the same
+ * adjacency — a validation rule builds it once for
+ * three of its checks, and the compiler's planner
+ * builds it once to decide execution order, value
+ * scope and where a branch's arms come back
+ * together. One implementation means the compiler
+ * and the rule that checks a document's shape
+ * agree about what that shape is.
  */
 
 /**

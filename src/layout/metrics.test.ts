@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { NODE_PALETTE } from '../ir/catalog.js';
+import { NODE_PALETTE } from '../ir/index.js';
 
 import {
   NODE_HEIGHT,
