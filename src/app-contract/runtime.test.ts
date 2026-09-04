@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { APP_DIR } from './layout.js';
-import { RUNTIME } from './runtime.js';
+import { RUNTIME, RUNTIME_VALUES } from './runtime.js';
 
 const MODULES = Object.entries(RUNTIME);
 
@@ -46,5 +46,30 @@ describe('the runtime table', () => {
   it('names the contract file only once, as a type-only module', () => {
     expect(RUNTIME.contract.specifier).toBe('../app/contract.js');
     expect(RUNTIME.contract.exports).toContain('WorkflowEntry');
+    expect(RUNTIME.contract.type).toBe(true);
+  });
+
+  it.each(MODULES)('%s says whether it is imported for types', (_n, entry) => {
+    expect(typeof entry.type).toBe('boolean');
+  });
+
+  /**
+   * The one module of types is the one module
+   * whose names never reach run time, so it is the
+   * one module whose names a generated local may
+   * safely repeat.
+   */
+  it('reserves the names the runtime binds, and only those', () => {
+    expect([...RUNTIME_VALUES].sort()).toEqual([
+      'appDb',
+      'clearWaitCorrelation',
+      'isTransientSendFailure',
+      'registerWaitCorrelation',
+      'sendNodeEmail',
+    ]);
+
+    for (const type of RUNTIME.contract.exports) {
+      expect(RUNTIME_VALUES).not.toContain(type);
+    }
   });
 });

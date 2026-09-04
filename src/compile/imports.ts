@@ -1,4 +1,4 @@
-import { libSpecifier } from '../app-contract/index.js';
+import { libSpecifier, RUNTIME } from '../app-contract/index.js';
 import type { LibManifest } from '../manifest/index.js';
 
 import { UnsupportedIR } from './unsupported.js';
@@ -29,6 +29,32 @@ export type ImportEntry = {
    *  statement mixing the two. */
   type: boolean;
 };
+
+/** A module of the runtime a generated file may reach. */
+type RuntimeModule = keyof typeof RUNTIME;
+
+/** One of the names that module offers. */
+type RuntimeExport<M extends RuntimeModule> =
+  (typeof RUNTIME)[M]['exports'][number];
+
+/**
+ * Where a runtime binding comes from.
+ *
+ * The specifier and the type-ness are the table's
+ * to know, and the name is checked against what
+ * the table says the module offers — so a rename
+ * on the runtime side, made without the table,
+ * stops the compiler here rather than inside a
+ * generated file whose author is a program.
+ */
+export function runtimeImport<M extends RuntimeModule>(
+  module: M,
+  name: RuntimeExport<M>,
+): ImportEntry {
+  const entry = RUNTIME[module];
+
+  return { specifier: entry.specifier, name, type: entry.type };
+}
 
 /**
  * Where a declared type name comes from.

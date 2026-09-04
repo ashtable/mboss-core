@@ -21,6 +21,7 @@ import {
 } from '../validate/index.js';
 
 import { emitWorkflow } from './emit-linear.js';
+import { importBlock, runtimeImport } from './imports.js';
 import { camelCase } from './names.js';
 import { literal } from './predicate.js';
 import { UnsupportedIR } from './unsupported.js';
@@ -118,7 +119,10 @@ export function compileRegistry(entries: readonly RegistryEntry[]): string {
     '// Regenerated from the workflow documents in',
     '// .mboss/workflows/.',
     '',
-    "import type { ScheduleEntry, WorkflowEntry } from '../app/contract.js';",
+    importBlock([
+      runtimeImport('contract', 'ScheduleEntry'),
+      runtimeImport('contract', 'WorkflowEntry'),
+    ]).trimEnd(),
   ];
 
   for (const entry of ordered) {
