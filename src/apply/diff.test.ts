@@ -89,6 +89,22 @@ describe('diffSummary', () => {
     expect(diffSummary(prev, next).nodesChanged).toBe(1);
   });
 
+  /**
+   * A drag is not an edit, and neither is an
+   * arrange that takes every coordinate off again:
+   * a summary counts what the workflow does, and
+   * where a block sits is not part of that.
+   */
+  it('sees no change in a document whose blocks only moved', () => {
+    const bare = makeIR({ nodes: [{ id: 'find_slot' }] });
+    const placed = makeIR({
+      nodes: [{ id: 'find_slot', position: { x: 120, y: 80 } }],
+    });
+
+    expect(diffSummary(bare, placed).nodesChanged).toBe(0);
+    expect(diffSummary(placed, bare).nodesChanged).toBe(0);
+  });
+
   it('sees no change in a document reordered but not edited', () => {
     const prev = makeIR({
       nodes: [{ id: 'start' }, { id: 'finish' }],

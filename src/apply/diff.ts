@@ -2,7 +2,11 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { z } from 'zod';
 
-import type { WorkflowEdge, WorkflowNode } from '../ir/index.js';
+import {
+  withoutPositions,
+  type WorkflowEdge,
+  type WorkflowNode,
+} from '../ir/index.js';
 
 /**
  * What changed between two versions of a workflow,
@@ -51,15 +55,25 @@ export type Diffable = {
  * There is no `edgesChanged`: an edge is little
  * more than its ends and its id, so a wire that
  * moved is a wire that went and a wire that came.
+ *
+ * Coordinates come off both sides first. Where a
+ * block sits is a fact about a canvas rather than
+ * about the workflow, so a drag is no change at
+ * all, and an agent's spec written without
+ * positions over a document that has them is not
+ * every block in the workflow changed.
  */
 export function diffSummary(
   prev: Diffable | undefined,
   next: Diffable,
 ): DiffSummary {
-  const prevNodes = byId(prev?.nodes ?? []);
-  const nextNodes = byId(next.nodes);
-  const prevEdges = byId(prev?.edges ?? []);
-  const nextEdges = byId(next.edges);
+  const before = withoutPositions(prev ?? { nodes: [], edges: [] });
+  const after = withoutPositions(next);
+
+  const prevNodes = byId(before.nodes);
+  const nextNodes = byId(after.nodes);
+  const prevEdges = byId(before.edges);
+  const nextEdges = byId(after.edges);
 
   let nodesChanged = 0;
   for (const [id, node] of nextNodes) {

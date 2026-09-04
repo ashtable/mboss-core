@@ -1,8 +1,13 @@
 import {
   portsOf,
-  TypeNameSchema,
+  dominators,
+  producers,
+  isDag,
+  reachableFrom,
+  sameGuard,
+  type BranchCase,
   type NodeKind,
-  type Predicate,
+  type WorkflowGraph,
   type WorkflowIR,
   type WorkflowNode,
 } from '../ir/index.js';
@@ -10,14 +15,14 @@ import type { LibManifest, NonSerializableReason } from '../manifest/index.js';
 
 import { diagnostic, warning, type Diagnostic } from './diagnostic.js';
 import {
-  dominators,
-  isDag,
-  reachableFrom,
-  type WorkflowGraph,
-} from './graph.js';
+  decisionValues,
+  handlerFit,
+  HANDLER_KINDS,
+  type HandlerMisfit,
+} from './handler-fit.js';
 
 /**
- * The thirteen rules, one function each.
+ * The fifteen rules, one function each.
  *
  * They are separate functions rather than one pass
  * because they are read one at a time: a person
@@ -49,10 +54,15 @@ export type Rule = (ctx: RuleContext) => Diagnostic[];
 type TriggerNode = Extract<WorkflowNode, { kind: 'trigger' }>;
 
 /**
- * The kinds that run code of the author's, and so
- * need a handler to name it.
+ * The kinds that are unfinished until a handler
+ * names their code.
+ *
+ * A branch may run code and is deliberately not
+ * here: it tests the value that reached it until
+ * somebody gives it a function of its own, so a
+ * branch with no handler is missing nothing.
  */
-const HANDLER_KINDS: ReadonlySet<NodeKind> = new Set<NodeKind>([
+const NEEDS_HANDLER: ReadonlySet<NodeKind> = new Set<NodeKind>([
   'step',
   'transaction',
   'apiCall',
@@ -407,24 +417,32 @@ export function v06EdgeTypes(ctx: RuleContext): Diagnostic[] {
  * declared types. Compilation is where a missing
  * handler becomes fatal, since there is nothing to
  * call.
+ *
+ * The two findings run over different sets of
+ * kinds. Every kind that can name a function is
+ * held to naming one that exists, a branch
+ * included; only the kinds that are nothing without
+ * code are told they have none yet.
  */
 export function v07Handlers(ctx: RuleContext): Diagnostic[] {
   const found: Diagnostic[] = [];
 
   for (const node of ctx.ir.nodes) {
-    if (!HANDLER_KINDS.has(node.kind)) continue;
-
     const handler = node.handler;
 
     if (handler === undefined) {
-      found.push(
-        diagnostic('V07', `\`${node.id}\` has no handler yet.`, {
-          nodeId: node.id,
-        }),
-      );
+      if (NEEDS_HANDLER.has(node.kind)) {
+        found.push(
+          diagnostic('V07', `\`${node.id}\` has no handler yet.`, {
+            nodeId: node.id,
+          }),
+        );
+      }
+
       continue;
     }
 
+    if (!HANDLER_KINDS.has(node.kind)) continue;
     if (ctx.manifest === undefined) continue;
 
     const exists = ctx.manifest.functions.some(
@@ -640,16 +658,6 @@ export function v10GuardedConsumers(ctx: RuleContext): Diagnostic[] {
   return found;
 }
 
-export function sameGuard(a?: Predicate, b?: Predicate): boolean {
-  if (a === undefined || b === undefined) return a === b;
-
-  return (
-    a.path === b.path &&
-    a.op === b.op &&
-    JSON.stringify(a.value ?? null) === JSON.stringify(b.value ?? null)
-  );
-}
-
 /**
  * Mail to the requesting user only where there is
  * a requesting user to find.
@@ -774,13 +782,25 @@ export function v12SerializableTypes(ctx: RuleContext): Diagnostic[] {
  * author cannot edit; with it, it is a finding on
  * the block that says it.
  *
+ * The comparison is `handlerFit`'s, so a function
+ * the picker offers is never one this rule then
+ * rejects. Only the two misfits about declared
+ * types are reported. A handler on a kind that
+ * runs none is dropped by the emitter and never
+ * offered in the first place. A return type
+ * nothing can be a case of is about a branch's
+ * cases rather than about a signature. And a
+ * function taking more than one value is already
+ * refused at the picker, at the drop target and by
+ * the generated code's own type-check — saying it
+ * a fourth time, off a cache that may have
+ * recorded nothing about which parameters a call
+ * can leave out, would put an error on a handler
+ * that compiles.
+ *
  * It stays quiet wherever it cannot know: with no
- * scan, with no handler, with a handler the scan
- * never saw — that one is V07's to report — on a
- * node that fans out, where the handler takes one
- * item while the node takes the collection, and
- * wherever the handler's type is written as
- * anything but a plain name.
+ * scan, with no handler, and with a handler the
+ * scan never saw, which is V07's to report.
  */
 export function v13HandlerSignatures(ctx: RuleContext): Diagnostic[] {
   const manifest = ctx.manifest;
@@ -790,33 +810,146 @@ export function v13HandlerSignatures(ctx: RuleContext): Diagnostic[] {
 
   for (const node of ctx.ir.nodes) {
     const handler = node.handler;
-    if (handler === undefined || node.forEach !== undefined) continue;
+    if (handler === undefined) continue;
 
     const fn = manifest.functions.find(
       (each) => each.export === handler.export,
     );
     if (fn === undefined) continue;
 
-    if (disagree(node.in, fn.params[0]?.type)) {
+    const fit = handlerFit(node, fn);
+    if (fit.fits) continue;
+
+    const message = mismatchMessage(node.id, fn.export, fit.reason);
+
+    if (message !== undefined) {
+      found.push(diagnostic('V13', message, { nodeId: node.id }));
+    }
+  }
+
+  return found;
+}
+
+/**
+ * What to tell an author about a misfit, or
+ * `undefined` for the three this rule leaves to
+ * somebody else.
+ */
+function mismatchMessage(
+  nodeId: string,
+  handler: string,
+  reason: HandlerMisfit,
+): string | undefined {
+  switch (reason.kind) {
+    case 'input-mismatch':
+      return (
+        `\`${nodeId}\` takes \`${reason.declared}\`, but its code-behind ` +
+        `\`${handler}\` takes \`${reason.takes}\`. The generated code ` +
+        `would hand it the wrong value.`
+      );
+
+    case 'output-mismatch':
+      return (
+        `\`${nodeId}\` produces \`${reason.declared}\`, but its code-behind ` +
+        `\`${handler}\` returns \`${reason.returns}\`. The generated code ` +
+        `would pass on the wrong value.`
+      );
+
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * A branch that runs code has one case per answer
+ * that code can give.
+ *
+ * A branch with a handler is a decision: the
+ * function runs as a step of its own and the cases
+ * match what it returned. So a case here names one
+ * whole answer, where a branch without a handler
+ * reads a field out of the value that reached it.
+ * A case still shaped like a predicate is one
+ * written before the branch was given code, and it
+ * would compile into a test against something the
+ * decision is not.
+ *
+ * With a scan to read, the answers themselves are
+ * known: the function has to decide between values
+ * a case can name, every one of those values needs
+ * a case, and a case naming an answer the function
+ * never gives is a way out no run takes.
+ *
+ * The fall-through port is deliberately not
+ * required to be wired. Cases that cover every
+ * answer leave nothing to fall through to, and the
+ * arm compiles to a `return`, which is the right
+ * thing to do about a value the type said could
+ * not happen.
+ */
+export function v14DecisionBranches(ctx: RuleContext): Diagnostic[] {
+  const found: Diagnostic[] = [];
+
+  for (const node of ctx.ir.nodes) {
+    if (node.kind !== 'branch') continue;
+
+    const handler = node.handler?.export;
+    if (handler === undefined) continue;
+
+    const site = { nodeId: node.id };
+    const fn = ctx.manifest?.functions.find((each) => each.export === handler);
+
+    // No scan, or a handler the scan never saw —
+    // which is V07's finding — leaves the cases to
+    // be read on their own.
+    const answers = fn === undefined ? undefined : decisionValues(fn);
+
+    if (fn !== undefined && answers === undefined) {
       found.push(
         diagnostic(
-          'V13',
-          `\`${node.id}\` takes \`${node.in}\`, but its code-behind ` +
-            `\`${fn.export}\` takes \`${fn.params[0]?.type}\`. The ` +
-            `generated code would hand it the wrong value.`,
-          { nodeId: node.id },
+          'V14',
+          `\`${node.id}\` runs \`${handler}\`, which returns ` +
+            `\`${fn.returnType}\`. A branch's cases match what its code ` +
+            `decided, so that code returns a boolean or one of a set of ` +
+            `strings.`,
+          site,
         ),
       );
     }
 
-    if (disagree(node.out, fn.returnType)) {
+    for (const branchCase of node.config.cases) {
+      const problem = decisionCaseProblem(
+        node.id,
+        handler,
+        branchCase,
+        answers,
+      );
+
+      if (problem !== undefined) {
+        found.push(diagnostic('V14', problem, site));
+      }
+    }
+
+    for (const answer of answers ?? []) {
+      // What a case matches is what makes it that
+      // answer's way out. A case reading a path or
+      // comparing with something other than `eq` is
+      // already reported above, and telling an
+      // author to add a second case for the answer
+      // it names would send them the wrong way.
+      const answered = node.config.cases.some(
+        (each) => each.when.value === answer,
+      );
+
+      if (answered) continue;
+
       found.push(
         diagnostic(
-          'V13',
-          `\`${node.id}\` produces \`${node.out}\`, but its code-behind ` +
-            `\`${fn.export}\` returns \`${fn.returnType}\`. The generated ` +
-            `code would pass on the wrong value.`,
-          { nodeId: node.id },
+          'V14',
+          `\`${handler}\` can decide \`${shown(answer)}\`, and ` +
+            `\`${node.id}\` has no case for it. Add one, so every answer ` +
+            `has a way out.`,
+          site,
         ),
       );
     }
@@ -826,20 +959,55 @@ export function v13HandlerSignatures(ctx: RuleContext): Diagnostic[] {
 }
 
 /**
- * Whether two type names contradict each other.
- *
- * Only plain names are compared. A generic, an
- * array or an inline object literal says something
- * the node's own declaration has no way to say
- * back, so a textual comparison there would report
- * a disagreement that is only a difference in
- * notation.
+ * The first thing wrong with one case of a decision
+ * branch, or `undefined`. `answers` is what the
+ * handler decides between, or `undefined` wherever
+ * nothing has read it.
  */
-function disagree(declared: string | undefined, written?: string): boolean {
-  if (declared === undefined || written === undefined) return false;
-  if (!TypeNameSchema.safeParse(written).success) return false;
+function decisionCaseProblem(
+  nodeId: string,
+  handler: string,
+  branchCase: BranchCase,
+  answers: readonly (string | boolean)[] | undefined,
+): string | undefined {
+  const when = branchCase.when;
 
-  return declared !== written;
+  if (when.path !== '') {
+    return (
+      `\`${nodeId}\` runs \`${handler}\`, so its cases match what that ` +
+      `decided. The \`${branchCase.port}\` case reads \`${when.path}\` out ` +
+      `of the answer instead.`
+    );
+  }
+
+  if (when.op !== 'eq') {
+    return (
+      `\`${nodeId}\` runs \`${handler}\`, so its cases match one answer ` +
+      `each. The \`${branchCase.port}\` case compares with \`${when.op}\` ` +
+      `instead.`
+    );
+  }
+
+  if (
+    answers !== undefined &&
+    !answers.some((answer) => answer === when.value)
+  ) {
+    return (
+      `\`${nodeId}\` has a case for \`${shown(when.value)}\`, which ` +
+      `\`${handler}\` never decides. It decides ` +
+      `${answers.map((answer) => `\`${shown(answer)}\``).join(', ')}.`
+    );
+  }
+
+  return undefined;
+}
+
+/**
+ * An answer as the document writes it, so a string
+ * reads as a string and `true` as a boolean.
+ */
+function shown(value: unknown): string {
+  return JSON.stringify(value) ?? 'nothing';
 }
 
 /**
@@ -848,6 +1016,58 @@ function disagree(declared: string | undefined, written?: string): boolean {
  * several problems reports them the same way every
  * time.
  */
+/**
+ * Whoever reads a guarded block's value across
+ * something in between is skipped under the same
+ * condition.
+ *
+ * V10 asks this of the block a guarded one is
+ * wired straight to. A value travels further than
+ * one wire, though: an email, a wait, a branch
+ * carry it along without binding one of their own,
+ * and the block that finally reads it is reading
+ * what the guarded block produced just the same.
+ * When the guard is false that block did not run,
+ * and there is no value to read.
+ *
+ * A separate rule rather than a wider V10 because
+ * the codes are what tools match on, and this
+ * finding is about a different pair of blocks:
+ * V10 names a wire, and this names two blocks with
+ * a stretch of workflow between them.
+ */
+export function v15GuardedProducers(ctx: RuleContext): Diagnostic[] {
+  const found: Diagnostic[] = [];
+  const bound = producers(ctx.ir);
+
+  for (const node of ctx.ir.nodes) {
+    if (node.in === undefined) continue;
+
+    const producer = ctx.graph.nodes.get(bound.get(node.id) ?? '');
+    if (producer === undefined || producer.guard === undefined) continue;
+    if (sameGuard(node.guard, producer.guard)) continue;
+
+    // V10's finding, reported by V10.
+    const wired = (ctx.graph.outgoing.get(producer.id) ?? []).some(
+      (edge) => !edge.back && edge.to.node === node.id,
+    );
+    if (wired) continue;
+
+    found.push(
+      diagnostic(
+        'V15',
+        `\`${node.id}\` reads what \`${producer.id}\` produced, but ` +
+          `\`${producer.id}\` is skipped when its condition is false, so ` +
+          `there would be nothing to read. Give \`${node.id}\` the same ` +
+          `condition, or stop it requiring an input.`,
+        { nodeId: node.id },
+      ),
+    );
+  }
+
+  return found;
+}
+
 export const RULES: readonly Rule[] = [
   v01TriggerShape,
   v02Structure,
@@ -860,6 +1080,8 @@ export const RULES: readonly Rule[] = [
   v09FormWaits,
   v10GuardedConsumers,
   v11RequesterAddress,
+  v15GuardedProducers,
   v12SerializableTypes,
   v13HandlerSignatures,
+  v14DecisionBranches,
 ];

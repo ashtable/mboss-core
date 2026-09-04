@@ -1,8 +1,7 @@
-import type { WorkflowIR } from '../ir/index.js';
+import { buildGraph, type WorkflowIR } from '../ir/index.js';
 import type { LibManifest } from '../manifest/index.js';
 
 import type { Diagnostic } from './diagnostic.js';
-import { buildGraph } from './graph.js';
 import { RULES } from './rules.js';
 
 /**
@@ -82,9 +81,11 @@ export {
   DiagnosticSeveritySchema,
   DiagnosticSchema,
 } from './diagnostic.js';
+export { handlerFit, decisionValues } from './handler-fit.js';
 
 export type {
   Diagnostic,
   DiagnosticCode,
   DiagnosticSeverity,
 } from './diagnostic.js';
+export type { HandlerFit, HandlerMisfit } from './handler-fit.js';

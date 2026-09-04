@@ -1,20 +1,20 @@
-import type {
-  NodeKind,
-  Predicate,
-  WorkflowEdge,
-  WorkflowIR,
-  WorkflowNode,
-} from '../ir/index.js';
-import { portsOf } from '../ir/index.js';
 import {
+  portsOf,
+  bindsValue,
   buildGraph,
-  dominators,
+  forwardFrom,
   joinOf,
+  producers,
   reachableFrom,
+  sameGuard,
   topologicalOrder,
+  type NodeKind,
+  type Predicate,
+  type WorkflowEdge,
   type WorkflowGraph,
-} from '../validate/graph.js';
-import { sameGuard } from '../validate/rules.js';
+  type WorkflowIR,
+  type WorkflowNode,
+} from '../ir/index.js';
 
 import { UnsupportedIR } from './unsupported.js';
 
@@ -91,17 +91,16 @@ export type PlanItem =
   /**
    * An approval: an email, a wait and a two-way
    * decision, drawn as one block and emitted as
-   * all three. `downstream` is what the person who
-   * answered is told happens next, which starts
-   * where the two arms meet again — the blocks on
-   * the arm they did not take are not that.
+   * all three.
+   *
+   * What the person who answered is told happens
+   * next starts where the two arms meet again
+   * rather than at the block after this one — the
+   * arm they did not take is not that — and
+   * `downstream` on the plan says so for every
+   * block, this one included.
    */
-  | {
-      kind: 'approval';
-      node: WorkflowNode;
-      arms: readonly PlanArm[];
-      downstream: readonly string[];
-    }
+  | { kind: 'approval'; node: WorkflowNode; arms: readonly PlanArm[] }
   | {
       kind: 'countedLoop';
       node: WorkflowNode;
@@ -159,24 +158,6 @@ export type EmissionPlan = {
 };
 
 /**
- * The kinds that bind a value the blocks after
- * them can read.
- *
- * A branch decides where a run goes and produces
- * nothing, so a block after one reads whatever was
- * flowing when the branch was reached. An approval
- * is the same: what it binds is a decision, which
- * only the two ways out of it read, and the value
- * flowing past it is the one that arrived.
- */
-const VALUE_KINDS: ReadonlySet<NodeKind> = new Set<NodeKind>([
-  'step',
-  'codeStep',
-  'apiCall',
-  'transaction',
-]);
-
-/**
  * The kinds a person would call work, which is
  * what a page listing "what happens next" shows.
  * A branch and a loop choose a way rather than do
@@ -228,7 +209,6 @@ class Planner {
   readonly #order: readonly string[];
   readonly #position = new Map<string, number>();
   readonly #producers = new Map<string, string>();
-  readonly #dominators: ReadonlyMap<string, Set<string>>;
   readonly #loops = new Map<string, LoopRegion>();
   readonly #claimed = new Set<string>();
 
@@ -240,16 +220,17 @@ class Planner {
       (node): node is TriggerNode => node.kind === 'trigger',
     );
 
+    // `canCompile` requires exactly one trigger and
+    // runs before this does, so a document reaching
+    // here without one came from a caller that
+    // skipped the gate rather than from a drawing.
     if (trigger === undefined) {
-      throw new UnsupportedIR(
-        'this workflow has no trigger, so it never runs.',
-      );
+      throw new Error('plan: this workflow has no trigger.');
     }
 
     this.#trigger = trigger;
     this.#order = topologicalOrder(this.#graph, trigger.id);
     this.#order.forEach((id, index) => this.#position.set(id, index));
-    this.#dominators = dominators(this.#graph, trigger.id);
   }
 
   plan(): EmissionPlan {
@@ -258,8 +239,14 @@ class Planner {
       .filter((node): node is WorkflowNode => node !== undefined)
       .filter((node) => node.id !== this.#trigger.id);
 
+    for (const [id, producer] of producers(this.#ir)) {
+      this.#producers.set(id, producer);
+    }
+
     for (const node of chain) {
-      this.#producers.set(node.id, this.#producerOf(node));
+      if (node.in !== undefined) {
+        this.#checkWaysInAgree(node, this.#dominatingProducer(node.id));
+      }
     }
 
     this.#findLoops();
@@ -282,13 +269,6 @@ class Planner {
   /** The block whose value another block reads,
    *  once the ways into it have been shown to
    *  agree on which block that is. */
-  #producerOf(node: WorkflowNode): string {
-    const dominating = this.#dominatingProducer(node.id);
-
-    if (node.in !== undefined) this.#checkWaysInAgree(node, dominating);
-
-    return dominating;
-  }
 
   /**
    * The nearest block above one that every run
@@ -301,12 +281,7 @@ class Planner {
    * reference to nothing.
    */
   #dominatingProducer(id: string): string {
-    const doms = this.#dominators.get(id) ?? new Set<string>();
-    const above = [...doms]
-      .filter((other) => other !== id && this.#bindsValue(other))
-      .sort((a, b) => this.#at(a) - this.#at(b));
-
-    return above.at(-1) ?? this.#trigger.id;
+    return this.#producers.get(id) ?? this.#trigger.id;
   }
 
   /**
@@ -343,7 +318,7 @@ class Planner {
       if (edge.back) continue;
       if (!this.#position.has(from)) continue;
 
-      sources.add(this.#bindsValue(from) ? from : dominating);
+      sources.add(bindsValue(this.#graph.nodes.get(from)) ? from : dominating);
     }
 
     if (sources.size < 2) return;
@@ -358,26 +333,6 @@ class Planner {
         `gives a block one value, so it cannot follow both.`,
       node.id,
     );
-  }
-
-  /**
-   * Whether a block leaves a value the blocks after
-   * it can read.
-   *
-   * A wait usually does — what arrived is the whole
-   * point of it — but a wait on the clock alone has
-   * no sender and nothing to bind, so the value
-   * that was flowing carries straight past it.
-   */
-  #bindsValue(id: string): boolean {
-    const node = this.#graph.nodes.get(id);
-
-    if (node === undefined) return false;
-    if (node.kind === 'durableWait') {
-      return node.config.source.kind !== 'timer';
-    }
-
-    return VALUE_KINDS.has(node.kind);
   }
 
   /**
@@ -506,11 +461,16 @@ class Planner {
         ? branch.config.cases.find((each) => each.port === edge.from.port)
         : undefined;
 
+    // V05 refuses a loop-closing wire that leaves
+    // from anything but one of a branch's cases,
+    // and it runs first. The bound below is the
+    // case's to carry, so there is nothing to fall
+    // back to and nothing to say about it that
+    // validation has not said.
     if (found === undefined) {
-      throw new UnsupportedIR(
-        `\`${branch.id}\` wires back to \`${entry}\` from a way out that ` +
-          `is not one of its cases.`,
-        branch.id,
+      throw new Error(
+        `plan: \`${branch.id}\` wires back to \`${entry}\` from a port ` +
+          `that is not one of its cases.`,
       );
     }
 
@@ -551,33 +511,14 @@ class Planner {
    * the branch that closes it, both ends included.
    */
   #membersBetween(entry: string, branch: string): Set<string> {
-    const forward = reachableFrom(this.#graph, entry);
+    const forward = forwardFrom(this.#graph, entry);
     const members = new Set<string>();
 
     for (const id of forward) {
-      if (this.#reaches(id, branch)) members.add(id);
+      if (forwardFrom(this.#graph, id).has(branch)) members.add(id);
     }
 
     return members;
-  }
-
-  #reaches(from: string, to: string): boolean {
-    const seen = new Set<string>();
-    const pending = [from];
-
-    while (pending.length > 0) {
-      const id = pending.pop();
-      if (id === undefined || seen.has(id)) continue;
-      seen.add(id);
-      if (id === to) return true;
-
-      for (const edge of this.#graph.outgoing.get(id) ?? []) {
-        if (edge.back) continue;
-        if (this.#graph.nodes.has(edge.to.node)) pending.push(edge.to.node);
-      }
-    }
-
-    return false;
   }
 
   /**
@@ -764,12 +705,7 @@ class Planner {
     return {
       item:
         node.kind === 'approval'
-          ? {
-              kind: 'approval',
-              node,
-              arms,
-              downstream: this.#titlesFrom(join, true),
-            }
+          ? { kind: 'approval', node, arms }
           : { kind: 'branch', node, arms },
       after: armStop === join && join !== stop ? join : undefined,
       fallsThrough,
@@ -827,7 +763,8 @@ class Planner {
 
     for (const id of members) {
       const node = this.#graph.nodes.get(id);
-      if (node === undefined || !this.#bindsValue(id)) continue;
+      if (node === undefined || !bindsValue(this.#graph.nodes.get(id)))
+        continue;
 
       // A block behind a condition may not run on
       // any round, so there is nothing to promise
@@ -867,13 +804,10 @@ class Planner {
     const edge = outgoing[0];
     if (edge === undefined) return undefined;
 
-    if (!this.#graph.nodes.has(edge.to.node)) {
-      throw new UnsupportedIR(
-        `\`${id}\` wires to \`${edge.to.node}\`, which is not a block in ` +
-          `this workflow.`,
-        id,
-      );
-    }
+    // A wire naming a block the document does not
+    // hold leads nowhere, which is what V02 says
+    // about it before this ever runs.
+    if (!this.#graph.nodes.has(edge.to.node)) return undefined;
 
     return edge.to.node;
   }
@@ -881,8 +815,14 @@ class Planner {
   #node(id: string): WorkflowNode {
     const node = this.#graph.nodes.get(id);
 
+    // Not a refusal: the walk only ever steps onto
+    // ids the graph holds, and V02 has already
+    // refused a document naming one it does not.
+    // An `UnsupportedIR` here would be this
+    // compiler claiming it cannot emit something
+    // nobody can draw.
     if (node === undefined) {
-      throw new UnsupportedIR(`\`${id}\` is not a block in this workflow.`, id);
+      throw new Error(`plan: no block called \`${id}\` in this workflow.`);
     }
 
     return node;

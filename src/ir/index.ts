@@ -8,6 +8,18 @@
  * downstream parses through these schemas rather
  * than trusting the file, because the file is
  * written by agents as well as by the canvas.
+ *
+ * Beside the schemas are the edits made to a
+ * document. The canvas edits it in every way an
+ * agent does, so renaming a node, deleting one and
+ * starting a new one have one implementation each
+ * and every surface calls it.
+ *
+ * Beside the edits is the graph work validation
+ * and the compiler both do over a document —
+ * reachability, dominance, topological order — so
+ * the two agree about what a document's shape
+ * means.
  */
 export {
   WorkflowNameSchema,
@@ -17,6 +29,7 @@ export {
   RetrySchema,
   FanOutSchema,
   HandlerRefSchema,
+  PositionSchema,
   NodeBase,
   EdgeSchema,
 } from './types.js';
@@ -43,14 +56,37 @@ export {
   NODE_PALETTE,
 } from './catalog.js';
 export { WorkflowIRSchema } from './workflow.js';
+export {
+  renameNode,
+  deleteNode,
+  nextEdgeId,
+  starterNode,
+  starterId,
+  withDecisionCases,
+  carryPositions,
+  withoutPositions,
+} from './edit.js';
+export {
+  buildGraph,
+  reachableFrom,
+  forwardFrom,
+  isDag,
+  dominators,
+  topologicalOrder,
+  joinOf,
+} from './graph.js';
+export { sameGuard } from './guard.js';
+export { bindsValue, producers } from './values.js';
 
 export type {
   Predicate,
   Retry,
   FanOut,
   HandlerRef,
+  Position,
   WorkflowEdge,
 } from './types.js';
+export type { WorkflowGraph } from './graph.js';
 export type {
   NodeKind,
   BranchCase,

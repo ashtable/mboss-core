@@ -1,17 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import { WorkflowIRSchema, type WorkflowIR } from '../ir/index.js';
 import { readFixtureJson } from '../test-support/fixtures.js';
 import { makeIR } from '../test-support/ir.js';
 
 import {
   buildGraph,
   dominators,
+  forwardFrom,
   isDag,
   joinOf,
   reachableFrom,
   topologicalOrder,
 } from './graph.js';
+import { WorkflowIRSchema, type WorkflowIR } from './index.js';
 
 function groomBooking(): WorkflowIR {
   return WorkflowIRSchema.parse(
@@ -74,6 +75,47 @@ describe('reachableFrom', () => {
     });
 
     expect([...reachableFrom(buildGraph(ir), 'a')]).toEqual(['a']);
+  });
+});
+
+describe('forwardFrom', () => {
+  /**
+   * `b` loops back to `a`, and `a` is where the
+   * run came in. What a run executes from `b`
+   * includes `a` again; what lies ahead of `b`
+   * does not.
+   */
+  function loop() {
+    return makeIR({
+      nodes: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+      edges: [
+        { from: 'a', to: 'b' },
+        { from: 'b', to: 'a', back: true },
+        { from: 'b', to: 'c' },
+      ],
+    });
+  }
+
+  it('stops at a loop-closing edge where reachableFrom carries on', () => {
+    const graph = buildGraph(loop());
+
+    expect([...forwardFrom(graph, 'b')].sort()).toEqual(['b', 'c']);
+    expect([...reachableFrom(graph, 'b')].sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  it('agrees with reachableFrom where nothing loops', () => {
+    const graph = buildGraph(chainWithIsland());
+
+    expect([...forwardFrom(graph, 'a')].sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  it('ignores an edge naming a node that does not exist', () => {
+    const ir = makeIR({
+      nodes: [{ id: 'a' }],
+      edges: [{ from: 'a', to: 'gone' }],
+    });
+
+    expect([...forwardFrom(buildGraph(ir), 'a')]).toEqual(['a']);
   });
 });
 

@@ -4,9 +4,13 @@
 import express, { type Request, type Response, type Router } from 'express';
 
 import type { ArtifactStore } from '../artifacts.js';
-import type { EmailFormField, WaitDescriptor } from '../contract.js';
+import type {
+  ApprovalReply,
+  EmailFormField,
+  WaitDescriptor,
+} from '../contract.js';
 import type { WorkflowEntry } from '../contract.js';
-import { boundaryOf, parseMultipart } from '../multipart.js';
+import { readPosted, type PostedBody, type PostedFile } from '../multipart.js';
 import {
   renderApprovalDonePage,
   renderApprovalPage,
@@ -286,7 +290,8 @@ async function submitDecision(
   }
 
   const approved = decision === 'approve';
-  await wake(deps, opened, { approved });
+  const reply: ApprovalReply = { approved };
+  await wake(deps, opened, reply);
 
   response.type('html').send(
     renderApprovalDonePage({
@@ -322,41 +327,11 @@ async function wake(
   );
 }
 
-type PostedFile = {
-  name: string;
-  filename: string;
-  contentType: string;
-  body: Uint8Array;
-};
-
-type PostedBody = {
-  fields: Record<string, string>;
-  files: PostedFile[];
-};
-
 function readBody(request: Request): PostedBody {
   const raw: unknown = request.body;
   const bytes = Buffer.isBuffer(raw) ? raw : Buffer.alloc(0);
-  const boundary = boundaryOf(request.header('content-type'));
 
-  if (boundary === null) {
-    const parsed = new URLSearchParams(bytes.toString('utf8'));
-
-    return { fields: Object.fromEntries(parsed), files: [] };
-  }
-
-  const fields: Record<string, string> = {};
-  const files: PostedFile[] = [];
-
-  for (const part of parseMultipart(bytes, boundary)) {
-    if (part.kind === 'field') {
-      fields[part.name] = part.value;
-      continue;
-    }
-    files.push(part);
-  }
-
-  return { fields, files };
+  return readPosted(bytes, request.header('content-type'));
 }
 
 /**

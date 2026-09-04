@@ -1,21 +1,25 @@
 import ELK from 'elkjs';
 
-import type { WorkflowIR } from '../ir/index.js';
+import type { WorkflowIR, WorkflowNode } from '../ir/index.js';
 
 import { toElkGraph } from './graph.js';
+import { LOOSE_GAP, NODE_HEIGHT, nodeSize } from './metrics.js';
 
 /**
  * Deterministic layout: where a workflow's nodes
  * sit on the canvas.
  *
- * Coordinates are computed from the document and
- * handed back, never written into it. The IR has
- * no coordinate fields at all, so there is nothing
- * for an agent to emit and nothing to drift out of
- * date — the price is that layout runs on every
- * render, which is why it may not read the clock,
- * the DOM, or anything else that could make two
- * runs on one document disagree.
+ * `layout` computes every coordinate from the
+ * shape of the document and hands them back,
+ * never writing them into it. `place` starts from
+ * the positions a person has already put there and
+ * lays out only what they have not placed.
+ *
+ * Neither may read the clock, the DOM, or anything
+ * else that could make two runs on one document
+ * disagree: both run on every render, and the same
+ * document has to land in the same place each
+ * time.
  */
 
 /**
@@ -62,6 +66,64 @@ export async function layout(ir: WorkflowIR): Promise<Map<string, NodeBox>> {
 }
 
 /**
+ * The box a node occupies at a position it carries.
+ */
+function boxAt(node: WorkflowNode, x: number, y: number): NodeBox {
+  const { width, height } = nodeSize(node.kind);
+
+  return { x, y, w: width, h: height };
+}
+
+/**
+ * Where each node sits, honouring the positions
+ * the document carries and laying out only what it
+ * does not.
+ *
+ * Three cases. A document nobody has placed a
+ * block in is an ordinary `layout`. A document
+ * where every block has been placed is its own
+ * coordinates and never reaches the layout engine.
+ * In between, the placed blocks stay exactly where
+ * they were put and the rest are parked in a
+ * column under them, in document order — an agent
+ * added blocks nobody has moved yet, and this puts
+ * them somewhere a person will find them rather
+ * than re-arranging a layout somebody made by
+ * hand.
+ *
+ * Nothing rounds here: a position is whole pixels
+ * by the time the schema has parsed it.
+ *
+ * Async because the first case is `layout`.
+ */
+export async function place(ir: WorkflowIR): Promise<Map<string, NodeBox>> {
+  const boxes = new Map<string, NodeBox>();
+  const parked: WorkflowNode[] = [];
+
+  for (const node of ir.nodes) {
+    const { position } = node;
+
+    if (position) boxes.set(node.id, boxAt(node, position.x, position.y));
+    else parked.push(node);
+  }
+
+  // An empty document lands here too, and laying
+  // out nothing is the right answer for it.
+  if (boxes.size === 0) return layout(ir);
+
+  const placed = [...boxes.values()];
+  const left = Math.min(...placed.map((box) => box.x));
+  let y = Math.max(...placed.map((box) => box.y + box.h)) + LOOSE_GAP;
+
+  for (const node of parked) {
+    boxes.set(node.id, boxAt(node, left, y));
+    y += NODE_HEIGHT + LOOSE_GAP;
+  }
+
+  return boxes;
+}
+
+/**
  * The metrics table is part of the public surface
  * because the canvas has to draw nodes at the
  * sizes these coordinates were computed for. A
@@ -70,8 +132,7 @@ export async function layout(ir: WorkflowIR): Promise<Map<string, NodeBox>> {
  */
 export {
   NODE_WIDTH,
-  NODE_BASE_HEIGHT,
-  CONFIG_ROW_HEIGHT,
+  NODE_HEIGHT,
   TITLE_MAX_CHARS,
   nodeSize,
   truncateTitle,

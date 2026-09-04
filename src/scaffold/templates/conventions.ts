@@ -8,11 +8,12 @@
  * true for the life of the project rather than
  * true of one generation of it.
  *
- * Four of its sections are decisions made
+ * Five of its sections are decisions made
  * elsewhere in mBoss that a handler author cannot
  * discover from the canvas and will otherwise get
  * wrong: how a transaction handler has to write,
- * what a per-item output really carries, what the
+ * what a per-item output really carries, what a
+ * branch's handler is allowed to return, what the
  * ingress actually validates, and which loop
  * settings have no compiled effect yet.
  */
@@ -75,6 +76,27 @@ receives is an array of those. The block catalog cannot yet say "a list of
 Receipt", so the two disagree on purpose. Where it matters, the mismatch
 shows up as a type error at build time inside \`src/workflows/\` — in
 generated code, about a real problem in the drawing.
+
+## A branch with a handler returns a decision
+
+A block of kind \`branch\` either tests a value the run is already carrying or
+calls code of yours. When it calls code, the function runs as a step and the
+value it returns is what the branch tests, so it has to be something the
+branch's cases can name: \`Promise<boolean>\`, or a \`Promise\` of a union of
+string literals with one case on the branch per value.
+
+\`\`\`ts
+type Verdict = 'approve' | 'refuse' | 'hold';
+
+export async function decide(claim: { amount: number }): Promise<Verdict> {
+  return claim.amount > 5000 ? 'hold' : 'approve';
+}
+\`\`\`
+
+An alias that resolves to one of those, as above, is fine. Anything else — a
+number, an object, a string that is not one of a fixed set — is refused by
+validation, so a workflow drawn that way does not compile and the function
+is never called.
 
 ## What the event ingress actually checks
 

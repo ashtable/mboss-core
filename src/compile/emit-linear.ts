@@ -1,15 +1,16 @@
 import { FORM_LINK_MAX_SECONDS } from '../app-contract/limits.js';
-import type { LibManifest } from '../manifest/index.js';
-import type {
-  FormField,
-  Predicate,
-  Recipient,
-  Retry,
-  WaitSource,
-  WorkflowIR,
-  WorkflowNode,
+import { RUNTIME_VALUES } from '../app-contract/index.js';
+import {
+  sameGuard,
+  type FormField,
+  type Predicate,
+  type Recipient,
+  type Retry,
+  type WaitSource,
+  type WorkflowIR,
+  type WorkflowNode,
 } from '../ir/index.js';
-import { sameGuard } from '../validate/rules.js';
+import type { LibManifest } from '../manifest/index.js';
 
 import {
   expandedCall,
@@ -38,6 +39,7 @@ import {
   importBlock,
   libTypeImport,
   libValueImport,
+  runtimeImport,
   type ImportEntry,
 } from './imports.js';
 import {
@@ -202,11 +204,11 @@ class Emitter {
 
     this.#locals = new LocalNames([
       'DBOS',
-      'appDb',
-      'sendNodeEmail',
-      'isTransientSendFailure',
-      'registerWaitCorrelation',
-      'clearWaitCorrelation',
+      // Whatever the runtime binds, taken from the
+      // table the imports come from: a local of
+      // one of these names would shadow the import
+      // the file makes of it.
+      ...RUNTIME_VALUES,
       RUN_ID,
       REQUESTER,
       PAYLOAD_PARAMETER,
@@ -465,16 +467,56 @@ class Emitter {
    * A branch, as its cases in the order the author
    * wrote them.
    *
-   * The condition reads the value that was flowing
-   * when the run arrived here, which is the nearest
-   * block above the branch that every run passes
-   * through — a branch itself produces nothing.
+   * A branch with no code of its own reads the
+   * value that was flowing when the run arrived
+   * here, which is the nearest block above it that
+   * every run passes through — a branch itself
+   * produces nothing. A branch with a handler reads
+   * what that handler decided instead.
    */
   #emitBranch(item: Extract<PlanItem, { kind: 'branch' }>): void {
-    const root = this.#valueOf(item.node);
-    if (root === undefined) throw this.#unreachableValue(item.node);
+    const node = item.node;
 
-    this.#writeArms(root, item.arms);
+    if (node.handler !== undefined) {
+      this.#writeArms(this.#emitDecision(node), item.arms, false);
+      return;
+    }
+
+    const root = this.#valueOf(node);
+    if (root === undefined) throw this.#unreachableValue(node);
+
+    this.#writeArms(root, item.arms, true);
+  }
+
+  /**
+   * The handler behind a branch, run as a step,
+   * into the local its cases test.
+   *
+   * It is the author's code and may do anything, so
+   * it runs as a step like every other handler:
+   * recording its round inside a loop and honouring
+   * the retry policy the block carries. The local
+   * is deliberately not put in scope — nothing
+   * downstream may read what a branch decided, and
+   * a block on either arm reads the value that was
+   * flowing when the run arrived.
+   */
+  #emitDecision(node: WorkflowNode): string {
+    const local = this.#locals.take(`${camelCase(node.id)}Decision`);
+    const call = this.#handlerCall(node, this.#valueOf(node));
+
+    expandedCall(
+      this.#body,
+      `const ${local} = await DBOS.runStep`,
+      `async () => ${call}`,
+      [
+        `name: ${stepNameLiteral(node.id, this.#segments([]))},`,
+        ...retryOptions(node.retry),
+      ],
+    );
+    this.#body.blank();
+
+    return local;
   }
 
   /**
@@ -485,14 +527,20 @@ class Emitter {
    * Shared with the approval, whose two ways out
    * are a branch in everything but where the value
    * they test came from.
+   *
+   * `fold` is whether a case that closes a loop may
+   * carry the loop's bound in its own condition,
+   * which `#armCondition` explains.
    */
-  #writeArms(root: string, arms: readonly PlanArm[]): void {
+  #writeArms(root: string, arms: readonly PlanArm[], fold: boolean): void {
     writeBranch(
       this.#body,
       arms.map((arm) => ({
         ...(arm.when === undefined
           ? {}
-          : { condition: this.#armCondition(root, arm.when, arm.target) }),
+          : {
+              condition: this.#armCondition(root, arm.when, arm.target, fold),
+            }),
         body: () => this.#emitArm(arm),
       })),
     );
@@ -509,12 +557,24 @@ class Emitter {
    * run takes whichever way out the branch offers
    * next. That is what "as if the case had not
    * matched" has to mean in code.
+   *
+   * A decision's ways out are not folded. What the
+   * run takes next there is the fall-through, and a
+   * decision's fall-through is a `return` — folding
+   * would end the run on the last round instead of
+   * carrying it on. The `do … while` around the
+   * loop already bounds it.
    */
-  #armCondition(root: string, when: Predicate, target: ArmTarget): string {
+  #armCondition(
+    root: string,
+    when: Predicate,
+    target: ArmTarget,
+    fold: boolean,
+  ): string {
     const condition = predicateExpression(root, when);
     const loop = this.#open.at(-1);
 
-    if (target.kind !== 'again' || loop?.foldTo === undefined) {
+    if (!fold || target.kind !== 'again' || loop?.foldTo === undefined) {
       return condition;
     }
 
@@ -751,7 +811,7 @@ class Emitter {
       `const ${local} = await appDb.runTransaction(async () => ${call}, ` +
       `{ name: ${name} });`;
 
-    this.#want({ specifier: '../app/db.js', name: 'appDb', type: false });
+    this.#want(runtimeImport('db', 'appDb'));
 
     if (this.#body.fits(one)) {
       this.#body.line(one);
@@ -791,7 +851,7 @@ class Emitter {
     const inTransaction = node.kind === 'transaction';
 
     if (inTransaction) {
-      this.#want({ specifier: '../app/db.js', name: 'appDb', type: false });
+      this.#want(runtimeImport('db', 'appDb'));
     }
 
     const items = this.#locals.take('items');
@@ -1018,8 +1078,8 @@ class Emitter {
 
     if (config.source.kind === 'form') this.#refuseLongerThanLink(node, days);
 
-    this.#want(waitsImport('registerWaitCorrelation'));
-    this.#want(waitsImport('clearWaitCorrelation'));
+    this.#want(runtimeImport('waits', 'registerWaitCorrelation'));
+    this.#want(runtimeImport('waits', 'clearWaitCorrelation'));
 
     const shape: WaitShape = {
       local,
@@ -1194,17 +1254,9 @@ class Emitter {
 
     const retries = retriesOn(node.retry);
 
-    this.#want({
-      specifier: '../app/mail.js',
-      name: 'sendNodeEmail',
-      type: false,
-    });
+    this.#want(runtimeImport('mail', 'sendNodeEmail'));
     if (retries) {
-      this.#want({
-        specifier: '../app/mailer.js',
-        name: 'isTransientSendFailure',
-        type: false,
-      });
+      this.#want(runtimeImport('mailer', 'isTransientSendFailure'));
     }
 
     return {
@@ -1452,21 +1504,13 @@ class Emitter {
     const seconds = days * SECONDS_PER_DAY;
     const local = this.#local(node);
 
-    this.#want({
-      specifier: '../app/mail.js',
-      name: 'sendNodeEmail',
-      type: false,
-    });
-    this.#want(waitsImport('registerWaitCorrelation'));
-    this.#want(waitsImport('clearWaitCorrelation'));
+    this.#want(runtimeImport('mail', 'sendNodeEmail'));
+    this.#want(runtimeImport('waits', 'registerWaitCorrelation'));
+    this.#want(runtimeImport('waits', 'clearWaitCorrelation'));
 
     const retries = retriesOn(node.retry);
     if (retries) {
-      this.#want({
-        specifier: '../app/mailer.js',
-        name: 'isTransientSendFailure',
-        type: false,
-      });
+      this.#want(runtimeImport('mailer', 'isTransientSendFailure'));
       this.#body.comment(
         'A retry can send a second copy when the provider accepted a ' +
           'request whose response was lost. A run that never sends its ' +
@@ -1501,7 +1545,10 @@ class Emitter {
               { key: 'expiresInSeconds', value: source(String(seconds)) },
             ]),
           },
-          { key: 'downstream', value: titlesList(item.downstream) },
+          {
+            key: 'downstream',
+            value: titlesList(this.#plan.downstream.get(node.id) ?? []),
+          },
         ]),
       ),
       options: [
@@ -1511,6 +1558,8 @@ class Emitter {
       ],
     });
     this.#body.blank();
+
+    this.#want(runtimeImport('contract', 'ApprovalReply'));
 
     writeWait(this.#body, {
       local,
@@ -1531,7 +1580,7 @@ class Emitter {
     });
     this.#body.blank();
 
-    this.#writeArms(local, item.arms);
+    this.#writeArms(local, item.arms, true);
   }
 
   /** The title the emails say this workflow is. */
@@ -1703,11 +1752,7 @@ class Emitter {
     }
     writer.blank();
 
-    this.#want({
-      specifier: '../app/contract.js',
-      name: 'TriggerDescriptor',
-      type: true,
-    });
+    this.#want(runtimeImport('contract', 'TriggerDescriptor'));
 
     if (trigger.mode === 'event') {
       writer.open('export const trigger: TriggerDescriptor = {');
@@ -1734,11 +1779,7 @@ class Emitter {
     this.#emitCheckPayload(writer);
 
     if (trigger.mode === 'schedule') {
-      this.#want({
-        specifier: '../app/contract.js',
-        name: 'ScheduleEntry',
-        type: true,
-      });
+      this.#want(runtimeImport('contract', 'ScheduleEntry'));
 
       writer.blank();
       writer.open('export const schedule: ScheduleEntry = {');
@@ -1755,16 +1796,8 @@ class Emitter {
     }
 
     writer.blank();
-    this.#want({
-      specifier: '../app/contract.js',
-      name: 'WaitDescriptor',
-      type: true,
-    });
-    this.#want({
-      specifier: '../app/contract.js',
-      name: 'EventWait',
-      type: true,
-    });
+    this.#want(runtimeImport('contract', 'WaitDescriptor'));
+    this.#want(runtimeImport('contract', 'EventWait'));
     writeValue(
       writer,
       'export const waits: Record<string, WaitDescriptor> = ',
@@ -1888,11 +1921,7 @@ class Emitter {
    * could not keep.
    */
   #emitCheckPayload(writer: SourceWriter): void {
-    this.#want({
-      specifier: '../app/contract.js',
-      name: 'PayloadCheck',
-      type: true,
-    });
+    this.#want(runtimeImport('contract', 'PayloadCheck'));
 
     const trigger = this.#plan.trigger.config;
 
@@ -1984,12 +2013,17 @@ class Emitter {
  * A run's answer to an approval, as the type the
  * park is written against.
  *
- * Written out rather than imported: the shape is
- * the runtime's own reply to its approval page,
- * not anything the project's code-behind declares,
- * so there is no file it could come from.
+ * The shape is the runtime's own reply to its own
+ * approval page rather than anything the project's
+ * code-behind declares, so it comes from the
+ * contract file — the one place the generated code
+ * and the runtime already agree about a type.
+ * Written out here instead, it would be a shape
+ * spelled twice in two trees, and `recv` casts, so
+ * the day they disagreed would be a day the run
+ * read a field nobody sent.
  */
-const APPROVAL_REPLY = '{ approved: boolean }';
+const APPROVAL_REPLY = 'ApprovalReply';
 
 /**
  * The topic every wait on a person registers
@@ -2010,10 +2044,6 @@ const APPROVAL_REPLY = '{ approved: boolean }';
  * author has to learn.
  */
 const FORM_TOPIC = 'mboss.form';
-
-function waitsImport(name: string): ImportEntry {
-  return { specifier: '../app/waits.js', name, type: false };
-}
 
 /** Which table a message arrives on. */
 function topicOf(waitOn: WaitSource): string {

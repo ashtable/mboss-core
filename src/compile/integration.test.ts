@@ -48,15 +48,26 @@ import { typecheckProject } from './typecheck.js';
 const TIMEZONE = 'America/Los_Angeles';
 
 /**
- * The three documents, chosen for what they make
- * the compiler emit rather than for variety: an
- * event wait inside a bounded loop with a
- * transaction and an email after it, a form wait
- * whose token is minted by the email before it,
- * and an approval that desugars into a wait of its
- * own.
+ * The documents, chosen for what they make the
+ * compiler emit rather than for variety: an event
+ * wait inside a bounded loop with a transaction and
+ * an email after it, a form wait whose token is
+ * minted by the email before it, an approval that
+ * desugars into a wait of its own, a branch running
+ * code that decides two ways and another that
+ * decides three, and the same decision closing a
+ * loop under each of the two things an author can
+ * ask for when the rounds run out.
  */
-const WORKFLOWS = ['approval_flow', 'form_intake', 'groom_booking'] as const;
+const WORKFLOWS = [
+  'approval_flow',
+  'decision_three_ways',
+  'decision_yes_no',
+  'form_intake',
+  'groom_booking',
+  'slot_retry_abort',
+  'slot_retry_continue',
+] as const;
 
 /**
  * A workflow spec is the document minus its
@@ -189,7 +200,7 @@ afterAll(async () => {
   if (project) await removeTypecheckProject(project);
 });
 
-describe('a scaffolded project with three workflows applied', () => {
+describe('a scaffolded project with every fixture applied', () => {
   it('applies every fixture through the real validation gate', () => {
     // A fixture the gate refuses is a broken
     // fixture. Routing around it here would mean
@@ -202,14 +213,14 @@ describe('a scaffolded project with three workflows applied', () => {
     ).toEqual([...WORKFLOWS]);
   });
 
-  it('compiles all three and writes the registry', () => {
+  it('compiles every one of them and writes the registry', () => {
     expect(compiled.ok ? [] : compiled.failures).toEqual([]);
-    expect(compiled.ok && compiled.written).toEqual([
-      'src/workflows/approval_flow.workflow.ts',
-      'src/workflows/form_intake.workflow.ts',
-      'src/workflows/groom_booking.workflow.ts',
-      'src/workflows/index.ts',
-    ]);
+    expect(compiled.ok && compiled.written).toEqual(
+      [
+        ...WORKFLOWS.map((name) => `src/workflows/${name}.workflow.ts`),
+        'src/workflows/index.ts',
+      ].sort(),
+    );
   });
 
   it('carries each document title into the registry, not the slug', async () => {
@@ -411,11 +422,14 @@ describe('after a workflow is deleted', () => {
     expect(result.ok && result.removed).toEqual([
       'src/workflows/form_intake.workflow.ts',
     ]);
-    expect(Object.keys(await generatedFiles())).toEqual([
-      'approval_flow.workflow.ts',
-      'groom_booking.workflow.ts',
-      'index.ts',
-    ]);
+    expect(Object.keys(await generatedFiles())).toEqual(
+      [
+        ...WORKFLOWS.filter((name) => name !== 'form_intake').map(
+          (name) => `${name}.workflow.ts`,
+        ),
+        'index.ts',
+      ].sort(),
+    );
 
     const registry = await readFile(
       join(project.projectDir, 'src', 'workflows', 'index.ts'),

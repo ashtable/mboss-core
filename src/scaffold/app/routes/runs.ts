@@ -28,6 +28,11 @@ import { pathParam, requireSecret, type StartWorkflow } from './ports.js';
  * makes pressing the button twice mean one run:
  * only the caller knows whether the second press
  * was a retry of the first.
+ *
+ * The answer is `{ ok: true, workflowID }`, and
+ * the id is the one the run was actually filed
+ * under: a caller that named none has no other
+ * way to learn the one the SDK minted.
  */
 
 export type RunDeps = {
@@ -71,8 +76,8 @@ export function runRoutes(deps: RunDeps): Router {
 
       void deps
         .startWorkflow(entry, workflowID, payload)
-        .then(() => {
-          response.status(202).json({ ok: true });
+        .then((filedAs) => {
+          response.status(202).json({ ok: true, workflowID: filedAs });
         })
         .catch((error: unknown) => {
           response.status(500).json({ error: String(error) });

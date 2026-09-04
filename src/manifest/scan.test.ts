@@ -16,7 +16,11 @@ const manifest = scanLib(join(fixturesRoot, 'lib'));
 const unserializable = scanLib(join(fixturesRoot, 'lib-unserializable'));
 
 function exported(name: string): LibFunction {
-  const found = manifest.functions.find((fn) => fn.export === name);
+  return exportedFrom(manifest, name);
+}
+
+function exportedFrom(scanned: LibManifest, name: string): LibFunction {
+  const found = scanned.functions.find((fn) => fn.export === name);
   if (!found) throw new Error(`${name} is not in the manifest`);
   return found;
 }
@@ -37,6 +41,7 @@ function withoutScannedAt(
 describe('scanLib', () => {
   it('offers exactly the handlers the code-behind exports', () => {
     expect(manifest.functions.map((fn) => fn.export).sort()).toEqual([
+      'autoApprove',
       'bookAppointment',
       'closeClaim',
       'confirmSlot',
@@ -47,7 +52,9 @@ describe('scanLib', () => {
       'readReply',
       'recordBooking',
       'recordIntake',
+      'routeClaim',
       'sweepStale',
+      'tryAgain',
       'twilioChat',
     ]);
   });
@@ -112,6 +119,7 @@ describe('scanLib', () => {
       'IntakeRequest',
       'Payment',
       'Refusal',
+      'Routing',
       'SlotGrid',
       'WebhookEvent',
     ]);
@@ -209,6 +217,83 @@ describe('scanLib on code-behind that cannot travel between blocks', () => {
       { type: 'Beta', path: 'a', reason: 'buffer' },
       { type: 'Beta', path: 'z', reason: 'function' },
     ]);
+  });
+});
+
+/**
+ * One code-behind file carrying the two shapes the
+ * blessed fixtures do not: a call that may leave
+ * arguments out, and the return types a branch's
+ * decision is read off.
+ */
+const shapes = scannedFromSource(
+  [
+    "export type Verdict = 'yes' | 'no';",
+    '',
+    'export function greet(',
+    '  name: string,',
+    '  salutation?: string,',
+    '  times = 1,',
+    '): string {',
+    "  return `${salutation ?? 'hi'} ${name}`.repeat(times);",
+    '}',
+    '',
+    'export async function judge(): Promise<Verdict> {',
+    "  return 'yes';",
+    '}',
+    '',
+    'export async function reachedTen(count: number): Promise<boolean> {',
+    '  return count >= 10;',
+    '}',
+    '',
+    'export async function countStale(): Promise<number> {',
+    '  return 0;',
+    '}',
+    '',
+    'export async function maybeJudge(): Promise<Verdict | undefined> {',
+    '  return undefined;',
+    '}',
+  ].join('\n'),
+);
+
+describe('scanLib on optional parameters and decision return types', () => {
+  it('compiles cleanly, so nothing here is read off broken code', () => {
+    expect(shapes.errors).toEqual([]);
+  });
+
+  it('marks the parameters a call may leave out', () => {
+    // A question mark and a default are the same
+    // fact at the call site, and it is the call
+    // site the rule about handler arity is about.
+    expect(exportedFrom(shapes, 'greet').params).toEqual([
+      { name: 'name', type: 'string' },
+      { name: 'salutation', type: 'string', optional: true },
+      { name: 'times', type: 'number', optional: true },
+    ]);
+  });
+
+  it('reads a decision through the alias it was written as', () => {
+    // `returnType` prints the type the way the
+    // source wrote it, so the text is `Verdict` and
+    // says nothing about what a Verdict can be.
+    const fn = exportedFrom(shapes, 'judge');
+
+    expect(fn.returnType).toBe('Verdict');
+    expect(fn.decision).toEqual(['yes', 'no']);
+  });
+
+  it('reads a boolean as the two values it decides between', () => {
+    expect(exportedFrom(shapes, 'reachedTen').decision).toEqual([true, false]);
+  });
+
+  it('records no decision for a return type that is not one', () => {
+    expect(exportedFrom(shapes, 'countStale').decision).toBeUndefined();
+
+    // A union carrying anything but literals is
+    // not a set of cases either, and reading one
+    // as though it were would ask a branch to
+    // handle a value that has no name.
+    expect(exportedFrom(shapes, 'maybeJudge').decision).toBeUndefined();
   });
 });
 

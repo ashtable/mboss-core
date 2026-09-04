@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
-import { WorkflowIRSchema, type WorkflowIR } from '../ir/index.js';
+import {
+  WorkflowIRSchema,
+  buildGraph,
+  type Predicate,
+  type WorkflowIR,
+} from '../ir/index.js';
 import { LibManifestSchema, type LibManifest } from '../manifest/index.js';
 import { readFixtureJson } from '../test-support/fixtures.js';
 import { makeIR, type NodeSpec } from '../test-support/ir.js';
 
 import type { Diagnostic } from './diagnostic.js';
-import { buildGraph } from './graph.js';
 import { canCompile, hasErrors, validateWorkflow } from './index.js';
 import {
   RULES,
-  sameGuard,
   v01TriggerShape,
   v02Structure,
   v03Reachability,
@@ -24,6 +27,8 @@ import {
   v11RequesterAddress,
   v12SerializableTypes,
   v13HandlerSignatures,
+  v14DecisionBranches,
+  v15GuardedProducers,
   type RuleContext,
 } from './rules.js';
 
@@ -445,6 +450,35 @@ describe('V07 handlers', () => {
     expect(codes(found)).toEqual(['V07']);
     expect(found[0]?.severity).toBe('warning');
   });
+
+  it('warns about a branch running a function the code-behind does not export', () => {
+    const ir = makeIR({
+      nodes: [{ ...YES_NO_BRANCH, handler: { export: 'checkDone' } }],
+    });
+    const manifest = manifestWith({
+      functions: [
+        {
+          export: 'parseRequest',
+          file: 'lib/parseRequest.ts',
+          params: [],
+          returnType: 'BookingReq',
+        },
+      ],
+    });
+    const found = check(v07Handlers, ir, manifest);
+
+    expect(codes(found)).toEqual(['V07']);
+    expect(found[0]?.nodeId).toBe('decide');
+  });
+
+  it('says nothing about a branch with no handler', () => {
+    // A branch tests the value that reached it
+    // until somebody gives it code of its own, so a
+    // branch without a handler is not missing one.
+    const ir = makeIR({ nodes: [YES_NO_BRANCH] });
+
+    expect(check(v07Handlers, ir, manifestWith({}))).toEqual([]);
+  });
 });
 
 describe('V08 loop bodies', () => {
@@ -630,6 +664,96 @@ describe('V10 guarded consumers', () => {
   });
 });
 
+describe('V15 guarded producers', () => {
+  const guard = { path: 'uploads', op: 'nonempty' } as const;
+
+  /**
+   * The email binds no value, so what `after`
+   * reads is still what `maybe` produced — across
+   * a block V10 never looks past.
+   */
+  function acrossAnEmail(consumer: NodeSpec) {
+    return makeIR({
+      nodes: [
+        { id: 'trigger', kind: 'trigger', config: { mode: 'manual' } },
+        { id: 'maybe', out: 'Booking', guard },
+        {
+          id: 'notify',
+          kind: 'emailSend',
+          config: {
+            to: 'requestingUser',
+            subject: 's',
+            bodyMarkdown: 'b',
+            attach: { type: 'none' },
+          },
+        },
+        consumer,
+      ],
+      edges: [
+        { from: 'trigger', to: 'maybe' },
+        { from: 'maybe', to: 'notify', type: 'Booking' },
+        { from: 'notify', to: 'after', type: 'Booking' },
+      ],
+    });
+  }
+
+  it('rejects a consumer that reads a guarded value across a block between', () => {
+    const found = check(
+      v15GuardedProducers,
+      acrossAnEmail({ id: 'after', in: 'Booking' }),
+    );
+
+    expect(codes(found)).toEqual(['V15']);
+    expect(found[0]?.nodeId).toBe('after');
+  });
+
+  it('accepts a consumer skipped under the same condition', () => {
+    const ir = acrossAnEmail({ id: 'after', in: 'Booking', guard });
+
+    expect(check(v15GuardedProducers, ir)).toEqual([]);
+  });
+
+  it('accepts a consumer that declares no input of its own', () => {
+    const ir = acrossAnEmail({ id: 'after' });
+
+    expect(check(v15GuardedProducers, ir)).toEqual([]);
+  });
+
+  /**
+   * The pair V10 already names. Reporting it twice
+   * would put two findings on one block for one
+   * mistake.
+   */
+  it('leaves a directly wired producer to V10', () => {
+    const ir = makeIR({
+      nodes: [
+        { id: 'trigger', kind: 'trigger', config: { mode: 'manual' } },
+        { id: 'maybe', out: 'Booking', guard },
+        { id: 'after', in: 'Booking' },
+      ],
+      edges: [
+        { from: 'trigger', to: 'maybe' },
+        { from: 'maybe', to: 'after', type: 'Booking' },
+      ],
+    });
+
+    expect(check(v10GuardedConsumers, ir)).toHaveLength(1);
+    expect(check(v15GuardedProducers, ir)).toEqual([]);
+  });
+
+  it('says nothing about an unguarded producer', () => {
+    const ir = acrossAnEmail({ id: 'after', in: 'Booking' });
+    const unguarded = {
+      ...ir,
+      nodes: ir.nodes.map((node) =>
+        node.id === 'maybe' ? { ...node, guard: undefined } : node,
+      ),
+    };
+
+    expect(check(v15GuardedProducers, unguarded)).toEqual([]);
+  });
+});
+
 describe('V11 requester address', () => {
   const emailToRequester: NodeSpec = {
     id: 'confirm',
@@ -806,6 +930,15 @@ describe('V13 handler signatures', () => {
         params: [],
         returnType: 'SlotGrid',
       },
+      {
+        export: 'pairUp',
+        file: 'lib/pairUp.ts',
+        params: [
+          { name: 'req', type: 'BookingReq' },
+          { name: 'grid', type: 'SlotGrid' },
+        ],
+        returnType: 'Booking',
+      },
     ],
   });
 
@@ -919,6 +1052,21 @@ describe('V13 handler signatures', () => {
     expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);
   });
 
+  it('says nothing about a handler that takes more than one value', () => {
+    // Such a function is greyed in the picker and
+    // refused at the drop target, and the generated
+    // code's own type-check refuses it a third
+    // time. A diagnostic here would be read off a
+    // cache that may not have recorded which
+    // parameters a call may leave out, and would
+    // put an error on a handler that compiles.
+    const ir = makeIR({
+      nodes: [{ id: 'pair_up', in: 'SlotGrid', handler: { export: 'pairUp' } }],
+    });
+
+    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);
+  });
+
   it('says nothing when the handler’s type is not a plain name', () => {
     const ir = makeIR({
       nodes: [
@@ -930,31 +1078,221 @@ describe('V13 handler signatures', () => {
   });
 });
 
-describe('the rule list', () => {
-  it('ends with the two rules that read the scan’s structure, in order', () => {
-    expect(RULES.slice(-2)).toEqual([
-      v12SerializableTypes,
-      v13HandlerSignatures,
-    ]);
+describe('V14 decision branches', () => {
+  const manifest = manifestWith({
+    types: ['SlotGrid'],
+    functions: [
+      {
+        export: 'hasMore',
+        file: 'lib/hasMore.ts',
+        params: [],
+        returnType: 'boolean',
+        decision: [true, false],
+      },
+      {
+        export: 'readIntent',
+        file: 'lib/readIntent.ts',
+        params: [],
+        returnType: 'Intent',
+        decision: ['book', 'reschedule'],
+      },
+      {
+        export: 'findSlot',
+        file: 'lib/findSlot.ts',
+        params: [],
+        returnType: 'SlotGrid',
+      },
+    ],
+  });
+
+  /**
+   * A branch running code, with the cases a test
+   * needs it to carry. The fall-through port is
+   * never wired in these documents, which is what a
+   * decision's cases make of it.
+   */
+  function deciding(
+    handler: string,
+    cases: { port: string; when: Predicate }[],
+  ): NodeSpec {
+    return {
+      id: 'decide',
+      kind: 'branch',
+      handler: { export: handler },
+      config: { cases, elsePort: 'else' },
+    };
+  }
+
+  const COUNTER_BRANCH = deciding('hasMore', [
+    { port: 'again', when: { path: '', op: 'eq', value: true } },
+    { port: 'done', when: { path: '', op: 'eq', value: false } },
+  ]);
+
+  it('accepts a branch with one case per answer its handler gives', () => {
+    const ir = makeIR({ nodes: [COUNTER_BRANCH] });
+
+    expect(check(v14DecisionBranches, ir, manifest)).toEqual([]);
+    expect(check(v14DecisionBranches, ir)).toEqual([]);
+  });
+
+  it('says nothing about a branch that runs no code of its own', () => {
+    // Its cases test the value that reached it,
+    // which is what a predicate is for.
+    const ir = makeIR({ nodes: [YES_NO_BRANCH] });
+
+    expect(check(v14DecisionBranches, ir, manifest)).toEqual([]);
+    expect(check(v14DecisionBranches, ir)).toEqual([]);
+  });
+
+  it('rejects a case that reads a path out of the answer', () => {
+    const ir = makeIR({
+      nodes: [
+        deciding('hasMore', [
+          { port: 'again', when: { path: 'ok', op: 'eq', value: true } },
+          { port: 'done', when: { path: '', op: 'eq', value: false } },
+        ]),
+      ],
+    });
+    const found = check(v14DecisionBranches, ir);
+
+    expect(codes(found)).toEqual(['V14']);
+    expect(found[0]?.severity).toBe('error');
+    expect(found[0]?.nodeId).toBe('decide');
+    expect(found[0]?.message).toContain('`ok`');
+
+    // A scan changes nothing about a case shaped
+    // like a predicate: the document says it on its
+    // own.
+    expect(codes(check(v14DecisionBranches, ir, manifest))).toEqual(['V14']);
+  });
+
+  it('rejects a case that compares the answer instead of matching one', () => {
+    const ir = makeIR({
+      nodes: [
+        deciding('readIntent', [
+          { port: 'book', when: { path: '', op: 'neq', value: 'book' } },
+          { port: 'later', when: { path: '', op: 'eq', value: 'reschedule' } },
+        ]),
+      ],
+    });
+    const found = check(v14DecisionBranches, ir);
+
+    expect(codes(found)).toEqual(['V14']);
+    expect(found[0]?.message).toContain('`neq`');
+    expect(codes(check(v14DecisionBranches, ir, manifest))).toEqual(['V14']);
+  });
+
+  it('rejects a handler that decides nothing a case could match', () => {
+    const ir = makeIR({
+      nodes: [
+        deciding('findSlot', [
+          { port: 'again', when: { path: '', op: 'eq', value: true } },
+        ]),
+      ],
+    });
+    const found = check(v14DecisionBranches, ir, manifest);
+
+    expect(codes(found)).toEqual(['V14']);
+    expect(found[0]?.nodeId).toBe('decide');
+    expect(found[0]?.message).toContain('`SlotGrid`');
+
+    // Nothing has read `findSlot` here, and a
+    // document does not look wrong merely because
+    // nothing looked at it.
+    expect(check(v14DecisionBranches, ir)).toEqual([]);
+  });
+
+  it('rejects an answer no case has a way out for', () => {
+    const ir = makeIR({
+      nodes: [
+        deciding('hasMore', [
+          { port: 'again', when: { path: '', op: 'eq', value: true } },
+        ]),
+      ],
+    });
+    const found = check(v14DecisionBranches, ir, manifest);
+
+    expect(codes(found)).toEqual(['V14']);
+    expect(found[0]?.nodeId).toBe('decide');
+    expect(found[0]?.message).toContain('`false`');
+    expect(check(v14DecisionBranches, ir)).toEqual([]);
+  });
+
+  it('rejects a case for an answer the handler never gives', () => {
+    const ir = makeIR({
+      nodes: [
+        deciding('readIntent', [
+          { port: 'book', when: { path: '', op: 'eq', value: 'book' } },
+          { port: 'later', when: { path: '', op: 'eq', value: 'reschedule' } },
+          { port: 'stop', when: { path: '', op: 'eq', value: 'cancel' } },
+        ]),
+      ],
+    });
+    const found = check(v14DecisionBranches, ir, manifest);
+
+    expect(codes(found)).toEqual(['V14']);
+    expect(found[0]?.message).toContain('`"cancel"`');
+    expect(check(v14DecisionBranches, ir)).toEqual([]);
+  });
+
+  it('rejects a case that matches no answer at all', () => {
+    // Legal to write and impossible to take: the
+    // case names nothing for the decision to equal.
+    const ir = makeIR({
+      nodes: [
+        deciding('hasMore', [
+          { port: 'again', when: { path: '', op: 'eq', value: true } },
+          { port: 'done', when: { path: '', op: 'eq' } },
+        ]),
+      ],
+    });
+    const found = check(v14DecisionBranches, ir, manifest);
+
+    expect(codes(found)).toEqual(['V14', 'V14']);
+    expect(found[0]?.message).toContain('`nothing`');
+    expect(found[1]?.message).toContain('`false`');
+  });
+
+  it('says nothing about a handler the scan never saw', () => {
+    // A function that is not there yet is V07's
+    // finding, and one thing to fix rather than two.
+    const ir = makeIR({
+      nodes: [
+        deciding('notThere', [
+          { port: 'again', when: { path: '', op: 'eq', value: true } },
+        ]),
+      ],
+    });
+
+    expect(check(v14DecisionBranches, ir, manifest)).toEqual([]);
+  });
+
+  it('accepts a loop closed on the true case of a decision', () => {
+    // The loop leaves by a case port, which is what
+    // V05 requires and where the compiled loop reads
+    // its bound. The fall-through stays unwired
+    // because the two cases already cover every
+    // answer.
+    const ir = makeIR({
+      nodes: [EVENT_TRIGGER, { id: 'work' }, COUNTER_BRANCH],
+      edges: [
+        { from: 'start', to: 'work' },
+        { from: 'work', to: 'decide' },
+        { from: 'decide', port: 'again', to: 'work', back: true },
+      ],
+    });
+
+    expect(check(v05BackEdges, ir)).toEqual([]);
+    expect(check(v14DecisionBranches, ir, manifest)).toEqual([]);
   });
 });
 
-describe('sameGuard', () => {
-  const guard = { path: 'ok', op: 'eq', value: true } as const;
-
-  it('calls two nodes with no condition equally guarded', () => {
-    expect(sameGuard(undefined, undefined)).toBe(true);
-  });
-
-  it('calls a guarded node and an unguarded one different', () => {
-    expect(sameGuard(guard, undefined)).toBe(false);
-    expect(sameGuard(undefined, guard)).toBe(false);
-  });
-
-  it('compares the path, the operator and the value', () => {
-    expect(sameGuard(guard, { ...guard })).toBe(true);
-    expect(sameGuard(guard, { ...guard, value: false })).toBe(false);
-    expect(sameGuard(guard, { ...guard, op: 'neq' })).toBe(false);
-    expect(sameGuard(guard, { ...guard, path: 'other' })).toBe(false);
+describe('the rule list', () => {
+  it('ends with the three rules that read what the scan recorded, in order', () => {
+    expect(RULES.slice(-3)).toEqual([
+      v12SerializableTypes,
+      v13HandlerSignatures,
+      v14DecisionBranches,
+    ]);
   });
 });

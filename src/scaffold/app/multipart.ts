@@ -2,14 +2,23 @@
 // It is yours now — edit it freely.
 
 /**
- * Reading a `multipart/form-data` post.
+ * Reading a posted form, in either encoding a
+ * browser sends one in.
  *
- * This is here rather than taken from a package
- * because a form that accepts a file is the only
- * place this app meets one, and the format is a
- * handful of delimiters. A dependency for it would
- * be carried by every project mBoss makes, for
- * this.
+ * A form that takes a file posts
+ * `multipart/form-data` and one that does not posts
+ * an encoded string, and which arrived is a fact
+ * about the bytes rather than about the form — so
+ * the caller hands over what it read and gets back
+ * the fields and the files, without having to know
+ * which kind it had.
+ *
+ * The multipart half is here rather than taken from
+ * a package because a form that accepts a file is
+ * the only place this app meets one, and the format
+ * is a handful of delimiters. A dependency for it
+ * would be carried by every project mBoss makes,
+ * for this.
  *
  * It works on bytes throughout. A file part is
  * handed to the object store exactly as it
@@ -17,15 +26,29 @@
  * the way through would corrupt every upload that
  * was not text.
  *
- * The whole body is in memory. That is the right
- * shape for the forms this serves — a few
- * documents — and the wrong shape for large files;
- * the limit is set where the route reads the body,
- * so it refuses one rather than running out of
- * memory over it.
+ * Nothing here knows about a request. The whole
+ * body is in memory, which is the right shape for
+ * the forms this serves — a few documents — and the
+ * wrong shape for large files; the limit is set
+ * where the route reads the body, so it refuses one
+ * rather than running out of memory over it.
  */
 
-export type MultipartPart =
+/** A file as it was posted, before anything has
+ *  been decided about storing it. */
+export type PostedFile = {
+  name: string;
+  filename: string;
+  contentType: string;
+  body: Uint8Array;
+};
+
+export type PostedBody = {
+  fields: Record<string, string>;
+  files: PostedFile[];
+};
+
+type MultipartPart =
   | { kind: 'field'; name: string; value: string }
   | {
       kind: 'file';
@@ -41,10 +64,55 @@ const CRLF = '\r\n';
 const HEADER_END = '\r\n\r\n';
 
 /**
+ * The fields and files a posted body holds.
+ *
+ * A body announcing no multipart boundary is an
+ * encoded string, which carries fields and never a
+ * file — the same answer in a shape the caller
+ * does not have to sort out for itself.
+ */
+export function readPosted(
+  bytes: Uint8Array,
+  contentType: string | undefined,
+): PostedBody {
+  const boundary = boundaryOf(contentType);
+
+  if (boundary === null) {
+    const buffer = Buffer.from(
+      bytes.buffer,
+      bytes.byteOffset,
+      bytes.byteLength,
+    );
+    const parsed = new URLSearchParams(buffer.toString('utf8'));
+
+    return { fields: Object.fromEntries(parsed), files: [] };
+  }
+
+  const fields: Record<string, string> = {};
+  const files: PostedFile[] = [];
+
+  for (const part of parseMultipart(bytes, boundary)) {
+    if (part.kind === 'field') {
+      fields[part.name] = part.value;
+      continue;
+    }
+
+    files.push({
+      name: part.name,
+      filename: part.filename,
+      contentType: part.contentType,
+      body: part.body,
+    });
+  }
+
+  return { fields, files };
+}
+
+/**
  * The boundary a request announced, or null when
  * the request is not a multipart one.
  */
-export function boundaryOf(contentType: string | undefined): string | null {
+function boundaryOf(contentType: string | undefined): string | null {
   if (contentType === undefined) return null;
   if (!contentType.toLowerCase().startsWith('multipart/form-data')) return null;
 
@@ -53,10 +121,7 @@ export function boundaryOf(contentType: string | undefined): string | null {
   return found?.[1] ?? null;
 }
 
-export function parseMultipart(
-  body: Uint8Array,
-  boundary: string,
-): MultipartPart[] {
+function parseMultipart(body: Uint8Array, boundary: string): MultipartPart[] {
   const buffer = Buffer.from(body.buffer, body.byteOffset, body.byteLength);
   const delimiter = Buffer.from(`--${boundary}`, 'binary');
   const marks: number[] = [];

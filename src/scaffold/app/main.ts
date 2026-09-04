@@ -97,9 +97,15 @@ async function main(): Promise<void> {
       // purpose: the registry holds workflows that
       // each take their own input type, and this
       // is the point a checked payload crosses in.
-      await DBOS.startWorkflow(entry.workflowFn, { workflowID })(
+      const handle = await DBOS.startWorkflow(entry.workflowFn, { workflowID })(
         payload as never,
       );
+
+      // The handle's id, not the one passed in:
+      // they are the same when the caller named
+      // one, and this is the only place the minted
+      // one is ever visible when it did not.
+      return handle.workflowID;
     },
     async send(runId, message, nodeId, idempotencyKey) {
       await DBOS.send(runId, message, nodeId, idempotencyKey);

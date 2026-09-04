@@ -1,0 +1,34 @@
+{
+  "$schema": "https://mboss.dev/schemas/workflow-v1.json",
+  "version": 1,
+  "revision": 1,
+  "name": "decision_yes_no",
+  "title": "Claim, decided in code",
+  "nodes": [
+    { "id": "claim_filed", "kind": "trigger", "title": "Claim filed",
+      "config": { "mode": "event", "topic": "expense.filed",
+        "idempotencyKeyPath": "claimId" },
+      "out": "ExpenseClaim" },
+    { "id": "auto_approve", "kind": "branch", "title": "Pay it without asking?",
+      "in": "ExpenseClaim", "handler": { "export": "autoApprove" },
+      "config": { "cases": [
+        { "port": "yes", "when": { "path": "", "op": "eq", "value": true } },
+        { "port": "no",  "when": { "path": "", "op": "eq", "value": false } } ],
+        "elsePort": "else" } },
+    { "id": "pay_claim", "kind": "step", "title": "Pay the claim",
+      "handler": { "export": "payClaim" }, "in": "ExpenseClaim", "out": "Payment",
+      "config": {} },
+    { "id": "file_refusal", "kind": "step", "title": "File the refusal",
+      "handler": { "export": "fileRefusal" }, "in": "ExpenseClaim", "out": "Refusal",
+      "config": {} },
+    { "id": "close_claim", "kind": "step", "title": "Close the claim",
+      "handler": { "export": "closeClaim" }, "config": {} }
+  ],
+  "edges": [
+    { "id": "e1", "from": { "node": "claim_filed", "port": "out" }, "to": { "node": "auto_approve" }, "type": "ExpenseClaim" },
+    { "id": "e2", "from": { "node": "auto_approve", "port": "yes" }, "to": { "node": "pay_claim" }, "type": "ExpenseClaim" },
+    { "id": "e3", "from": { "node": "auto_approve", "port": "no" }, "to": { "node": "file_refusal" }, "type": "ExpenseClaim" },
+    { "id": "e4", "from": { "node": "pay_claim", "port": "out" }, "to": { "node": "close_claim" } },
+    { "id": "e5", "from": { "node": "file_refusal", "port": "out" }, "to": { "node": "close_claim" } }
+  ]
+}

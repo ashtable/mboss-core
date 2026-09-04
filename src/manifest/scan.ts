@@ -173,6 +173,8 @@ function handlerOf(
   }
 
   const doc = declaration.getJsDocs().at(-1)?.getDescription();
+  const returned = returnedValueOf(declaration);
+  const decision = decisionOf(returned);
 
   return {
     export: name,
@@ -182,8 +184,15 @@ function handlerOf(
       type:
         parameter.getTypeNode()?.getText() ??
         parameter.getType().getText(parameter),
+      // Written only where it is true: a `false`
+      // on every ordinary parameter would be noise
+      // in a file people open, and whoever reads
+      // this treats a missing flag as a parameter
+      // the call has to pass.
+      ...(parameter.isOptional() ? { optional: true } : {}),
     })),
-    returnType: returnTypeOf(declaration),
+    returnType: returned.getText(declaration),
+    ...(decision ? { decision } : {}),
     ...(doc?.trim() ? { doc: oneLine(doc) } : {}),
   };
 }
@@ -195,12 +204,38 @@ function handlerOf(
  * Whether a handler is async is the generated
  * workflow's business, not the graph's: a node
  * declares `out: "SlotGrid"` either way, and
- * validation compares that against this.
+ * validation compares that against the name this
+ * type prints as.
  */
-function returnTypeOf(declaration: FunctionDeclaration): string {
+function returnedValueOf(declaration: FunctionDeclaration): Type {
   const returned = declaration.getReturnType();
 
-  return (promisedValueOf(returned) ?? returned).getText(declaration);
+  return promisedValueOf(returned) ?? returned;
+}
+
+/**
+ * The values a handler decides between, or nothing
+ * when it decides nothing.
+ *
+ * This reads the resolved type and not the text
+ * beside it in `returnType`, which prints the type
+ * the way the source wrote it: `Promise<Verdict>`
+ * is recorded as `Verdict`, and no reading of that
+ * name could tell an ordinary alias from a decision
+ * a branch can be built out of.
+ */
+function decisionOf(returned: Type): (string | boolean)[] | undefined {
+  if (returned.isBoolean()) return [true, false];
+
+  const members = returned.isUnion() ? returned.getUnionTypes() : [];
+  if (members.length === 0 || !members.every((one) => one.isStringLiteral())) {
+    return undefined;
+  }
+
+  // Every member is a string literal by the guard
+  // above; the cast through `String` is what
+  // ts-morph's numeric and bigint literals cost.
+  return members.map((one) => String(one.getLiteralValueOrThrow()));
 }
 
 function promisedValueOf(type: Type): Type | undefined {

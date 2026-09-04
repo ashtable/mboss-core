@@ -19,6 +19,13 @@ import {
 import { workflowFile } from './paths.js';
 import type { WorkflowSpec } from './proposal.js';
 
+const idOf = (outcome: ProposeOutcome): string => {
+  if (!outcome.ok)
+    throw new Error(`expected a proposal: ${outcome.error.code}`);
+
+  return outcome.proposal.id;
+};
+
 /**
  * A proposal is how a headless agent shows its
  * work before anything is committed: it writes a
@@ -42,13 +49,6 @@ describe('proposals', () => {
       baseRevision: 1,
       proposedBy: 'claude code',
     });
-
-  const idOf = (outcome: ProposeOutcome): string => {
-    if (!outcome.ok)
-      throw new Error(`expected a proposal: ${outcome.error.code}`);
-
-    return outcome.proposal.id;
-  };
 
   beforeEach(async () => {
     project = await makeProject();
@@ -243,6 +243,124 @@ describe('proposals', () => {
     expect(outcome).toMatchObject({
       ok: false,
       error: { code: 'VALIDATION_FAILED' },
+    });
+  });
+});
+
+/**
+ * An agent proposing an edit to a canvas somebody
+ * has arranged writes back the blocks it read,
+ * with no coordinates on them — it is never shown
+ * any. The proposal is filed as it was written,
+ * and the layout is collected on the way to disk.
+ */
+describe('proposals over a placed document', () => {
+  let project: TestProject;
+
+  const wire = {
+    id: 'e1',
+    from: { node: 'find_slot', port: 'out' },
+    to: { node: 'book_slot' },
+    back: false,
+  };
+
+  const bare: WorkflowSpec = {
+    title: 'Booking',
+    nodes: [
+      { id: 'find_slot', kind: 'step', title: 'Find slot', config: {} },
+      { id: 'book_slot', kind: 'step', title: 'Book slot', config: {} },
+    ],
+    edges: [wire],
+  };
+
+  const placed: WorkflowSpec = {
+    title: 'Booking',
+    nodes: [
+      {
+        id: 'find_slot',
+        kind: 'step',
+        title: 'Find slot',
+        config: {},
+        position: { x: 120, y: 80 },
+      },
+      {
+        id: 'book_slot',
+        kind: 'step',
+        title: 'Book slot',
+        config: {},
+        position: { x: 120, y: 212 },
+      },
+    ],
+    edges: [wire],
+  };
+
+  const propose = (): Promise<ProposeOutcome> =>
+    proposeSpec(project.mbossDir, {
+      name: 'booking',
+      spec: bare,
+      baseRevision: 1,
+      proposedBy: 'claude code',
+    });
+
+  beforeEach(async () => {
+    project = await makeProject();
+
+    await applySpec(project.mbossDir, {
+      name: 'booking',
+      spec: placed,
+      baseRevision: null,
+    });
+  });
+
+  afterEach(async () => {
+    await removeProject(project);
+  });
+
+  it('files the spec as it was written, with no coordinates in it', async () => {
+    const stored = await readProposal(project.mbossDir, idOf(await propose()));
+
+    expect(stored?.spec.nodes).toStrictEqual([
+      { id: 'find_slot', kind: 'step', title: 'Find slot', config: {} },
+      { id: 'book_slot', kind: 'step', title: 'Book slot', config: {} },
+    ]);
+  });
+
+  /**
+   * The line a person reads before approving. A
+   * dragged block is not an edit, so a proposal
+   * that only leaves the coordinates out has to
+   * read as the nothing it is rather than as every
+   * block in the workflow changed.
+   */
+  it('summarises a spec that only leaves the positions out as no change', async () => {
+    const outcome = await propose();
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      proposal: {
+        summary: {
+          nodesAdded: 0,
+          nodesRemoved: 0,
+          nodesChanged: 0,
+          edgesAdded: 0,
+          edgesRemoved: 0,
+        },
+      },
+    });
+  });
+
+  it('keeps the layout when the proposal lands', async () => {
+    const id = idOf(await propose());
+
+    expect(await applyProposal(project.mbossDir, id)).toMatchObject({
+      ok: true,
+      ir: {
+        revision: 2,
+        nodes: [
+          { id: 'find_slot', position: { x: 120, y: 80 } },
+          { id: 'book_slot', position: { x: 120, y: 212 } },
+        ],
+      },
     });
   });
 });

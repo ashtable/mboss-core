@@ -27,10 +27,18 @@ describe('pathExpression', () => {
     expect(pathExpression('evt', 'a.b.c')).toBe('evt.a?.b?.c');
   });
 
+  it('names the value itself when the path is empty', () => {
+    // What a branch running code decides is one
+    // value rather than an object with a field in
+    // it, so the case matching it has nothing to
+    // read off and reads the whole answer.
+    expect(pathExpression('lookAgainDecision', '')).toBe('lookAgainDecision');
+  });
+
   it('refuses a path that is not a series of identifiers', () => {
     expect(() => pathExpression('evt', 'items[0]')).toThrow(UnsupportedIR);
     expect(() => pathExpression('evt', 'a..b')).toThrow(UnsupportedIR);
-    expect(() => pathExpression('evt', '')).toThrow(UnsupportedIR);
+    expect(() => pathExpression('evt', '.leading')).toThrow(UnsupportedIR);
     expect(() => pathExpression('evt', '2fast')).toThrow(UnsupportedIR);
   });
 
@@ -74,6 +82,15 @@ describe('predicateExpression', () => {
     for (const [input, expected] of cases) {
       expect(predicateExpression('gridOut', input)).toBe(expected);
     }
+  });
+
+  it('compares the whole answer when the case reads no path', () => {
+    expect(
+      predicateExpression(
+        'lookAgainDecision',
+        predicate({ path: '', op: 'eq', value: true }),
+      ),
+    ).toBe('lookAgainDecision === true');
   });
 
   it('refuses a comparison against something that is not one value', () => {

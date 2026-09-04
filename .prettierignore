@@ -11,3 +11,8 @@ src/scaffold/app/**/__snapshots__
 # compared byte for byte, and one fixture holds a
 # deliberate type error.
 fixtures
+
+# Vendored skill content, kept byte-identical to its
+# source so re-syncing it never shows a reformatting
+# diff.
+.claude/skills

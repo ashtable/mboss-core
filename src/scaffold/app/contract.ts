@@ -92,6 +92,21 @@ export type WaitDescriptor = {
   downstream: readonly string[];
 };
 
+/**
+ * What the approval page sends into the run when
+ * somebody answers it.
+ *
+ * The one message the runtime composes for a
+ * workflow rather than passing along: a form's
+ * answers are the shape that form's author
+ * declared, but an approval asks one question and
+ * this is the answer to it. The compiler writes
+ * the receive against this type, so the two ends
+ * of that message are one declaration rather than
+ * a shape spelled the same way twice.
+ */
+export type ApprovalReply = { approved: boolean };
+
 export type EventWait = {
   nodeId: string;
   topic: string;

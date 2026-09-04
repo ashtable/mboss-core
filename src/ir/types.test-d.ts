@@ -10,7 +10,12 @@
  * for a kind that is not in the catalog, or
  * pairing a kind with another kind's config.
  */
-import type { WorkflowEdge, WorkflowIR, WorkflowNode } from './index.js';
+import type {
+  Position,
+  WorkflowEdge,
+  WorkflowIR,
+  WorkflowNode,
+} from './index.js';
 
 const ir: WorkflowIR = {
   $schema: 'https://mboss.dev/schemas/workflow-v1.json',
@@ -33,6 +38,7 @@ const ir: WorkflowIR = {
       handler: { export: 'parseRequest' },
       in: 'WebhookEvent',
       config: {},
+      position: { x: 240, y: 120 },
     },
   ],
   edges: [
@@ -90,6 +96,11 @@ const edgeWithoutSource: WorkflowEdge = {
   back: false,
 };
 
+// @ts-expect-error a position is a point, so a
+// node given one coordinate still has nowhere
+// to sit
+const halfPlaced: Position = { x: 412 };
+
 export type {};
 void [
   ir,
@@ -97,4 +108,5 @@ void [
   stepWithService,
   branchWithEmailConfig,
   edgeWithoutSource,
+  halfPlaced,
 ];

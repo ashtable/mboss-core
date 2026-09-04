@@ -46,6 +46,9 @@ type Started = {
   payload: unknown;
 };
 
+/** What the SDK names a run the caller did not. */
+const MINTED = 'wf_minted';
+
 function harness(workflows: WorkflowEntry[]) {
   const started: Started[] = [];
   const deps: RunDeps = {
@@ -53,6 +56,8 @@ function harness(workflows: WorkflowEntry[]) {
     workflows,
     async startWorkflow(target, workflowID, payload) {
       started.push({ workflow: target.name, workflowID, payload });
+
+      return workflowID ?? MINTED;
     },
   };
 
@@ -108,6 +113,31 @@ describe('starting a manual workflow', () => {
     });
 
     expect(started[0]?.workflowID).toBe('monthly_report:2026-05');
+  });
+
+  it('answers with the id the run was filed under', async () => {
+    // A caller that offered no id has no other way
+    // to learn the one the SDK minted, and without
+    // it there is nothing to watch the run by.
+    const { app } = harness([entry()]);
+    const response = await post(app, '/runs/monthly_report', {});
+
+    expect(JSON.parse(response.body)).toEqual({
+      ok: true,
+      workflowID: MINTED,
+    });
+  });
+
+  it('echoes the caller s own id back when it named one', async () => {
+    const { app } = harness([entry()]);
+    const response = await post(app, '/runs/monthly_report', {
+      workflowID: 'monthly_report:2026-05',
+    });
+
+    expect(JSON.parse(response.body)).toEqual({
+      ok: true,
+      workflowID: 'monthly_report:2026-05',
+    });
   });
 
   it('starts with an empty payload when the body carries none', async () => {

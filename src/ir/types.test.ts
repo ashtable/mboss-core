@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
+import { WorkflowSpecSchema } from '../apply/proposal.js';
 import { readFixtureJson } from '../test-support/fixtures.js';
-import { EdgeSchema, RetrySchema, WorkflowIRSchema } from './index.js';
+import {
+  EdgeSchema,
+  NodeSchema,
+  RetrySchema,
+  WorkflowIRSchema,
+} from './index.js';
 
 const groomBooking = readFixtureJson<unknown>('ir/groom_booking.workflow.json');
 const emptyDraft = readFixtureJson<unknown>('ir/empty_draft.workflow.json');
@@ -74,6 +80,44 @@ describe('defaults', () => {
       intervalSeconds: 1,
       backoffRate: 2,
     });
+  });
+});
+
+describe('positions', () => {
+  const step = {
+    id: 'parse_request',
+    kind: 'step',
+    title: 'Parse request',
+    config: {},
+  };
+
+  it('parses a node that says where a person put it', () => {
+    const node = NodeSchema.parse({ ...step, position: { x: 412, y: -60 } });
+
+    expect(node.position).toEqual({ x: 412, y: -60 });
+  });
+
+  it('parses a node with no position, because nothing has to place one', () => {
+    expect(NodeSchema.parse(step).position).toBeUndefined();
+  });
+
+  it('refuses a fractional coordinate, which would diff on every drag', () => {
+    expect(
+      NodeSchema.safeParse({ ...step, position: { x: 412.33333, y: 0 } })
+        .success,
+    ).toBe(false);
+  });
+
+  // A spec is the document minus its envelope,
+  // so it carries positions with no schema
+  // change of its own.
+  it('parses a spec carrying positions', () => {
+    const spec = WorkflowSpecSchema.parse({
+      nodes: [{ ...step, position: { x: 40, y: 80 } }],
+      edges: [],
+    });
+
+    expect(spec.nodes[0]?.position).toEqual({ x: 40, y: 80 });
   });
 });
 

@@ -28,8 +28,15 @@ const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
  * payload somebody else sent, and reading through
  * a missing object is a crash rather than a false
  * condition.
+ *
+ * The empty path names the root itself. What a
+ * branch running code decides is one value rather
+ * than an object with a field in it, so a case
+ * matching it has nothing to read off.
  */
 export function pathExpression(root: string, path: string): string {
+  if (path === '') return root;
+
   const segments = path.split('.');
 
   if (!segments.every((segment) => IDENTIFIER.test(segment))) {

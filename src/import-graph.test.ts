@@ -159,6 +159,61 @@ describe('the scaffold import graph', () => {
 });
 
 /**
+ * The shared graph edits.
+ *
+ * `src/ir/edit.ts` is the one copy of what it
+ * means to rename, delete, start or rewire a
+ * block, and the extension imports it into a
+ * webview bundle. A relative import that reached
+ * into `apply/` would drag the apply engine — its
+ * locks, its atomic writes, `node:fs` — into that
+ * bundle, so the module takes its document
+ * arguments as structural types and stays inside
+ * `ir/`.
+ */
+describe('the graph edits import graph', () => {
+  const dir = join(SRC, 'ir');
+  const entry = join(dir, 'edit.ts');
+
+  it('reaches nothing a browser cannot have', () => {
+    const { external, visited } = walk(entry, dir);
+
+    expect(visited).toContain(entry);
+    expect(external).toEqual(['zod']);
+  });
+
+  it('never leaves the IR by a relative import', () => {
+    expect(walk(entry, dir).escaped).toEqual([]);
+  });
+});
+
+/**
+ * The one rule for whether a function fits a node.
+ *
+ * The picker, the drop target and validation all
+ * have to give the same answer, so they all call
+ * `handlerFit` — and the first two run in a webview
+ * bundle. It reads the IR and the manifest's shapes
+ * and nothing else: `manifest/index.ts` would bring
+ * the scan and ts-morph with it, and reaching the
+ * layout module would bring ELK.
+ */
+describe('the handler-fit import graph', () => {
+  const entry = join(SRC, 'validate', 'handler-fit.ts');
+
+  it('reaches nothing a browser cannot have', () => {
+    const { external, visited } = walk(entry, SRC);
+
+    // Non-vacuous: the walk really did read the
+    // module, and really did follow it as far as
+    // the manifest's shapes.
+    expect(visited).toContain(entry);
+    expect(visited).toContain(join(SRC, 'manifest', 'types.ts'));
+    expect(external).toEqual(['zod']);
+  });
+});
+
+/**
  * The compiler's own graph.
  *
  * `src/compile/` is shipped source that the MCP

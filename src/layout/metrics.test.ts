@@ -1,20 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
-import { NODE_PALETTE } from '../ir/catalog.js';
+import { NODE_PALETTE } from '../ir/index.js';
 
-import { TITLE_MAX_CHARS, nodeSize, truncateTitle } from './metrics.js';
+import {
+  NODE_HEIGHT,
+  NODE_WIDTH,
+  TITLE_MAX_CHARS,
+  nodeSize,
+  truncateTitle,
+} from './metrics.js';
 
 describe('nodeSize', () => {
-  it('gives every kind the same width', () => {
-    const widths = NODE_PALETTE.map((entry) => nodeSize(entry.kind).width);
-
-    expect(new Set(widths).size).toBe(1);
-  });
-
-  it('makes a kind with more config rows taller than one with fewer', () => {
-    expect(nodeSize('emailSend').height).toBeGreaterThan(
-      nodeSize('step').height,
-    );
+  it('gives every kind the same box', () => {
+    for (const entry of NODE_PALETTE) {
+      expect(nodeSize(entry.kind)).toEqual({
+        width: NODE_WIDTH,
+        height: NODE_HEIGHT,
+      });
+    }
   });
 
   it('sizes every kind the palette offers', () => {
