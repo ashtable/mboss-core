@@ -43,6 +43,7 @@ describe('scanLib', () => {
     expect(manifest.functions.map((fn) => fn.export).sort()).toEqual([
       'autoApprove',
       'bookAppointment',
+      'chargeCard',
       'closeClaim',
       'confirmSlot',
       'fileRefusal',
@@ -77,6 +78,16 @@ describe('scanLib', () => {
     expect(manifest.functions.map((fn) => fn.file)).not.toContain(
       'lib/notify.ts',
     );
+  });
+
+  it('records the one fixture handler that really reaches a service', () => {
+    // The corpus describes calling a service in
+    // prose everywhere else and returns a literal,
+    // so without this the blessed scan could not
+    // carry the field at all.
+    expect(exported('chargeCard').externalCalls).toEqual([
+      { callee: 'fetch', via: 'globalThis', line: 12 },
+    ]);
   });
 
   it('records where each handler lives, project-relative and posix', () => {
@@ -298,21 +309,290 @@ describe('scanLib on optional parameters and decision return types', () => {
 });
 
 /**
- * A scan of one throwaway code-behind file.
+ * One code-behind whose handlers really do reach
+ * another machine, in each shape a person writes
+ * one.
+ */
+const CALLS_OUT = [
+  "import * as http2 from 'http2';",
+  "import { request } from 'node:https';",
+  '',
+  'export async function chargeByFetch(url: string): Promise<number> {',
+  '  const answer = await fetch(url);',
+  '',
+  '  return answer.status;',
+  '}',
+  '',
+  'export async function chargeByGlobal(url: string): Promise<number> {',
+  '  const answer = await globalThis.fetch(url);',
+  '',
+  '  return answer.status;',
+  '}',
+  '',
+  'export function chargeByRequest(host: string): void {',
+  '  request({ host }).end();',
+  '}',
+  '',
+  'export function chargeByHttp2(url: string): void {',
+  '  http2.connect(url).close();',
+  '}',
+  '',
+  'export async function chargeTwice(url: string): Promise<number> {',
+  '  const first = await fetch(`${url}/one`);',
+  '  const second = await fetch(`${url}/two`);',
+  '',
+  '  return first.status + second.status;',
+  '}',
+  '',
+  'export async function chargeEach(urls: string[]): Promise<number[]> {',
+  '  const answers = await Promise.all(urls.map((url) => fetch(url)));',
+  '',
+  '  return answers.map((answer) => answer.status);',
+  '}',
+];
+
+const callsOut = scannedFromSource(CALLS_OUT.join('\n'));
+
+/**
+ * One code-behind that calls nothing of the sort,
+ * written out of the things a rule reading this
+ * loosely would flag.
+ */
+const STAYS_HOME = [
+  "import { validateHeaderName } from 'node:http';",
+  "import { randomUUID } from 'node:crypto';",
+  "import { readFile } from 'node:fs/promises';",
+  "import { isIP } from 'node:net';",
+  "import * as https from 'node:https';",
+  '',
+  'export function makeId(): string {',
+  '  return randomUUID();',
+  '}',
+  '',
+  'export async function readTemplate(path: string): Promise<string> {',
+  "  return readFile(path, 'utf8');",
+  '}',
+  '',
+  'export function isAnAddress(host: string): boolean {',
+  '  return isIP(host) !== 0;',
+  '}',
+  '',
+  'export function isAHeader(name: string): boolean {',
+  '  validateHeaderName(name);',
+  '',
+  '  return true;',
+  '}',
+  '',
+  'export function buildAgent(): https.Agent {',
+  '  return new https.Agent({});',
+  '}',
+  '',
+  'export function lookUp(key: string): string {',
+  '  const fetch = (url: string) => url.toUpperCase();',
+  '',
+  '  return fetch(key);',
+  '}',
+  '',
+  'export function summarise(rows: number[]): string {',
+  '  const kept = rows.map((row) => row * 2).filter((row) => row > 0);',
+  '  const when = new Date().toISOString();',
+  '',
+  '  console.log(JSON.parse(JSON.stringify(kept)));',
+  '',
+  '  return `${when} ${Buffer.from(when).toString("base64")}`;',
+  '}',
+];
+
+const staysHome = scannedFromSource(STAYS_HOME.join('\n'));
+
+describe('scanLib on handlers that reach another system', () => {
+  it('compiles cleanly, so nothing here is read off broken code', () => {
+    expect(callsOut.errors).toEqual([]);
+    expect(staysHome.errors).toEqual([]);
+  });
+
+  it('records the global fetch under the global it came from', () => {
+    expect(exportedFrom(callsOut, 'chargeByFetch').externalCalls).toEqual([
+      {
+        callee: 'fetch',
+        via: 'globalThis',
+        line: lineOf(CALLS_OUT, 'await fetch(url)'),
+      },
+    ]);
+  });
+
+  it('reads globalThis.fetch as the same call, not a different one', () => {
+    // The two spellings are one thing, so a
+    // person cannot get out of the rule by
+    // writing the longer one.
+    expect(exportedFrom(callsOut, 'chargeByGlobal').externalCalls).toEqual([
+      {
+        callee: 'globalThis.fetch',
+        via: 'globalThis',
+        line: lineOf(CALLS_OUT, 'globalThis.fetch(url)'),
+      },
+    ]);
+  });
+
+  it('names the Node module a call was resolved into', () => {
+    // One entry and not two, though the line holds
+    // two calls: `.end()` is a method on what
+    // `request` returned, and the call that
+    // reached out is the one recorded.
+    expect(exportedFrom(callsOut, 'chargeByRequest').externalCalls).toEqual([
+      {
+        callee: 'request',
+        via: 'node:https',
+        line: lineOf(CALLS_OUT, 'request({ host })'),
+      },
+    ]);
+  });
+
+  it('reads the bare specifier as the module it is', () => {
+    // `http2` and `node:http2` are the same module
+    // to the checker, which is why one entry in
+    // the rule covers both ways of importing it.
+    expect(exportedFrom(callsOut, 'chargeByHttp2').externalCalls).toEqual([
+      {
+        callee: 'http2.connect',
+        via: 'node:http2',
+        line: lineOf(CALLS_OUT, 'http2.connect(url)'),
+      },
+    ]);
+  });
+
+  it('records every call in the body, in the order they are written', () => {
+    expect(exportedFrom(callsOut, 'chargeTwice').externalCalls).toEqual([
+      {
+        callee: 'fetch',
+        via: 'globalThis',
+        line: lineOf(CALLS_OUT, '${url}/one'),
+      },
+      {
+        callee: 'fetch',
+        via: 'globalThis',
+        line: lineOf(CALLS_OUT, '${url}/two'),
+      },
+    ]);
+  });
+
+  it('sees a call inside a callback the handler hands off', () => {
+    // It runs inside the transaction just the
+    // same, so where in the body it was written
+    // cannot be what decides.
+    expect(exportedFrom(callsOut, 'chargeEach').externalCalls).toEqual([
+      {
+        callee: 'fetch',
+        via: 'globalThis',
+        line: lineOf(CALLS_OUT, 'Promise.all'),
+      },
+    ]);
+  });
+
+  it('leaves the field off a handler that reaches nothing', () => {
+    // Absent, not empty: whoever reads this reads
+    // absence as "the scan did not say", and a
+    // cache an older build wrote has to mean the
+    // same as a clean one.
+    for (const fn of staysHome.functions) {
+      expect(fn.externalCalls).toBeUndefined();
+    }
+  });
+
+  it('says nothing about the Node modules that are not the network', () => {
+    expect(exportedFrom(staysHome, 'makeId').externalCalls).toBeUndefined();
+    expect(
+      exportedFrom(staysHome, 'readTemplate').externalCalls,
+    ).toBeUndefined();
+  });
+
+  it('says nothing about the pure functions inside networking modules', () => {
+    // `isIP` tests a string and
+    // `validateHeaderName` tests a name; a handler
+    // may reasonably call either before writing a
+    // row.
+    expect(
+      exportedFrom(staysHome, 'isAnAddress').externalCalls,
+    ).toBeUndefined();
+    expect(exportedFrom(staysHome, 'isAHeader').externalCalls).toBeUndefined();
+  });
+
+  it('says nothing about building a thing that could talk to a machine', () => {
+    expect(exportedFrom(staysHome, 'buildAgent').externalCalls).toBeUndefined();
+  });
+
+  it('says nothing about a local name that happens to be fetch', () => {
+    // Matched by the declaration it resolves to,
+    // so a person who named their own function
+    // this is not caught by it.
+    expect(exportedFrom(staysHome, 'lookUp').externalCalls).toBeUndefined();
+  });
+
+  it('says nothing about the ordinary calls every body makes', () => {
+    expect(exportedFrom(staysHome, 'summarise').externalCalls).toBeUndefined();
+  });
+
+  it('follows a name the project re-exports through to what it is', () => {
+    // The case that decides how this is read at
+    // all: the file imports from `./net.js`, so
+    // anything matching on the specifier is
+    // silent here.
+    const barrel = scannedFromSource({
+      'net.ts': "export { request as post } from 'node:https';\n",
+      'types.ts': [
+        "import { post } from './net.js';",
+        '',
+        'export function charge(host: string): void {',
+        '  post({ host }).end();',
+        '}',
+      ].join('\n'),
+    });
+
+    expect(barrel.errors).toEqual([]);
+    expect(exportedFrom(barrel, 'charge').externalCalls).toEqual([
+      { callee: 'post', via: 'node:https', line: 4 },
+    ]);
+  });
+});
+
+/**
+ * A scan of a throwaway code-behind: one file, or
+ * a whole `lib/` given as filename to source.
  *
  * The two blessed fixtures are the shapes worth
  * keeping on disk to look at; a sample that exists
  * only to pin an ordering is not one of them.
  */
-function scannedFromSource(source: string): LibManifest {
+function scannedFromSource(
+  source: string | Record<string, string>,
+): LibManifest {
+  const files = typeof source === 'string' ? { 'types.ts': source } : source;
   const projectDir = mkdtempSync(join(tmpdir(), 'mboss-'));
 
   try {
     mkdirSync(join(projectDir, 'lib'));
-    writeFileSync(join(projectDir, 'lib', 'types.ts'), source);
+
+    for (const [name, contents] of Object.entries(files)) {
+      writeFileSync(join(projectDir, 'lib', name), contents);
+    }
 
     return scanLib(join(projectDir, 'lib'));
   } finally {
     rmSync(projectDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * The line a call sits on, found by the text of
+ * the call itself so that a case reads as what it
+ * is about rather than as a number to count out.
+ */
+function lineOf(source: readonly string[], text: string): number {
+  const found = source.filter((line) => line.includes(text));
+
+  if (found.length !== 1) {
+    throw new Error(`${found.length} lines contain ${text}, expected one`);
+  }
+
+  return source.indexOf(found[0] as string) + 1;
 }

@@ -33,6 +33,13 @@ import type { LibFunction } from '../manifest/types.js';
  */
 export type HandlerMisfit =
   | { kind: 'no-handler-kind' }
+  | {
+      kind: 'external-call';
+      callee: string;
+      via: string;
+      file: string;
+      line: number;
+    }
   | { kind: 'too-many-params'; count: number }
   | { kind: 'input-mismatch'; declared: string; takes: string }
   | { kind: 'output-mismatch'; declared: string; returns: string }
@@ -76,6 +83,35 @@ function misfitOf(
   fn: LibFunction,
 ): HandlerMisfit | undefined {
   if (!HANDLER_KINDS.has(node.kind)) return { kind: 'no-handler-kind' };
+
+  // A transaction's kind is a promise about what
+  // its handler does: the body runs inside the
+  // run's own database transaction, so what it
+  // writes commits with the checkpoint or not at
+  // all. A call to another system gets none of
+  // that — it is not checkpointed, it is not
+  // retried on a step's terms, and the rollback
+  // does not undo it.
+  //
+  // Asked before anything about the signature
+  // because the repair is a different one: those
+  // are fixed by editing a declaration, this one
+  // by making the block a step. It has to sit
+  // above the fan-out exemption below, too, or a
+  // transaction that fans out would be the one
+  // shape never looked at.
+  const called =
+    node.kind === 'transaction' ? fn.externalCalls?.[0] : undefined;
+
+  if (called !== undefined) {
+    return {
+      kind: 'external-call',
+      callee: called.callee,
+      via: called.via,
+      file: fn.file,
+      line: called.line,
+    };
+  }
 
   // The emitter hands a handler at most one value,
   // so a second required parameter has nothing to

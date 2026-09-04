@@ -10,6 +10,7 @@
  * rescanned.
  */
 export {
+  ExternalCallSchema,
   LibFunctionSchema,
   ManifestErrorSchema,
   NonSerializableReasonSchema,
@@ -21,6 +22,7 @@ export { scanLib } from './scan.js';
 export { loadOrScan } from './cache.js';
 
 export type {
+  ExternalCall,
   LibFunction,
   ManifestError,
   NonSerializable,

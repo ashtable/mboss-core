@@ -785,18 +785,20 @@ export function v12SerializableTypes(ctx: RuleContext): Diagnostic[] {
  * The comparison is `handlerFit`'s, so a function
  * the picker offers is never one this rule then
  * rejects. Only the two misfits about declared
- * types are reported. A handler on a kind that
- * runs none is dropped by the emitter and never
- * offered in the first place. A return type
- * nothing can be a case of is about a branch's
- * cases rather than about a signature. And a
- * function taking more than one value is already
- * refused at the picker, at the drop target and by
- * the generated code's own type-check — saying it
- * a fourth time, off a cache that may have
- * recorded nothing about which parameters a call
- * can leave out, would put an error on a handler
- * that compiles.
+ * types are reported. A handler that reaches
+ * another system is V16's, and about what the code
+ * does rather than what it declares. A handler on
+ * a kind that runs none is dropped by the emitter
+ * and never offered in the first place. A return
+ * type nothing can be a case of is about a
+ * branch's cases rather than about a signature.
+ * And a function taking more than one value is
+ * already refused at the picker, at the drop
+ * target and by the generated code's own
+ * type-check — saying it a fourth time, off a
+ * cache that may have recorded nothing about which
+ * parameters a call can leave out, would put an
+ * error on a handler that compiles.
  *
  * It stays quiet wherever it cannot know: with no
  * scan, with no handler, and with a handler the
@@ -832,8 +834,10 @@ export function v13HandlerSignatures(ctx: RuleContext): Diagnostic[] {
 
 /**
  * What to tell an author about a misfit, or
- * `undefined` for the three this rule leaves to
- * somebody else.
+ * `undefined` for the four this rule leaves to
+ * somebody else: the three the doc above explains,
+ * and a handler that reaches another system, which
+ * is V16's to report.
  */
 function mismatchMessage(
   nodeId: string,
@@ -1068,6 +1072,94 @@ export function v15GuardedProducers(ctx: RuleContext): Diagnostic[] {
   return found;
 }
 
+/**
+ * A transaction's handler writes the app's own
+ * database and does nothing else.
+ *
+ * The kind exists to put those writes inside the
+ * run's own transaction, so they commit with the
+ * checkpoint or not at all. A call to another
+ * system in there gets none of that and is not
+ * undone by the rollback, and nothing else in the
+ * system will say so: the generated code
+ * type-checks, DBOS starts the transaction
+ * happily, and the fault turns up months later as
+ * a payment taken twice. This is the only place it
+ * can be said before it runs.
+ *
+ * It says nothing it cannot prove. Only the global
+ * `fetch` and a call that resolves into one of
+ * Node's own networking modules are found, because
+ * those are the two a reader cannot argue with. A
+ * call into a package, or into a helper of the
+ * project's own that itself calls out, goes
+ * unreported — the alternative is a guess, and a
+ * wrong guess here refuses a legitimate handler
+ * with no way for anyone to say otherwise.
+ *
+ * It stays quiet wherever it cannot know: with no
+ * scan, with no handler, and with a handler the
+ * scan never saw, which is V07's to report.
+ */
+export function v16TransactionExternalCalls(ctx: RuleContext): Diagnostic[] {
+  const manifest = ctx.manifest;
+  if (manifest === undefined) return [];
+
+  const found: Diagnostic[] = [];
+
+  for (const node of ctx.ir.nodes) {
+    const handler = node.handler;
+    if (handler === undefined) continue;
+
+    const fn = manifest.functions.find(
+      (each) => each.export === handler.export,
+    );
+    if (fn === undefined) continue;
+
+    // The picker's own answer, so a function this
+    // refuses was never offered in the first
+    // place.
+    const fit = handlerFit(node, fn);
+    if (fit.fits || fit.reason.kind !== 'external-call') continue;
+
+    found.push(
+      diagnostic('V16', externalCallMessage(node.id, fn.export, fit.reason), {
+        nodeId: node.id,
+      }),
+    );
+  }
+
+  return found;
+}
+
+/**
+ * What to tell an author about a handler that
+ * calls out.
+ *
+ * Where the call came from is left out for a
+ * global, whose name is already the whole thing:
+ * "calls `fetch` from `globalThis`" would only be
+ * longer.
+ */
+function externalCallMessage(
+  nodeId: string,
+  handler: string,
+  reason: Extract<HandlerMisfit, { kind: 'external-call' }>,
+): string {
+  const reached =
+    reason.via === 'globalThis'
+      ? `\`${reason.callee}\``
+      : `\`${reason.callee}\` from \`${reason.via}\``;
+
+  return (
+    `\`${nodeId}\` is a transaction, but its code-behind ` +
+    `\`${handler}\` calls ${reached} at ${reason.file}:${reason.line}. ` +
+    `A transaction's body runs inside the run's own database ` +
+    `transaction, where a call to another system is neither ` +
+    `checkpointed nor undone by the rollback. Move this work to a step.`
+  );
+}
+
 export const RULES: readonly Rule[] = [
   v01TriggerShape,
   v02Structure,
@@ -1084,4 +1176,5 @@ export const RULES: readonly Rule[] = [
   v12SerializableTypes,
   v13HandlerSignatures,
   v14DecisionBranches,
+  v16TransactionExternalCalls,
 ];

@@ -12,18 +12,40 @@ import {
   DiagnosticCategory,
   ModuleKind,
   ModuleResolutionKind,
+  Node,
   Project,
   ScriptTarget,
+  SyntaxKind,
 } from 'ts-morph';
 
 import { readLibSources, sourceHashOf, toPosix } from './hash.js';
 import { nonSerializableMembers } from './serializable.js';
 import type {
+  ExternalCall,
   LibFunction,
   LibManifest,
   ManifestError,
   NonSerializable,
 } from './types.js';
+
+/**
+ * Node's own declarations, and no other package's.
+ *
+ * The type root below is the `@types` directory,
+ * which holds whatever else this library happens
+ * to depend on — and a package like
+ * `@types/express` writes `declare module "http"`
+ * of its own. Asking what Node declares means
+ * asking about this directory, not that one.
+ *
+ * Posix-separated, because a path read back off a
+ * parsed file always is; without that the test
+ * against it silently never matches on Windows and
+ * every call goes unseen there.
+ */
+const NODE_TYPES = toPosix(
+  dirname(createRequire(import.meta.url).resolve('@types/node/package.json')),
+);
 
 /**
  * Where Node's global declarations are read from.
@@ -41,9 +63,63 @@ import type {
  * same thing on every machine, including in a
  * project whose dependencies are not installed yet.
  */
-const NODE_TYPE_ROOT = dirname(
-  dirname(createRequire(import.meta.url).resolve('@types/node/package.json')),
-);
+const NODE_TYPE_ROOT = dirname(NODE_TYPES);
+
+/**
+ * The Node modules whose job is to talk to another
+ * machine.
+ *
+ * Named as the type checker names them, which is
+ * the specifier without its `node:` prefix — so
+ * one entry covers both spellings of the import,
+ * and a list whose every member had to be written
+ * twice cannot fall out of step with itself.
+ *
+ * `fs` and `child_process` are deliberately
+ * absent. They leave the process too, but reading
+ * a template or writing a temp file is not a call
+ * to a service, and the sentence this produces
+ * would be wrong about them — which is not
+ * something a person can argue with.
+ */
+const NETWORK_MODULES: ReadonlySet<string> = new Set([
+  'http',
+  'https',
+  'http2',
+  'net',
+  'tls',
+  'dgram',
+  'dns',
+  'dns/promises',
+]);
+
+/**
+ * The globals that are a call to another machine
+ * by themselves. One, today — and matched by the
+ * declaration it resolves to, so a local name a
+ * person chose for their own reasons is not it.
+ */
+const NETWORK_GLOBALS: ReadonlySet<string> = new Set(['fetch']);
+
+/**
+ * The exports of those modules that compute rather
+ * than talk.
+ *
+ * `isIP` tests a string and `validateHeaderName`
+ * tests a name; a handler may reasonably call
+ * either before writing a row. They are named here
+ * because they are the only false positives this
+ * has, and five names is a cheaper way to close
+ * them than dropping `net` and `http` from the set
+ * above and missing every real call through them.
+ */
+const PURE_EXPORTS: ReadonlySet<string> = new Set([
+  'isIP',
+  'isIPv4',
+  'isIPv6',
+  'validateHeaderName',
+  'validateHeaderValue',
+]);
 
 /**
  * Scans a project's code-behind into the manifest
@@ -175,6 +251,7 @@ function handlerOf(
   const doc = declaration.getJsDocs().at(-1)?.getDescription();
   const returned = returnedValueOf(declaration);
   const decision = decisionOf(returned);
+  const externalCalls = externalCallsIn(declaration);
 
   return {
     export: name,
@@ -193,8 +270,129 @@ function handlerOf(
     })),
     returnType: returned.getText(declaration),
     ...(decision ? { decision } : {}),
+    // Written only where there is one, for the
+    // same reason `optional` is: an empty array on
+    // every function would be noise in a file
+    // people open, and it would say nothing a
+    // missing key does not already say.
+    ...(externalCalls.length > 0 ? { externalCalls } : {}),
     ...(doc?.trim() ? { doc: oneLine(doc) } : {}),
   };
+}
+
+/**
+ * Every call in the body that reaches another
+ * system.
+ *
+ * Descendants and not just the top level: a call
+ * inside a callback the handler hands to `map` runs
+ * inside the transaction just the same. Calls only,
+ * so constructing an agent or a URL is not one —
+ * building a thing that could talk to a machine is
+ * not talking to it.
+ */
+function externalCallsIn(declaration: FunctionDeclaration): ExternalCall[] {
+  const body = declaration.getBody();
+  if (body === undefined) return [];
+
+  const found: ExternalCall[] = [];
+
+  for (const call of body.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    const callee = call.getExpression();
+    const via = reachedSystemOf(callee);
+
+    if (via === undefined) continue;
+
+    found.push({
+      callee: oneLine(callee.getText()),
+      via,
+      line: call.getStartLineNumber(),
+    });
+  }
+
+  return found;
+}
+
+/**
+ * Where the thing being called is declared, when
+ * that is another system, and `undefined`
+ * otherwise.
+ *
+ * The question is put to the declaration the
+ * checker resolved to rather than to the import the
+ * file happens to have written, because the two are
+ * not the same thing: a name re-exported by a
+ * module of the project's own resolves through to
+ * what it re-exports, and a variable someone named
+ * `fetch` resolves to itself. Nothing here is
+ * decided from the text of a specifier or of an
+ * identifier.
+ *
+ * Only a positive answer counts. A call that
+ * resolves to a package, to the project's own code,
+ * or to nothing at all is not reported — greying a
+ * legitimate function out of the picker is a fault
+ * a person can neither explain nor override, while
+ * missing one only leaves the behaviour that is
+ * there today.
+ */
+function reachedSystemOf(callee: Node): string | undefined {
+  // A method called on whatever another call
+  // returned is not itself the call that reached
+  // out: `connect(url).close()` reaches out once,
+  // in the `connect`. That inner call is a
+  // descendant of this one and is recorded on its
+  // own, under a name a person can search their
+  // file for.
+  if (!Node.isIdentifier(rootOf(callee))) return undefined;
+
+  const symbol = callee.getSymbol();
+  if (symbol === undefined) return undefined;
+
+  const resolved = symbol.getAliasedSymbol() ?? symbol;
+  const name = resolved.getName();
+
+  if (PURE_EXPORTS.has(name)) return undefined;
+
+  for (const declaration of resolved.getDeclarations()) {
+    if (!declaration.getSourceFile().getFilePath().startsWith(NODE_TYPES)) {
+      continue;
+    }
+
+    // Node declares each of its modules as
+    // `declare module "https"`, quotes and all,
+    // and its globals inside `declare global`.
+    const ambient = declaration
+      .getFirstAncestorByKind(SyntaxKind.ModuleDeclaration)
+      ?.getName();
+
+    if (ambient === undefined) continue;
+
+    const named = ambient.replace(/^["']|["']$/g, '');
+
+    if (NETWORK_MODULES.has(named)) return `node:${named}`;
+
+    if (named === 'global' && NETWORK_GLOBALS.has(name)) return 'globalThis';
+  }
+
+  return undefined;
+}
+
+/**
+ * What a callee is ultimately reached through:
+ * `appDb` in `appDb.client.booking.create`, and the
+ * inner call in `connect(url).close`.
+ */
+function rootOf(callee: Node): Node {
+  let node = callee;
+  let access = node.asKind(SyntaxKind.PropertyAccessExpression);
+
+  while (access !== undefined) {
+    node = access.getExpression();
+    access = node.asKind(SyntaxKind.PropertyAccessExpression);
+  }
+
+  return node;
 }
 
 /**

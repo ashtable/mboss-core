@@ -31,6 +31,7 @@ import {
 } from './index.js';
 
 import type {
+  ExternalCall,
   HandlerFit,
   HandlerMisfit,
   LibFunction,
@@ -105,6 +106,22 @@ const position: Position = PositionSchema.parse({ x: 240, y: 120 });
 // answer.
 const fit: HandlerFit = handlerFit(branch, autoApprove);
 const reason: HandlerMisfit | undefined = fit.fits ? undefined : fit.reason;
+
+// A call the scan found in a handler's body, and
+// the refusal a surface writes its own sentence
+// out of. Both are on the surface because the
+// extension greys a row and refuses a drop from
+// them, without core writing either sentence.
+const charge: ExternalCall = {
+  callee: 'fetch',
+  via: 'globalThis',
+  line: 12,
+};
+const calledOut: Extract<HandlerMisfit, { kind: 'external-call' }> = {
+  kind: 'external-call',
+  ...charge,
+  file: 'lib/chargeCard.ts',
+};
 const answers: readonly (string | boolean)[] | undefined =
   decisionValues(autoApprove);
 
@@ -145,6 +162,7 @@ void [
   nodeHeight,
   position,
   reason,
+  calledOut,
   decided,
   dropped,
   carried,

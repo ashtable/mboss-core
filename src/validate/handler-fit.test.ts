@@ -184,6 +184,129 @@ describe('handlerFit', () => {
     });
   });
 
+  it('refuses a transaction whose handler reaches another system', () => {
+    const chargeCard = fn({
+      export: 'chargeCard',
+      file: 'lib/chargeCard.ts',
+      externalCalls: [{ callee: 'fetch', via: 'globalThis', line: 12 }],
+    });
+    const write = node({ id: 'pay_claim', kind: 'transaction' });
+
+    expect(handlerFit(write, chargeCard)).toEqual({
+      fits: false,
+      reason: {
+        kind: 'external-call',
+        callee: 'fetch',
+        via: 'globalThis',
+        file: 'lib/chargeCard.ts',
+        line: 12,
+      },
+    });
+  });
+
+  it('fits the same handler on a step, which is where it belongs', () => {
+    const chargeCard = fn({
+      externalCalls: [{ callee: 'fetch', via: 'globalThis', line: 12 }],
+    });
+
+    expect(handlerFit(node({ id: 'pay_claim' }), chargeCard)).toEqual({
+      fits: true,
+    });
+  });
+
+  it('fits the same handler on a call to an API', () => {
+    const chargeCard = fn({
+      externalCalls: [{ callee: 'request', via: 'node:https', line: 4 }],
+    });
+    const call = node({
+      id: 'pay_claim',
+      kind: 'apiCall',
+      config: { service: 'payments' },
+    });
+
+    expect(handlerFit(call, chargeCard)).toEqual({ fits: true });
+  });
+
+  it('fits a transaction whose handler the scan said nothing about', () => {
+    // Absence is what a cache an older build wrote
+    // says about every function in it, so it can
+    // only mean the handler fits.
+    const write = node({ id: 'record_booking', kind: 'transaction' });
+
+    expect(handlerFit(write, fn({}))).toEqual({ fits: true });
+  });
+
+  it('fits a transaction whose handler reaches nothing', () => {
+    const write = node({ id: 'record_booking', kind: 'transaction' });
+
+    expect(handlerFit(write, fn({ externalCalls: [] }))).toEqual({
+      fits: true,
+    });
+  });
+
+  it('reports the first call and not every one', () => {
+    const chargeCard = fn({
+      externalCalls: [
+        { callee: 'fetch', via: 'globalThis', line: 12 },
+        { callee: 'request', via: 'node:https', line: 20 },
+      ],
+    });
+    const write = node({ id: 'pay_claim', kind: 'transaction' });
+
+    expect(handlerFit(write, chargeCard)).toEqual({
+      fits: false,
+      reason: {
+        kind: 'external-call',
+        callee: 'fetch',
+        via: 'globalThis',
+        file: 'lib/findSlot.ts',
+        line: 12,
+      },
+    });
+  });
+
+  it('says this before anything about the signature', () => {
+    // The repair is a different one. A parameter
+    // or a type is fixed by editing a declaration;
+    // this is fixed by making the block a step,
+    // and a person who corrects their parameters
+    // first has been sent down the wrong road.
+    const chargeCard = fn({
+      params: [
+        { name: 'claim', type: 'ExpenseClaim' },
+        { name: 'card', type: 'Card' },
+      ],
+      externalCalls: [{ callee: 'fetch', via: 'globalThis', line: 12 }],
+    });
+    const write = node({
+      id: 'pay_claim',
+      kind: 'transaction',
+      in: 'Booking',
+    });
+    const fit = handlerFit(write, chargeCard);
+
+    expect(fit.fits ? undefined : fit.reason.kind).toBe('external-call');
+  });
+
+  it('says it about a transaction that fans out, like any other', () => {
+    // The exemption below it is about names that
+    // are meant to differ; without this above it,
+    // a transaction that fans out would be the one
+    // shape never looked at.
+    const chargeCard = fn({
+      externalCalls: [{ callee: 'fetch', via: 'globalThis', line: 12 }],
+    });
+    const write = node({
+      id: 'pay_claims',
+      kind: 'transaction',
+      in: 'ClaimBatch',
+      forEach: { itemsPath: 'items' },
+    });
+    const fit = handlerFit(write, chargeCard);
+
+    expect(fit.fits ? undefined : fit.reason.kind).toBe('external-call');
+  });
+
   it('refuses a branch whose handler takes something else', () => {
     const decides = fn({
       export: 'checkDone',
