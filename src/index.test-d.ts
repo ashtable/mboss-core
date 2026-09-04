@@ -122,6 +122,12 @@ const calledOut: Extract<HandlerMisfit, { kind: 'external-call' }> = {
   ...charge,
   file: 'lib/chargeCard.ts',
 };
+// The refusal carries the whole call and not a
+// copy of some of it: a spread pins nothing, since
+// a field the scan starts recording would arrive
+// through it and go unnoticed. Read back the other
+// way it has to be there.
+const wholeCall: ExternalCall = calledOut;
 const answers: readonly (string | boolean)[] | undefined =
   decisionValues(autoApprove);
 
@@ -163,6 +169,7 @@ void [
   position,
   reason,
   calledOut,
+  wholeCall,
   decided,
   dropped,
   carried,

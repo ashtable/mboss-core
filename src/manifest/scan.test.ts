@@ -317,6 +317,8 @@ const CALLS_OUT = [
   "import * as http2 from 'http2';",
   "import { request } from 'node:https';",
   '',
+  'const DEBUG_REMOTE = false;',
+  '',
   'export async function chargeByFetch(url: string): Promise<number> {',
   '  const answer = await fetch(url);',
   '',
@@ -349,6 +351,37 @@ const CALLS_OUT = [
   '',
   '  return answers.map((answer) => answer.status);',
   '}',
+  '',
+  'export async function chargeWrapped(url: string): Promise<number> {',
+  '  const one = await (fetch)(`${url}/a`);',
+  '  const two = await fetch!(`${url}/b`);',
+  '  const three = await (fetch as typeof fetch)(`${url}/c`);',
+  '  const four = await (fetch satisfies typeof fetch)(`${url}/d`);',
+  '',
+  '  return one.status + two.status + three.status + four.status;',
+  '}',
+  '',
+  'export async function chargeOnDefault(',
+  '  url: string,',
+  '  first: Promise<Response> = fetch(`${url}/first`),',
+  '): Promise<number> {',
+  '  const second = await fetch(`${url}/second`);',
+  '',
+  '  return (await first).status + second.status;',
+  '}',
+  '',
+  'export async function chargeWhenDebugging(url: string): Promise<void> {',
+  '  if (DEBUG_REMOTE) {',
+  '    await fetch(`${url}/whenDebugging`);',
+  '  }',
+  '}',
+  '',
+  'export async function chargeAndDescribe(url: string): Promise<string> {',
+  '  const retry = async (): Promise<number> =>',
+  '    (await fetch(`${url}/retry`)).status;',
+  '',
+  '  return typeof retry;',
+  '}',
 ];
 
 const callsOut = scannedFromSource(CALLS_OUT.join('\n'));
@@ -362,7 +395,11 @@ const STAYS_HOME = [
   "import { validateHeaderName } from 'node:http';",
   "import { randomUUID } from 'node:crypto';",
   "import { readFile } from 'node:fs/promises';",
-  "import { isIP } from 'node:net';",
+  "import { BlockList, isIP } from 'node:net';",
+  "import { getServers } from 'node:dns';",
+  "import { getDefaultSettings, getPackedSettings } from 'node:http2';",
+  "import { checkServerIdentity, getCiphers } from 'node:tls';",
+  "import type { PeerCertificate } from 'node:tls';",
   "import * as https from 'node:https';",
   '',
   'export function makeId(): string {',
@@ -400,6 +437,32 @@ const STAYS_HOME = [
   '  console.log(JSON.parse(JSON.stringify(kept)));',
   '',
   '  return `${when} ${Buffer.from(when).toString("base64")}`;',
+  '}',
+  '',
+  'export function trace(note: string): void {',
+  '  process.stdout.write(note);',
+  "  process.stderr.write('\\n');",
+  '}',
+  '',
+  'export function isDenied(host: string): boolean {',
+  '  const denied = new BlockList();',
+  '',
+  '  return denied.check(host);',
+  '}',
+  '',
+  'export function certificateProblem(',
+  '  host: string,',
+  '  cert: PeerCertificate,',
+  '): string {',
+  "  return checkServerIdentity(host, cert)?.message ?? '';",
+  '}',
+  '',
+  'export function packSettings(): string {',
+  "  return getPackedSettings(getDefaultSettings()).toString('base64');",
+  '}',
+  '',
+  'export function localSetup(): string {',
+  "  return [...getServers(), ...getCiphers()].join(' ');",
   '}',
 ];
 
@@ -489,6 +552,86 @@ describe('scanLib on handlers that reach another system', () => {
     ]);
   });
 
+  it('reads through the wrappers that change nothing', () => {
+    // Parentheses, a non-null assertion and a cast
+    // all leave the same function being called, so
+    // none of them is a way out of the rule. The
+    // name recorded is the one a person can search
+    // their file for, not the wrapper around it.
+    expect(exportedFrom(callsOut, 'chargeWrapped').externalCalls).toEqual([
+      {
+        callee: 'fetch',
+        via: 'globalThis',
+        line: lineOf(CALLS_OUT, '${url}/a'),
+      },
+      {
+        callee: 'fetch',
+        via: 'globalThis',
+        line: lineOf(CALLS_OUT, '${url}/b'),
+      },
+      {
+        callee: 'fetch',
+        via: 'globalThis',
+        line: lineOf(CALLS_OUT, '${url}/c'),
+      },
+      {
+        callee: 'fetch',
+        via: 'globalThis',
+        line: lineOf(CALLS_OUT, '${url}/d'),
+      },
+    ]);
+  });
+
+  it('sees a call standing as a default for a parameter', () => {
+    // It runs when the argument is left out, which
+    // is inside the transaction like everything
+    // else in the function. Parameters come first
+    // because that is the order they run in.
+    expect(exportedFrom(callsOut, 'chargeOnDefault').externalCalls).toEqual([
+      {
+        callee: 'fetch',
+        via: 'globalThis',
+        line: lineOf(CALLS_OUT, '${url}/first'),
+      },
+      {
+        callee: 'fetch',
+        via: 'globalThis',
+        line: lineOf(CALLS_OUT, '${url}/second'),
+      },
+    ]);
+  });
+
+  it('counts a call a branch of the body may never reach', () => {
+    // Whether the branch runs is not something
+    // reading one function can answer, and the
+    // line named is a real line of the handler
+    // that a person can go and look at.
+    expect(exportedFrom(callsOut, 'chargeWhenDebugging').externalCalls).toEqual(
+      [
+        {
+          callee: 'fetch',
+          via: 'globalThis',
+          line: lineOf(CALLS_OUT, '${url}/whenDebugging'),
+        },
+      ],
+    );
+  });
+
+  it('counts a call inside a closure the body only hands on', () => {
+    // The same trade as the callback above: an
+    // arrow handed to `map` has to count, and
+    // telling that apart from one that leaves the
+    // function needs to know where it goes. The
+    // repair reads the same either way.
+    expect(exportedFrom(callsOut, 'chargeAndDescribe').externalCalls).toEqual([
+      {
+        callee: 'fetch',
+        via: 'globalThis',
+        line: lineOf(CALLS_OUT, '${url}/retry'),
+      },
+    ]);
+  });
+
   it('leaves the field off a handler that reaches nothing', () => {
     // Absent, not empty: whoever reads this reads
     // absence as "the scan did not say", and a
@@ -515,6 +658,37 @@ describe('scanLib on handlers that reach another system', () => {
       exportedFrom(staysHome, 'isAnAddress').externalCalls,
     ).toBeUndefined();
     expect(exportedFrom(staysHome, 'isAHeader').externalCalls).toBeUndefined();
+  });
+
+  it('says nothing about printing to the process own streams', () => {
+    // `process.stdout` is a `net.Socket`, so
+    // `write` is declared in the same file as the
+    // calls that dial out — and printing a line
+    // reaches no further than the terminal.
+    expect(exportedFrom(staysHome, 'trace').externalCalls).toBeUndefined();
+  });
+
+  it('says nothing about a method on an object those modules declare', () => {
+    // `BlockList.check` tests an address against a
+    // list already in memory. It resolves into
+    // `node:net` all the same, so what a call
+    // resolves to cannot be the whole answer.
+    expect(exportedFrom(staysHome, 'isDenied').externalCalls).toBeUndefined();
+  });
+
+  it('says nothing about the settings those modules compute and read', () => {
+    // Comparing a certificate to a hostname,
+    // packing a settings frame and reading the
+    // resolvers this machine is configured with
+    // are all ordinary things to do before writing
+    // a row, and none of them opens a connection.
+    expect(
+      exportedFrom(staysHome, 'certificateProblem').externalCalls,
+    ).toBeUndefined();
+    expect(
+      exportedFrom(staysHome, 'packSettings').externalCalls,
+    ).toBeUndefined();
+    expect(exportedFrom(staysHome, 'localSetup').externalCalls).toBeUndefined();
   });
 
   it('says nothing about building a thing that could talk to a machine', () => {
