@@ -4,7 +4,11 @@
 import express, { type Request, type Response, type Router } from 'express';
 
 import type { ArtifactStore } from '../artifacts.js';
-import type { EmailFormField, WaitDescriptor } from '../contract.js';
+import type {
+  ApprovalReply,
+  EmailFormField,
+  WaitDescriptor,
+} from '../contract.js';
 import type { WorkflowEntry } from '../contract.js';
 import { boundaryOf, parseMultipart } from '../multipart.js';
 import {
@@ -286,7 +290,8 @@ async function submitDecision(
   }
 
   const approved = decision === 'approve';
-  await wake(deps, opened, { approved });
+  const reply: ApprovalReply = { approved };
+  await wake(deps, opened, reply);
 
   response.type('html').send(
     renderApprovalDonePage({

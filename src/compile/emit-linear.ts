@@ -1556,6 +1556,8 @@ class Emitter {
     });
     this.#body.blank();
 
+    this.#want(runtimeImport('contract', 'ApprovalReply'));
+
     writeWait(this.#body, {
       local,
       type: APPROVAL_REPLY,
@@ -2008,12 +2010,17 @@ class Emitter {
  * A run's answer to an approval, as the type the
  * park is written against.
  *
- * Written out rather than imported: the shape is
- * the runtime's own reply to its approval page,
- * not anything the project's code-behind declares,
- * so there is no file it could come from.
+ * The shape is the runtime's own reply to its own
+ * approval page rather than anything the project's
+ * code-behind declares, so it comes from the
+ * contract file — the one place the generated code
+ * and the runtime already agree about a type.
+ * Written out here instead, it would be a shape
+ * spelled twice in two trees, and `recv` casts, so
+ * the day they disagreed would be a day the run
+ * read a field nobody sent.
  */
-const APPROVAL_REPLY = '{ approved: boolean }';
+const APPROVAL_REPLY = 'ApprovalReply';
 
 /**
  * The topic every wait on a person registers

@@ -7,6 +7,7 @@ import { DBOS } from '@dbos-inc/dbos-sdk';
 import { closeClaim, fileRefusal, payClaim } from '../../lib/expense.js';
 import type { ExpenseClaim } from '../../lib/expense.js';
 import type {
+  ApprovalReply,
   EventWait,
   PayloadCheck,
   TriggerDescriptor,
@@ -77,7 +78,7 @@ async function approvalFlowFn(evt: ExpenseClaim): Promise<void> {
   // recv answers a timeout with null and never
   // throws, so this is a check and not a catch.
   // 4 days, as seconds.
-  const managerOkOut = await DBOS.recv<{ approved: boolean }>('manager_ok', {
+  const managerOkOut = await DBOS.recv<ApprovalReply>('manager_ok', {
     timeoutSeconds: 345600,
   });
 

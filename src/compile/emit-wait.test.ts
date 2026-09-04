@@ -1251,7 +1251,7 @@ describe('an approval', () => {
     const order = [
       "name: 'manager_ok.ask',",
       "name: 'manager_ok.register',",
-      "await DBOS.recv<{ approved: boolean }>('manager_ok', {",
+      "await DBOS.recv<ApprovalReply>('manager_ok', {",
       "name: 'manager_ok.clear',",
       'if (managerOkOut === null) {',
       'if (managerOkOut.approved === true) {',

@@ -38,6 +38,7 @@ export const RUNTIME = {
     specifier: '../app/contract.js',
     type: true,
     exports: [
+      'ApprovalReply',
       'EmailFormField',
       'EventWait',
       'FieldCondition',
