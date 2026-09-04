@@ -1,0 +1,50 @@
+{
+  "$schema": "https://mboss.dev/schemas/workflow-v1.json",
+  "version": 1,
+  "revision": 1,
+  "name": "slot_retry_rechecked",
+  "title": "Slot retry, rechecked from the top",
+  "nodes": [
+    { "id": "booking_requested", "kind": "trigger", "title": "Booking request",
+      "config": { "mode": "event", "topic": "booking.requested",
+        "idempotencyKeyPath": "requestId" },
+      "out": "WebhookEvent" },
+    { "id": "parse_request", "kind": "step", "title": "Parse request",
+      "handler": { "export": "parseRequest" }, "in": "WebhookEvent", "out": "BookingReq",
+      "config": {} },
+    { "id": "has_a_time", "kind": "branch", "title": "Anything to search for?",
+      "in": "BookingReq",
+      "config": { "cases": [
+        { "port": "search", "when": { "path": "requestedAt", "op": "nonempty" } } ],
+        "elsePort": "give_up" } },
+    { "id": "find_slot", "kind": "step", "title": "Find open slot",
+      "handler": { "export": "findSlot" }, "in": "BookingReq", "out": "SlotGrid",
+      "config": {} },
+    { "id": "look_again", "kind": "branch", "title": "Look again?", "in": "SlotGrid",
+      "handler": { "export": "tryAgain" },
+      "config": { "cases": [
+        { "port": "again", "when": { "path": "", "op": "eq", "value": true },
+          "maxIterations": 10, "onExhausted": "continue" },
+        { "port": "take_it", "when": { "path": "", "op": "eq", "value": false } } ],
+        "elsePort": "else" } },
+    { "id": "still_ok", "kind": "branch", "title": "Good enough?", "in": "SlotGrid",
+      "config": { "cases": [
+        { "port": "start_over",
+          "when": { "path": "requestedSlotFree", "op": "eq", "value": false },
+          "maxIterations": 5, "onExhausted": "abort" } ],
+        "elsePort": "settled" } },
+    { "id": "release_holds", "kind": "step", "title": "Release stale holds",
+      "handler": { "export": "sweepStale" }, "config": {} }
+  ],
+  "edges": [
+    { "id": "e1", "from": { "node": "booking_requested", "port": "out" }, "to": { "node": "parse_request" }, "type": "WebhookEvent" },
+    { "id": "e2", "from": { "node": "parse_request", "port": "out" }, "to": { "node": "has_a_time" }, "type": "BookingReq" },
+    { "id": "e3", "from": { "node": "has_a_time", "port": "search" }, "to": { "node": "find_slot" }, "type": "BookingReq" },
+    { "id": "e4", "from": { "node": "has_a_time", "port": "give_up" }, "to": { "node": "release_holds" } },
+    { "id": "e5", "from": { "node": "find_slot", "port": "out" }, "to": { "node": "look_again" }, "type": "SlotGrid" },
+    { "id": "e6", "from": { "node": "look_again", "port": "again" }, "to": { "node": "find_slot" }, "type": "BookingReq", "back": true },
+    { "id": "e7", "from": { "node": "look_again", "port": "take_it" }, "to": { "node": "still_ok" }, "type": "SlotGrid" },
+    { "id": "e8", "from": { "node": "still_ok", "port": "start_over" }, "to": { "node": "parse_request" }, "type": "WebhookEvent", "back": true },
+    { "id": "e9", "from": { "node": "still_ok", "port": "settled" }, "to": { "node": "release_holds" } }
+  ]
+}

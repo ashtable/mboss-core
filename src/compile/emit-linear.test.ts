@@ -504,6 +504,7 @@ const GOLDENS = [
   ['review_loop', fixture('review_loop')],
   ['slot_retry_abort', fixture('slot_retry_abort')],
   ['slot_retry_continue', fixture('slot_retry_continue')],
+  ['slot_retry_rechecked', fixture('slot_retry_rechecked')],
   ['timer_wait', fixture('timer_wait')],
   ['event_trigger', EVENT_TRIGGER],
   ['manual_trigger', MANUAL_TRIGGER],

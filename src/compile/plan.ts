@@ -550,7 +550,7 @@ class Planner {
    * the branch that closes it, both ends included.
    */
   #membersBetween(entry: string, branch: string): Set<string> {
-    const forward = reachableFrom(this.#graph, entry);
+    const forward = forwardFrom(this.#graph, entry);
     const members = new Set<string>();
 
     for (const id of forward) {
