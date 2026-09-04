@@ -698,7 +698,10 @@ describe('V15 guarded producers', () => {
   }
 
   it('rejects a consumer that reads a guarded value across a block between', () => {
-    const found = check(v15GuardedProducers, acrossAnEmail({ id: 'after', in: 'Booking' }));
+    const found = check(
+      v15GuardedProducers,
+      acrossAnEmail({ id: 'after', in: 'Booking' }),
+    );
 
     expect(codes(found)).toEqual(['V15']);
     expect(found[0]?.nodeId).toBe('after');

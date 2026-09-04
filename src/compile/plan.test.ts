@@ -497,7 +497,12 @@ describe('what control flow this compiler will not follow', () => {
         nodes: [
           TRIGGER,
           FIND_SLOT,
-          { id: 'book_now', kind: 'step', title: 'Book it now', in: 'SlotGrid' },
+          {
+            id: 'book_now',
+            kind: 'step',
+            title: 'Book it now',
+            in: 'SlotGrid',
+          },
           { id: 'tell_them', kind: 'step', title: 'Tell them', in: 'SlotGrid' },
         ],
         edges: [
@@ -537,7 +542,10 @@ describe('what control flow this compiler will not follow', () => {
                   port: 'free',
                   when: { path: 'requestedSlotFree', op: 'eq', value: true },
                 },
-                { port: 'offer', when: { path: 'alternatives', op: 'nonempty' } },
+                {
+                  port: 'offer',
+                  when: { path: 'alternatives', op: 'nonempty' },
+                },
               ],
               elsePort: 'none',
             },

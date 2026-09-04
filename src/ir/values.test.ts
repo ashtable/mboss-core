@@ -36,7 +36,10 @@ describe('bindsValue', () => {
         {
           id: 'timer',
           kind: 'durableWait',
-          config: { source: { kind: 'timer', seconds: 60 }, onTimeout: 'abort' },
+          config: {
+            source: { kind: 'timer', seconds: 60 },
+            onTimeout: 'abort',
+          },
         },
       ],
       edges: [],

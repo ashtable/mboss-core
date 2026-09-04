@@ -763,7 +763,8 @@ class Planner {
 
     for (const id of members) {
       const node = this.#graph.nodes.get(id);
-      if (node === undefined || !bindsValue(this.#graph.nodes.get(id))) continue;
+      if (node === undefined || !bindsValue(this.#graph.nodes.get(id)))
+        continue;
 
       // A block behind a condition may not run on
       // any round, so there is nothing to promise
