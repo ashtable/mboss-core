@@ -28,6 +28,7 @@ import {
   v12SerializableTypes,
   v13HandlerSignatures,
   v14DecisionBranches,
+  v15GuardedProducers,
   type RuleContext,
 } from './rules.js';
 
@@ -660,6 +661,93 @@ describe('V10 guarded consumers', () => {
 
     expect(codes(found)).toEqual(['V10']);
     expect(found[0]?.nodeId).toBe('after');
+  });
+});
+
+describe('V15 guarded producers', () => {
+  const guard = { path: 'uploads', op: 'nonempty' } as const;
+
+  /**
+   * The email binds no value, so what `after`
+   * reads is still what `maybe` produced — across
+   * a block V10 never looks past.
+   */
+  function acrossAnEmail(consumer: NodeSpec) {
+    return makeIR({
+      nodes: [
+        { id: 'trigger', kind: 'trigger', config: { mode: 'manual' } },
+        { id: 'maybe', out: 'Booking', guard },
+        {
+          id: 'notify',
+          kind: 'emailSend',
+          config: {
+            to: 'requestingUser',
+            subject: 's',
+            bodyMarkdown: 'b',
+            attach: { type: 'none' },
+          },
+        },
+        consumer,
+      ],
+      edges: [
+        { from: 'trigger', to: 'maybe' },
+        { from: 'maybe', to: 'notify', type: 'Booking' },
+        { from: 'notify', to: 'after', type: 'Booking' },
+      ],
+    });
+  }
+
+  it('rejects a consumer that reads a guarded value across a block between', () => {
+    const found = check(v15GuardedProducers, acrossAnEmail({ id: 'after', in: 'Booking' }));
+
+    expect(codes(found)).toEqual(['V15']);
+    expect(found[0]?.nodeId).toBe('after');
+  });
+
+  it('accepts a consumer skipped under the same condition', () => {
+    const ir = acrossAnEmail({ id: 'after', in: 'Booking', guard });
+
+    expect(check(v15GuardedProducers, ir)).toEqual([]);
+  });
+
+  it('accepts a consumer that declares no input of its own', () => {
+    const ir = acrossAnEmail({ id: 'after' });
+
+    expect(check(v15GuardedProducers, ir)).toEqual([]);
+  });
+
+  /**
+   * The pair V10 already names. Reporting it twice
+   * would put two findings on one block for one
+   * mistake.
+   */
+  it('leaves a directly wired producer to V10', () => {
+    const ir = makeIR({
+      nodes: [
+        { id: 'trigger', kind: 'trigger', config: { mode: 'manual' } },
+        { id: 'maybe', out: 'Booking', guard },
+        { id: 'after', in: 'Booking' },
+      ],
+      edges: [
+        { from: 'trigger', to: 'maybe' },
+        { from: 'maybe', to: 'after', type: 'Booking' },
+      ],
+    });
+
+    expect(check(v10GuardedConsumers, ir)).toHaveLength(1);
+    expect(check(v15GuardedProducers, ir)).toEqual([]);
+  });
+
+  it('says nothing about an unguarded producer', () => {
+    const ir = acrossAnEmail({ id: 'after', in: 'Booking' });
+    const unguarded = {
+      ...ir,
+      nodes: ir.nodes.map((node) =>
+        node.id === 'maybe' ? { ...node, guard: undefined } : node,
+      ),
+    };
+
+    expect(check(v15GuardedProducers, unguarded)).toEqual([]);
   });
 });
 

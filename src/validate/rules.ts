@@ -1,6 +1,7 @@
 import {
   portsOf,
   dominators,
+  producers,
   isDag,
   reachableFrom,
   sameGuard,
@@ -21,7 +22,7 @@ import {
 } from './handler-fit.js';
 
 /**
- * The fourteen rules, one function each.
+ * The fifteen rules, one function each.
  *
  * They are separate functions rather than one pass
  * because they are read one at a time: a person
@@ -1015,6 +1016,58 @@ function shown(value: unknown): string {
  * several problems reports them the same way every
  * time.
  */
+/**
+ * Whoever reads a guarded block's value across
+ * something in between is skipped under the same
+ * condition.
+ *
+ * V10 asks this of the block a guarded one is
+ * wired straight to. A value travels further than
+ * one wire, though: an email, a wait, a branch
+ * carry it along without binding one of their own,
+ * and the block that finally reads it is reading
+ * what the guarded block produced just the same.
+ * When the guard is false that block did not run,
+ * and there is no value to read.
+ *
+ * A separate rule rather than a wider V10 because
+ * the codes are what tools match on, and this
+ * finding is about a different pair of blocks:
+ * V10 names a wire, and this names two blocks with
+ * a stretch of workflow between them.
+ */
+export function v15GuardedProducers(ctx: RuleContext): Diagnostic[] {
+  const found: Diagnostic[] = [];
+  const bound = producers(ctx.ir);
+
+  for (const node of ctx.ir.nodes) {
+    if (node.in === undefined) continue;
+
+    const producer = ctx.graph.nodes.get(bound.get(node.id) ?? '');
+    if (producer === undefined || producer.guard === undefined) continue;
+    if (sameGuard(node.guard, producer.guard)) continue;
+
+    // V10's finding, reported by V10.
+    const wired = (ctx.graph.outgoing.get(producer.id) ?? []).some(
+      (edge) => !edge.back && edge.to.node === node.id,
+    );
+    if (wired) continue;
+
+    found.push(
+      diagnostic(
+        'V15',
+        `\`${node.id}\` reads what \`${producer.id}\` produced, but ` +
+          `\`${producer.id}\` is skipped when its condition is false, so ` +
+          `there would be nothing to read. Give \`${node.id}\` the same ` +
+          `condition, or stop it requiring an input.`,
+        { nodeId: node.id },
+      ),
+    );
+  }
+
+  return found;
+}
+
 export const RULES: readonly Rule[] = [
   v01TriggerShape,
   v02Structure,
@@ -1027,6 +1080,7 @@ export const RULES: readonly Rule[] = [
   v09FormWaits,
   v10GuardedConsumers,
   v11RequesterAddress,
+  v15GuardedProducers,
   v12SerializableTypes,
   v13HandlerSignatures,
   v14DecisionBranches,
