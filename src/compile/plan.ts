@@ -91,17 +91,16 @@ export type PlanItem =
   /**
    * An approval: an email, a wait and a two-way
    * decision, drawn as one block and emitted as
-   * all three. `downstream` is what the person who
-   * answered is told happens next, which starts
-   * where the two arms meet again — the blocks on
-   * the arm they did not take are not that.
+   * all three.
+   *
+   * What the person who answered is told happens
+   * next starts where the two arms meet again
+   * rather than at the block after this one — the
+   * arm they did not take is not that — and
+   * `downstream` on the plan says so for every
+   * block, this one included.
    */
-  | {
-      kind: 'approval';
-      node: WorkflowNode;
-      arms: readonly PlanArm[];
-      downstream: readonly string[];
-    }
+  | { kind: 'approval'; node: WorkflowNode; arms: readonly PlanArm[] }
   | {
       kind: 'countedLoop';
       node: WorkflowNode;
@@ -706,12 +705,7 @@ class Planner {
     return {
       item:
         node.kind === 'approval'
-          ? {
-              kind: 'approval',
-              node,
-              arms,
-              downstream: this.#titlesFrom(join, true),
-            }
+          ? { kind: 'approval', node, arms }
           : { kind: 'branch', node, arms },
       after: armStop === join && join !== stop ? join : undefined,
       fallsThrough,

@@ -1545,7 +1545,10 @@ class Emitter {
               { key: 'expiresInSeconds', value: source(String(seconds)) },
             ]),
           },
-          { key: 'downstream', value: titlesList(item.downstream) },
+          {
+            key: 'downstream',
+            value: titlesList(this.#plan.downstream.get(node.id) ?? []),
+          },
         ]),
       ),
       options: [
