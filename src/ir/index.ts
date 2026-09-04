@@ -76,6 +76,7 @@ export {
   joinOf,
 } from './graph.js';
 export { sameGuard } from './guard.js';
+export { bindsValue, producers } from './values.js';
 
 export type {
   Predicate,

@@ -1,9 +1,10 @@
 import {
   portsOf,
+  bindsValue,
   buildGraph,
-  dominators,
   forwardFrom,
   joinOf,
+  producers,
   reachableFrom,
   sameGuard,
   topologicalOrder,
@@ -158,24 +159,6 @@ export type EmissionPlan = {
 };
 
 /**
- * The kinds that bind a value the blocks after
- * them can read.
- *
- * A branch decides where a run goes and produces
- * nothing, so a block after one reads whatever was
- * flowing when the branch was reached. An approval
- * is the same: what it binds is a decision, which
- * only the two ways out of it read, and the value
- * flowing past it is the one that arrived.
- */
-const VALUE_KINDS: ReadonlySet<NodeKind> = new Set<NodeKind>([
-  'step',
-  'codeStep',
-  'apiCall',
-  'transaction',
-]);
-
-/**
  * The kinds a person would call work, which is
  * what a page listing "what happens next" shows.
  * A branch and a loop choose a way rather than do
@@ -227,7 +210,6 @@ class Planner {
   readonly #order: readonly string[];
   readonly #position = new Map<string, number>();
   readonly #producers = new Map<string, string>();
-  readonly #dominators: ReadonlyMap<string, Set<string>>;
   readonly #loops = new Map<string, LoopRegion>();
   readonly #claimed = new Set<string>();
 
@@ -248,7 +230,6 @@ class Planner {
     this.#trigger = trigger;
     this.#order = topologicalOrder(this.#graph, trigger.id);
     this.#order.forEach((id, index) => this.#position.set(id, index));
-    this.#dominators = dominators(this.#graph, trigger.id);
   }
 
   plan(): EmissionPlan {
@@ -257,8 +238,14 @@ class Planner {
       .filter((node): node is WorkflowNode => node !== undefined)
       .filter((node) => node.id !== this.#trigger.id);
 
+    for (const [id, producer] of producers(this.#ir)) {
+      this.#producers.set(id, producer);
+    }
+
     for (const node of chain) {
-      this.#producers.set(node.id, this.#producerOf(node));
+      if (node.in !== undefined) {
+        this.#checkWaysInAgree(node, this.#dominatingProducer(node.id));
+      }
     }
 
     this.#findLoops();
@@ -281,13 +268,6 @@ class Planner {
   /** The block whose value another block reads,
    *  once the ways into it have been shown to
    *  agree on which block that is. */
-  #producerOf(node: WorkflowNode): string {
-    const dominating = this.#dominatingProducer(node.id);
-
-    if (node.in !== undefined) this.#checkWaysInAgree(node, dominating);
-
-    return dominating;
-  }
 
   /**
    * The nearest block above one that every run
@@ -300,12 +280,7 @@ class Planner {
    * reference to nothing.
    */
   #dominatingProducer(id: string): string {
-    const doms = this.#dominators.get(id) ?? new Set<string>();
-    const above = [...doms]
-      .filter((other) => other !== id && this.#bindsValue(other))
-      .sort((a, b) => this.#at(a) - this.#at(b));
-
-    return above.at(-1) ?? this.#trigger.id;
+    return this.#producers.get(id) ?? this.#trigger.id;
   }
 
   /**
@@ -342,7 +317,7 @@ class Planner {
       if (edge.back) continue;
       if (!this.#position.has(from)) continue;
 
-      sources.add(this.#bindsValue(from) ? from : dominating);
+      sources.add(bindsValue(this.#graph.nodes.get(from)) ? from : dominating);
     }
 
     if (sources.size < 2) return;
@@ -357,26 +332,6 @@ class Planner {
         `gives a block one value, so it cannot follow both.`,
       node.id,
     );
-  }
-
-  /**
-   * Whether a block leaves a value the blocks after
-   * it can read.
-   *
-   * A wait usually does — what arrived is the whole
-   * point of it — but a wait on the clock alone has
-   * no sender and nothing to bind, so the value
-   * that was flowing carries straight past it.
-   */
-  #bindsValue(id: string): boolean {
-    const node = this.#graph.nodes.get(id);
-
-    if (node === undefined) return false;
-    if (node.kind === 'durableWait') {
-      return node.config.source.kind !== 'timer';
-    }
-
-    return VALUE_KINDS.has(node.kind);
   }
 
   /**
@@ -807,7 +762,7 @@ class Planner {
 
     for (const id of members) {
       const node = this.#graph.nodes.get(id);
-      if (node === undefined || !this.#bindsValue(id)) continue;
+      if (node === undefined || !bindsValue(this.#graph.nodes.get(id))) continue;
 
       // A block behind a condition may not run on
       // any round, so there is nothing to promise
