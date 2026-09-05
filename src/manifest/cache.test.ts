@@ -121,15 +121,17 @@ describe('loadOrScan', () => {
     expect(calls()).toBe(2);
   });
 
-  it('serves a cache from a build that recorded neither optionality nor decisions', () => {
+  it('serves a cache from a build that recorded none of the optional fields', () => {
     // The cache is keyed on the sources' hash and
     // not on the build that wrote it, so a file an
     // older build left behind is served until
-    // `lib/` next changes. That is why both fields
-    // are optional in the schema: rejecting the
-    // file would rescan every project once on
-    // upgrade, and every consumer already reads a
-    // missing field as "this build did not know".
+    // `lib/` next changes. That is why optionality,
+    // decisions and the calls that reach another
+    // system are all optional in the schema:
+    // rejecting the file would rescan every project
+    // once on upgrade, and every consumer already
+    // reads a missing field as "this build did not
+    // know".
     const { scan, calls } = countingScan();
 
     const fresh = loadOrScan(projectDir, { scan });

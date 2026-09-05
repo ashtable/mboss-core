@@ -15,6 +15,26 @@ import { z } from 'zod';
  */
 
 /**
+ * One call in a function's body that reaches
+ * another system.
+ *
+ * `callee` is the call as it was written, so a
+ * person reading a finding can search for it.
+ * `via` is where the thing being called is
+ * declared — a Node module under its `node:` name,
+ * or `globalThis` for a global — which is not
+ * always what the file imported: a name a module
+ * of the project's own re-exports resolves through
+ * to what it re-exports.
+ */
+export const ExternalCallSchema = z.object({
+  callee: z.string(),
+  via: z.string(),
+  /** 1-based, in the function's own `file`. */
+  line: z.number().int().positive(),
+});
+
+/**
  * One exported function a node can name as its
  * handler.
  *
@@ -23,14 +43,14 @@ import { z } from 'zod';
  * declared `out` compares against it directly
  * whether the handler is async or not.
  *
- * `optional` and `decision` are optional in the
- * schema, and not merely absent when they do not
- * apply: this file is keyed on the sources' hash
- * rather than on the build that wrote it, so a
- * cache an older build left behind is served
- * unchanged until `lib/` next changes. Whoever
- * reads either field reads its absence as "the
- * scan did not say".
+ * `optional`, `decision` and `externalCalls` are
+ * optional in the schema, and not merely absent
+ * when they do not apply: this file is keyed on
+ * the sources' hash rather than on the build that
+ * wrote it, so a cache an older build left behind
+ * is served unchanged until `lib/` next changes.
+ * Whoever reads one of those fields reads its
+ * absence as "the scan did not say".
  */
 export const LibFunctionSchema = z.object({
   export: z.string(),
@@ -50,6 +70,15 @@ export const LibFunctionSchema = z.object({
    * function that decides nothing.
    */
   decision: z.array(z.union([z.string(), z.boolean()])).optional(),
+  /**
+   * The calls in the body that reach another
+   * system, in the order they are written. Absent
+   * when there are none — and absent, too, in a
+   * cache an older build wrote, which is the same
+   * answer either way: nothing here refuses a
+   * function.
+   */
+  externalCalls: z.array(ExternalCallSchema).optional(),
   doc: z.string().optional(),
 });
 
@@ -130,6 +159,7 @@ export const LibManifestSchema = z.object({
   errors: z.array(ManifestErrorSchema),
 });
 
+export type ExternalCall = z.infer<typeof ExternalCallSchema>;
 export type LibFunction = z.infer<typeof LibFunctionSchema>;
 export type ManifestError = z.infer<typeof ManifestErrorSchema>;
 export type NonSerializableReason = z.infer<typeof NonSerializableReasonSchema>;

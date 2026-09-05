@@ -14,6 +14,25 @@
       "returnType": "Booking"
     },
     {
+      "doc": "Charges the claim through the payment service. The one handler in this code-behind that really reaches another system, so a scan of it has something for the rule about transactions to find. No workflow fixture names it.",
+      "export": "chargeCard",
+      "externalCalls": [
+        {
+          "callee": "fetch",
+          "line": 12,
+          "via": "globalThis"
+        }
+      ],
+      "file": "lib/chargeCard.ts",
+      "params": [
+        {
+          "name": "claim",
+          "type": "ExpenseClaim"
+        }
+      ],
+      "returnType": "Payment"
+    },
+    {
       "doc": "Confirms one of the alternative times the slot grid offered. Takes a single alternative rather than the grid, which is what a block that fans out needs: the generated code hands its handler one item at a time.",
       "export": "confirmSlot",
       "file": "lib/confirmSlot.ts",
@@ -183,7 +202,7 @@
     }
   ],
   "nonSerializable": [],
-  "sourceHash": "6367c1cbf5bcd34fe178367c7602947d05af1abfb8302e6af97fa3a2d64eebe3",
+  "sourceHash": "3bfa8036f55a43b83ed3852eb79e6e2faa320ff642f7e406f8050c72a757b174",
   "typeSources": {
     "Booking": "lib/types.ts",
     "BookingReq": "lib/types.ts",

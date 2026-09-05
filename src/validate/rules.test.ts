@@ -29,6 +29,7 @@ import {
   v13HandlerSignatures,
   v14DecisionBranches,
   v15GuardedProducers,
+  v16TransactionExternalCalls,
   type RuleContext,
 } from './rules.js';
 
@@ -1076,6 +1077,186 @@ describe('V13 handler signatures', () => {
 
     expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);
   });
+
+  it('says nothing about a transaction that reaches another system', () => {
+    // V16's finding, and reporting it here as well
+    // would put two errors on one block for one
+    // fault.
+    const ir = makeIR({
+      nodes: [
+        {
+          id: 'pay_claim',
+          kind: 'transaction',
+          handler: { export: 'chargeCard' },
+        },
+      ],
+    });
+
+    expect(check(v13HandlerSignatures, ir, CALLS_OUT_MANIFEST)).toEqual([]);
+  });
+});
+
+/**
+ * A scan that recorded a handler reaching another
+ * system, and one that reaches nothing.
+ */
+const CALLS_OUT_MANIFEST = manifestWith({
+  functions: [
+    {
+      export: 'chargeCard',
+      file: 'lib/chargeCard.ts',
+      params: [{ name: 'claim', type: 'ExpenseClaim' }],
+      returnType: 'Payment',
+      externalCalls: [{ callee: 'fetch', via: 'globalThis', line: 12 }],
+    },
+    {
+      export: 'chargeThroughBarrel',
+      file: 'lib/billing.ts',
+      params: [{ name: 'claim', type: 'ExpenseClaim' }],
+      returnType: 'Payment',
+      externalCalls: [{ callee: 'post', via: 'node:https', line: 4 }],
+    },
+    {
+      export: 'recordBooking',
+      file: 'lib/recordBooking.ts',
+      params: [{ name: 'booking', type: 'Booking' }],
+      returnType: 'Booking',
+    },
+  ],
+});
+
+describe('V16 transactions that reach another system', () => {
+  const manifest = CALLS_OUT_MANIFEST;
+
+  const payClaim: NodeSpec = {
+    id: 'pay_claim',
+    kind: 'transaction',
+    handler: { export: 'chargeCard' },
+  };
+
+  it('reports a transaction whose code-behind calls out', () => {
+    const found = check(
+      v16TransactionExternalCalls,
+      makeIR({
+        nodes: [payClaim],
+      }),
+      manifest,
+    );
+
+    expect(codes(found)).toEqual(['V16']);
+    expect(found[0]?.severity).toBe('error');
+    expect(found[0]?.nodeId).toBe('pay_claim');
+    expect(found[0]?.message).toContain('`pay_claim`');
+    expect(found[0]?.message).toContain('`chargeCard`');
+    expect(found[0]?.message).toContain('`fetch`');
+    expect(found[0]?.message).toContain('lib/chargeCard.ts:12');
+    expect(found[0]?.message).toContain('Move this work to a step.');
+  });
+
+  it('leaves the global out, where the call already names the whole thing', () => {
+    const found = check(
+      v16TransactionExternalCalls,
+      makeIR({ nodes: [payClaim] }),
+      manifest,
+    );
+
+    expect(found[0]?.message).not.toContain('globalThis');
+  });
+
+  it('names the module, where the call on its own says nothing', () => {
+    // `post` is a name the project's own module
+    // re-exports, so without the module beside it
+    // the sentence names something a person cannot
+    // look up.
+    const ir = makeIR({
+      nodes: [
+        {
+          id: 'pay_claim',
+          kind: 'transaction',
+          handler: { export: 'chargeThroughBarrel' },
+        },
+      ],
+    });
+    const found = check(v16TransactionExternalCalls, ir, manifest);
+
+    expect(found[0]?.message).toContain('`post` from `node:https`');
+  });
+
+  it('says nothing about the same handler on a step', () => {
+    const ir = makeIR({
+      nodes: [{ id: 'pay_claim', handler: { export: 'chargeCard' } }],
+    });
+
+    expect(check(v16TransactionExternalCalls, ir, manifest)).toEqual([]);
+  });
+
+  it('says nothing about a transaction that writes and nothing else', () => {
+    const ir = makeIR({
+      nodes: [
+        {
+          id: 'record_booking',
+          kind: 'transaction',
+          handler: { export: 'recordBooking' },
+        },
+      ],
+    });
+
+    expect(check(v16TransactionExternalCalls, ir, manifest)).toEqual([]);
+  });
+
+  it('says nothing when there is no scan to read', () => {
+    expect(
+      check(v16TransactionExternalCalls, makeIR({ nodes: [payClaim] })),
+    ).toEqual([]);
+  });
+
+  it('says nothing about a block whose code does not exist yet', () => {
+    const ir = makeIR({ nodes: [{ id: 'pay_claim', kind: 'transaction' }] });
+
+    expect(check(v16TransactionExternalCalls, ir, manifest)).toEqual([]);
+  });
+
+  it('says nothing about a handler the scan never saw', () => {
+    // V07's finding. Saying it twice, under two
+    // codes, tells an author to fix two things.
+    const ir = makeIR({
+      nodes: [
+        {
+          id: 'pay_claim',
+          kind: 'transaction',
+          handler: { export: 'notThere' },
+        },
+      ],
+    });
+
+    expect(check(v16TransactionExternalCalls, ir, manifest)).toEqual([]);
+  });
+
+  it('reports it off the real scan of the fixture code-behind', () => {
+    const found = check(
+      v16TransactionExternalCalls,
+      makeIR({ nodes: [payClaim] }),
+      goldenManifest('lib'),
+    );
+
+    expect(codes(found)).toEqual(['V16']);
+    expect(found[0]?.message).toContain('lib/chargeCard.ts:12');
+  });
+
+  it('accepts the canonical workflow against the real scan of its code', () => {
+    // `recordBooking` is a transaction that writes
+    // through the app database's own client, which
+    // is the pattern the kind exists for. Proved
+    // through the blessed scan rather than through
+    // a hand-built manifest.
+    expect(
+      check(
+        v16TransactionExternalCalls,
+        irFixture('groom_booking'),
+        goldenManifest('lib'),
+      ),
+    ).toEqual([]);
+  });
 });
 
 describe('V14 decision branches', () => {
@@ -1288,11 +1469,12 @@ describe('V14 decision branches', () => {
 });
 
 describe('the rule list', () => {
-  it('ends with the three rules that read what the scan recorded, in order', () => {
-    expect(RULES.slice(-3)).toEqual([
+  it('ends with the four rules that read what the scan recorded, in order', () => {
+    expect(RULES.slice(-4)).toEqual([
       v12SerializableTypes,
       v13HandlerSignatures,
       v14DecisionBranches,
+      v16TransactionExternalCalls,
     ]);
   });
 });
