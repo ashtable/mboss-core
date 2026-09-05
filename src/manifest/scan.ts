@@ -417,7 +417,20 @@ function reachedSystemOf(callee: Node): string | undefined {
   // descendant of this one and is recorded on its
   // own, under a name a person can search their
   // file for.
-  if (!Node.isIdentifier(rootOf(callee))) return undefined;
+  //
+  // A construction is the other way a chain can
+  // start, and it is not the same: the socket in
+  // `new Socket().connect(port)` is built, not
+  // called, so there is no inner call to record
+  // this one under, and bailing here would lose
+  // it altogether — while naming the socket
+  // first is caught. The two run the same code,
+  // and a pair a person cannot tell apart is not
+  // a rule.
+  const root = rootOf(callee);
+  if (!Node.isIdentifier(root) && !Node.isNewExpression(root)) {
+    return undefined;
+  }
 
   const symbol = callee.getSymbol();
   if (symbol === undefined) return undefined;
@@ -456,8 +469,9 @@ function reachedSystemOf(callee: Node): string | undefined {
 
 /**
  * What a callee is ultimately reached through:
- * `appDb` in `appDb.client.booking.create`, and the
- * inner call in `connect(url).close`.
+ * `appDb` in `appDb.client.booking.create`, the
+ * inner call in `connect(url).close`, and the
+ * construction in `new Socket().connect`.
  */
 function rootOf(callee: Node): Node {
   let node = callee;

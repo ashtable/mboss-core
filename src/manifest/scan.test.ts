@@ -316,6 +316,8 @@ describe('scanLib on optional parameters and decision return types', () => {
 const CALLS_OUT = [
   "import * as http2 from 'http2';",
   "import { request } from 'node:https';",
+  "import { Resolver } from 'node:dns';",
+  "import { Socket } from 'node:net';",
   '',
   'const DEBUG_REMOTE = false;',
   '',
@@ -337,6 +339,14 @@ const CALLS_OUT = [
   '',
   'export function chargeByHttp2(url: string): void {',
   '  http2.connect(url).close();',
+  '}',
+  '',
+  'export function chargeByNewSocket(port: number): void {',
+  '  new Socket().connect(port);',
+  '}',
+  '',
+  'export function chargeByNewResolver(host: string): void {',
+  '  new Resolver().resolve4(host, () => {});',
   '}',
   '',
   'export async function chargeTwice(url: string): Promise<number> {',
@@ -450,6 +460,10 @@ const STAYS_HOME = [
   '  return denied.check(host);',
   '}',
   '',
+  'export function isDeniedInline(host: string): boolean {',
+  '  return new BlockList().check(host);',
+  '}',
+  '',
   'export function certificateProblem(',
   '  host: string,',
   '  cert: PeerCertificate,',
@@ -522,6 +536,40 @@ describe('scanLib on handlers that reach another system', () => {
         line: lineOf(CALLS_OUT, 'http2.connect(url)'),
       },
     ]);
+  });
+
+  it('sees a call on a socket constructed on the same line', () => {
+    // Constructing is not the call, and the call
+    // on what was constructed is not a call on
+    // what another call returned: there is no
+    // inner call for this one to be recorded
+    // under, so the line it is written on is the
+    // only place it can be named. Naming the
+    // socket first has always been caught, and
+    // the two spellings run the same code.
+    expect(exportedFrom(callsOut, 'chargeByNewSocket').externalCalls).toEqual([
+      {
+        callee: 'new Socket().connect',
+        via: 'node:net',
+        line: lineOf(CALLS_OUT, 'new Socket().connect'),
+      },
+    ]);
+  });
+
+  it('sees a query on a resolver constructed on the same line', () => {
+    // The same shape reached through a different
+    // declaration: `resolve4` on a resolver is a
+    // property whose type is the module's own
+    // function, and it resolves through to it.
+    expect(exportedFrom(callsOut, 'chargeByNewResolver').externalCalls).toEqual(
+      [
+        {
+          callee: 'new Resolver().resolve4',
+          via: 'node:dns',
+          line: lineOf(CALLS_OUT, 'new Resolver().resolve4'),
+        },
+      ],
+    );
   });
 
   it('records every call in the body, in the order they are written', () => {
@@ -674,6 +722,9 @@ describe('scanLib on handlers that reach another system', () => {
     // `node:net` all the same, so what a call
     // resolves to cannot be the whole answer.
     expect(exportedFrom(staysHome, 'isDenied').externalCalls).toBeUndefined();
+    expect(
+      exportedFrom(staysHome, 'isDeniedInline').externalCalls,
+    ).toBeUndefined();
   });
 
   it('says nothing about the settings those modules compute and read', () => {
