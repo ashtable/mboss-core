@@ -8,10 +8,18 @@
  * `main` and `types` are `src/index.ts`, so a
  * consumer imports exactly what this file does.
  * Named imports rather than a namespace, because
- * that is what a consumer writes and because a
- * name two modules both export through `export *`
- * is silently left off the surface — the drop
- * shows up here as a member that is not there.
+ * that is what a consumer writes: a name that stops
+ * being exported is a member that is not there, and
+ * a namespace import would go on type-checking
+ * without it.
+ *
+ * Not for collisions. Two subsystems exporting one
+ * name through `export *` is `TS2308` at the second
+ * star in `src/index.ts` — for a value, for a type,
+ * and through a nested barrel — so the build
+ * already refuses it and says where. This file is
+ * for the other direction: a name that quietly
+ * stops reaching the surface at all.
  */
 import * as core from './index.js';
 import {

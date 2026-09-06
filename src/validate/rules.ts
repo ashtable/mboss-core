@@ -1036,12 +1036,6 @@ function shown(value: unknown): string {
 }
 
 /**
- * Every rule, in code order. The order is the
- * order findings come back in, so a document with
- * several problems reports them the same way every
- * time.
- */
-/**
  * Whoever reads a guarded block's value across
  * something in between is skipped under the same
  * condition.
@@ -1181,6 +1175,23 @@ function externalCallMessage(
   );
 }
 
+/**
+ * Every rule, in the order findings come back in,
+ * so a document with several problems reports them
+ * the same way every time.
+ *
+ * Not code order: `v15GuardedProducers` runs
+ * eleventh, so the four rules that read what the
+ * scan recorded stay together at the end — those
+ * are the ones that say nothing at all without a
+ * manifest, and a document checked without one
+ * should lose findings off the bottom of the list
+ * rather than out of the middle.
+ *
+ * A rule written and not added here is a rule that
+ * never runs. `rules.test.ts` holds the two
+ * together, because nothing else would notice.
+ */
 export const RULES: readonly Rule[] = [
   v01TriggerShape,
   v02Structure,
