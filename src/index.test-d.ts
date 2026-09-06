@@ -115,10 +115,17 @@ const ir: WorkflowIR = {
 const autoApprove: LibFunction = {
   export: 'autoApprove',
   file: 'lib/expense.ts',
+  line: 12,
   params: [{ name: 'claim', type: 'Claim', optional: false }],
   returnType: 'boolean',
   decision: [true, false],
 };
+// Where a surface opens the file at when somebody
+// asks to see the handler. Read back as well as
+// written, because a field only ever written to a
+// literal can be dropped from the schema without
+// anything here noticing.
+const declaredAt: number | undefined = autoApprove.line;
 
 // What the canvas draws with: a box per node, from
 // the positions the document carries.
@@ -240,6 +247,7 @@ const configRowHeight = core.CONFIG_ROW_HEIGHT;
 
 export type {};
 void [
+  declaredAt,
   boxes,
   nodeHeight,
   position,
