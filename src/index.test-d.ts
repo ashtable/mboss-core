@@ -15,33 +15,51 @@
  */
 import * as core from './index.js';
 import {
+  CONTAINER_APP_DIR,
+  DEFAULT_RETRY,
   NODE_HEIGHT,
   PositionSchema,
+  SDK_OPERATIONS,
   blankSpec,
   carryPositions,
   decisionValues,
   deleteNode,
   handlerFit,
   listPatterns,
+  matchTrace,
   nextEdgeId,
+  ownerOf,
   patternNamed,
   patternSpec,
   place,
+  planWorkflow,
+  recordedNameLiterals,
   renameNode,
+  replayBoundaries,
   starterId,
   starterNode,
+  traceGrammar,
   usePattern,
   withDecisionCases,
   withoutPositions,
 } from './index.js';
 
 import type {
+  EmissionPlan,
   ExternalCall,
   HandlerFit,
   HandlerMisfit,
   LibFunction,
   NodeBox,
+  Owner,
   Position,
+  RecordedRow,
+  RecordedSegment,
+  ReplayBoundary,
+  Retry,
+  TraceGrammar,
+  TraceMatch,
+  Unoffered,
   UsePatternOutcome,
   WorkflowIR,
   WorkflowNode,
@@ -169,6 +187,47 @@ const used: Promise<UsePatternOutcome> | undefined =
 const fromDocument = patternSpec(ir);
 const fromNothing = blankSpec('refunds');
 
+// Three values another surface has to read the
+// same way core wrote them: the retry policy a
+// step gets when the document names none, the
+// directory a running container holds the project
+// at, and the names the SDK keeps for itself.
+// Each was a private constant somewhere until a
+// second reader needed it, and a copy would drift
+// without anything going red.
+const retry: Retry = DEFAULT_RETRY;
+const appDir: string = CONTAINER_APP_DIR;
+const sdkOwned: boolean = SDK_OPERATIONS.has('DBOS.sleep');
+
+// Reading a recording back to the drawing it came
+// from. `ownerOf` says which block a row belongs
+// to, and the regions it parses out carry filled-
+// in values rather than the variables the emitted
+// template named.
+const owner: Owner = ownerOf('find_slot.r3');
+const regions: readonly RecordedSegment[] =
+  owner.kind === 'node' ? owner.segments : [];
+
+const rows: readonly RecordedRow[] = [
+  { functionId: 0, name: 'claim_filed', completedAt: 1, failed: false },
+];
+
+// Where a replay may start, which rows are not on
+// offer, and whether the run still walks a path
+// this document allows.
+const points: { offered: ReplayBoundary[]; unoffered: Unoffered[] } =
+  replayBoundaries(ir, rows);
+const grammar: TraceGrammar = traceGrammar(ir);
+const verdict: TraceMatch = matchTrace(grammar, rows, 0);
+
+// The two halves the grammar is held between: what
+// the emitter planned to write, and the step names
+// it actually wrote into a file.
+const emission: EmissionPlan = planWorkflow(ir);
+const written: string[] = recordedNameLiterals(
+  "await DBOS.runStep(() => charge(), { name: 'charge_card' });",
+);
+
 // @ts-expect-error every kind is drawn in one box,
 // so nothing computes a height from a count of the
 // config rows a node would have shown
@@ -198,6 +257,14 @@ void [
   used,
   fromDocument,
   fromNothing,
+  retry,
+  appDir,
+  sdkOwned,
+  regions,
+  points,
+  verdict,
+  emission,
+  written,
   baseHeight,
   configRowHeight,
 ];
