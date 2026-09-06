@@ -478,9 +478,9 @@ function refusalFor(ir: WorkflowIR): string {
   const result = compile(ir);
 
   if (result.ok || result.reason !== 'UNSUPPORTED') {
-    throw new Error(
-      `expected a refusal, got ${JSON.stringify(result, null, 2).slice(0, 2000)}`,
-    );
+    const got = JSON.stringify(result, null, 2).slice(0, 2000);
+
+    throw new Error(`expected a refusal, got ${got}`);
   }
 
   return result.message;

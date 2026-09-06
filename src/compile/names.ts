@@ -238,7 +238,9 @@ export function nameShape(
   nodeId: string,
   segments: readonly { kind: RecordedSegment['kind'] }[],
 ): string {
-  return `${nodeId}${segments.map((segment) => shapeText(segment.kind)).join('')}`;
+  const tail = segments.map((segment) => shapeText(segment.kind)).join('');
+
+  return `${nodeId}${tail}`;
 }
 
 function shapeText(kind: RecordedSegment['kind']): string {
