@@ -121,6 +121,55 @@ describe('per-kind config rules', () => {
       ).success,
     ).toBe(false);
   });
+
+  it('refuses a form whose two questions share an id', () => {
+    // An answer names the field it answers, so two
+    // questions sharing an id leave no way to say
+    // which answer belongs to which — and the page
+    // renders both under the one name.
+    expect(
+      NodeSchema.safeParse(
+        node('emailSend', {
+          to: 'requestingUser',
+          subject: 'Please confirm',
+          bodyMarkdown: 'Details below.',
+          attach: {
+            type: 'form',
+            form: {
+              fields: [
+                { id: 'name', label: 'Your name', type: 'text' },
+                { id: 'name', label: 'Say it again', type: 'text' },
+              ],
+            },
+          },
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it('takes a form whose questions each have an id of their own', () => {
+    // Non-vacuous: the shape above is refused for
+    // the shared id and not for anything else about
+    // it.
+    expect(
+      NodeSchema.safeParse(
+        node('emailSend', {
+          to: 'requestingUser',
+          subject: 'Please confirm',
+          bodyMarkdown: 'Details below.',
+          attach: {
+            type: 'form',
+            form: {
+              fields: [
+                { id: 'name', label: 'Your name', type: 'text' },
+                { id: 'again', label: 'Say it again', type: 'text' },
+              ],
+            },
+          },
+        }),
+      ).success,
+    ).toBe(true);
+  });
 });
 
 describe('an unknown kind', () => {

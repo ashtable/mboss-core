@@ -230,8 +230,25 @@ export const FormFieldSchema = z.object({
 /**
  * A form has no code behind it, so its whole
  * definition is its fields.
+ *
+ * Every id is distinct, because an id is how an
+ * answer says which question it answers. Two fields
+ * sharing one renders two controls under a single
+ * name, and the run wakes with one answer where two
+ * were asked — while the type the workflow receives
+ * goes on declaring both, so nothing downstream can
+ * tell that one of them was never filled in.
  */
-export const FormDefSchema = z.object({ fields: z.array(FormFieldSchema) });
+export const FormDefSchema = z
+  .object({ fields: z.array(FormFieldSchema) })
+  .refine(
+    (form) =>
+      new Set(form.fields.map((field) => field.id)).size === form.fields.length,
+    {
+      message: 'every field needs an id of its own',
+      path: ['fields'],
+    },
+  );
 
 /**
  * What the email carries beyond its body. A form
