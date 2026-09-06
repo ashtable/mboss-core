@@ -12,6 +12,7 @@ import { makeIR, type NodeSpec } from '../test-support/ir.js';
 
 import type { Diagnostic } from './diagnostic.js';
 import { canCompile, hasErrors, validateWorkflow } from './index.js';
+import * as rules from './rules.js';
 import {
   RULES,
   v01TriggerShape,
@@ -30,6 +31,7 @@ import {
   v14DecisionBranches,
   v15GuardedProducers,
   v16TransactionExternalCalls,
+  type Rule,
   type RuleContext,
 } from './rules.js';
 
@@ -1536,5 +1538,38 @@ describe('the rule list', () => {
       v14DecisionBranches,
       v16TransactionExternalCalls,
     ]);
+  });
+
+  it('runs every rule this module exports', () => {
+    // Every rule above is checked by calling it
+    // directly, which says what the rule does and
+    // nothing about whether anybody runs it. The
+    // list is what `validateWorkflow` walks, and a
+    // rule left off it goes quiet with the whole
+    // suite still passing — a document that used to
+    // be refused becomes one that validates clean,
+    // and no test anywhere fails.
+    //
+    // Found by name, so a rule that does not follow
+    // the convention is a rule this misses. That is
+    // the trade for not having to name all sixteen
+    // here as well, and the convention is the one
+    // thing every rule in the file already keeps.
+    const exported = Object.entries(rules)
+      .filter(
+        ([name, value]) => /^v\d+/.test(name) && typeof value === 'function',
+      )
+      .map(([name, value]) => [name, value as Rule] as const);
+
+    // Non-vacuous: the filter really did find them.
+    expect(exported.length).toBeGreaterThan(10);
+
+    for (const [name, rule] of exported) {
+      expect(RULES.includes(rule), `${name} is not in RULES`).toBe(true);
+    }
+
+    // And nothing is in the list twice, which would
+    // report the same finding two ways.
+    expect(RULES).toHaveLength(exported.length);
   });
 });

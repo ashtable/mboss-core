@@ -24,13 +24,20 @@ import {
 } from './handler-fit.js';
 
 /**
- * The fifteen rules, one function each.
+ * The rules, one function each.
  *
  * They are separate functions rather than one pass
  * because they are read one at a time: a person
  * looking at a `V05` on their canvas should be
  * able to open one function and see the whole of
  * what that code means.
+ *
+ * `RULES` at the foot of the file is the list
+ * `validateWorkflow` walks, and being written here
+ * is not the same as being on it. A test holds the
+ * two together, because a rule left off the list
+ * goes quiet with every test of the rule itself
+ * still passing.
  */
 
 /**
