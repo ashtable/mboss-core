@@ -188,6 +188,40 @@ describe('what a generated project imports', () => {
   });
 });
 
+/**
+ * The lowest DBOS release either side may name.
+ *
+ * The VS Code extension's management client already
+ * runs this version, and the system-table columns it
+ * reads — the application name a fork claims among
+ * them — are added by migrations the datasource
+ * ships only from here up. A project scaffolded
+ * below the floor creates a database that client
+ * cannot drive, which is why the version is written
+ * down rather than left to whatever the two sides
+ * happen to agree on.
+ */
+const SDK_FLOOR = '^4.27.6';
+
+const FLOORED = ['@dbos-inc/dbos-sdk', '@dbos-inc/prisma-datasource'];
+
+describe('the DBOS floor', () => {
+  it('is what this repo type-checks against', () => {
+    for (const name of FLOORED) {
+      expect(CORE_DEPS[name]).toBe(SDK_FLOOR);
+    }
+  });
+
+  it('is what a generated project installs', () => {
+    // The mirror check above would stay green if
+    // both sides dropped together, so the floor
+    // needs a case that names it.
+    for (const name of FLOORED) {
+      expect(EMITTED[name]).toBe(SDK_FLOOR);
+    }
+  });
+});
+
 describe('mirrorProblems', () => {
   it('says nothing when the two sides agree', () => {
     const both = { express: '^5.2.1', prisma: '^7.9.1' };

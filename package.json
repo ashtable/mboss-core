@@ -28,8 +28,8 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@dbos-inc/dbos-sdk": "^4.25.14",
-    "@dbos-inc/prisma-datasource": "^4.25.14",
+    "@dbos-inc/dbos-sdk": "^4.27.6",
+    "@dbos-inc/prisma-datasource": "^4.27.6",
     "@eslint/js": "^10.0.1",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
