@@ -1,3 +1,5 @@
+import { CONTAINER_APP_DIR } from '../../app-contract/layout.js';
+
 /**
  * The image.
  *
@@ -11,7 +13,7 @@
  */
 export const DOCKERFILE = `FROM node:24.18.0-slim
 
-WORKDIR /app
+WORKDIR ${CONTAINER_APP_DIR}
 
 # Prisma's query engine links against libssl, and
 # node:slim does not ship it.

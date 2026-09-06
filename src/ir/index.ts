@@ -27,6 +27,7 @@ export {
   TypeNameSchema,
   PredicateSchema,
   RetrySchema,
+  DEFAULT_RETRY,
   FanOutSchema,
   HandlerRefSchema,
   PositionSchema,

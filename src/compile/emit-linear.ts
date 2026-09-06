@@ -1,6 +1,7 @@
 import { FORM_LINK_MAX_SECONDS } from '../app-contract/limits.js';
 import { RUNTIME_VALUES } from '../app-contract/index.js';
 import {
+  DEFAULT_RETRY,
   sameGuard,
   type FormField,
   type Predicate,
@@ -72,13 +73,6 @@ import { UnsupportedIR } from './unsupported.js';
  * first would mean walking the document twice and
  * keeping the two walks in agreement.
  */
-
-/** What the schema uses when a node says nothing. */
-const DEFAULT_RETRY: Retry = {
-  maxAttempts: 3,
-  intervalSeconds: 1,
-  backoffRate: 2,
-};
 
 /** The workflow's own parameter, for the two
  *  trigger modes that carry a payload. */

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   APP_DIR,
+  CONTAINER_APP_DIR,
   CONTRACT_FILE,
   LIB_DIR,
   REGISTRY_FILE,
@@ -24,6 +25,10 @@ describe('the directory constants', () => {
   it('put the contract and the registry in their directories', () => {
     expect(CONTRACT_FILE.startsWith(`${APP_DIR}/`)).toBe(true);
     expect(REGISTRY_FILE.startsWith(`${WORKFLOWS_DIR}/`)).toBe(true);
+  });
+
+  it('say where the project sits inside the image', () => {
+    expect(CONTAINER_APP_DIR).toBe('/app');
   });
 });
 

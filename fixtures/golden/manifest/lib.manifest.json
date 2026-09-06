@@ -5,6 +5,7 @@
       "doc": "Reserves the slot with the scheduling provider.",
       "export": "bookAppointment",
       "file": "lib/bookAppointment.ts",
+      "line": 6,
       "params": [
         {
           "name": "grid",
@@ -24,6 +25,7 @@
         }
       ],
       "file": "lib/chargeCard.ts",
+      "line": 11,
       "params": [
         {
           "name": "claim",
@@ -36,6 +38,7 @@
       "doc": "Confirms one of the alternative times the slot grid offered. Takes a single alternative rather than the grid, which is what a block that fans out needs: the generated code hands its handler one item at a time.",
       "export": "confirmSlot",
       "file": "lib/confirmSlot.ts",
+      "line": 12,
       "params": [
         {
           "name": "slot",
@@ -47,6 +50,7 @@
     {
       "export": "payClaim",
       "file": "lib/expense.ts",
+      "line": 37,
       "params": [
         {
           "name": "claim",
@@ -58,6 +62,7 @@
     {
       "export": "fileRefusal",
       "file": "lib/expense.ts",
+      "line": 45,
       "params": [
         {
           "name": "claim",
@@ -70,6 +75,7 @@
       "doc": "Tidies up whichever way the claim went. Takes nothing, so it can stand where two arms meet and read neither of them.",
       "export": "closeClaim",
       "file": "lib/expense.ts",
+      "line": 54,
       "params": [],
       "returnType": "void"
     },
@@ -81,6 +87,7 @@
       "doc": "Whether the claim can be paid without anybody looking at it.",
       "export": "autoApprove",
       "file": "lib/expense.ts",
+      "line": 63,
       "params": [
         {
           "name": "claim",
@@ -98,6 +105,7 @@
       "doc": "Which desk the claim goes to. Written as an alias rather than a union spelled out here, because that is the shape a manifest cannot read off the return type's text.",
       "export": "routeClaim",
       "file": "lib/expense.ts",
+      "line": 74,
       "params": [
         {
           "name": "claim",
@@ -110,6 +118,7 @@
       "doc": "Looks up availability around the requested time.",
       "export": "findSlot",
       "file": "lib/findSlot.ts",
+      "line": 6,
       "params": [
         {
           "name": "req",
@@ -126,6 +135,7 @@
       "doc": "Whether the run should look again. Availability moves while a run is waiting, so asking the same question a second time is worth doing — which is what makes this a decision a loop can close on.",
       "export": "tryAgain",
       "file": "lib/findSlot.ts",
+      "line": 24,
       "params": [
         {
           "name": "grid",
@@ -137,6 +147,7 @@
     {
       "export": "recordIntake",
       "file": "lib/intake.ts",
+      "line": 34,
       "params": [
         {
           "name": "answers",
@@ -149,6 +160,7 @@
       "doc": "Flattens the incoming webhook into the shape the rest of the workflow reads.",
       "export": "parseRequest",
       "file": "lib/parseRequest.ts",
+      "line": 10,
       "params": [
         {
           "name": "event",
@@ -161,6 +173,7 @@
       "doc": "Reads the customer's answer to the message that was just sent them. A block rather than a durable wait, so the retry loop the branch fixtures draw can be compiled on its own: what those fixtures are about is the loop, and a wait would put a second unrelated shape inside every one of them.",
       "export": "readReply",
       "file": "lib/readReply.ts",
+      "line": 13,
       "params": [
         {
           "name": "prompt",
@@ -173,6 +186,7 @@
       "doc": "Writes the confirmed booking to the app's own database, through the transaction-scoped client.",
       "export": "recordBooking",
       "file": "lib/recordBooking.ts",
+      "line": 9,
       "params": [
         {
           "name": "booking",
@@ -185,6 +199,7 @@
       "doc": "Clears out bookings nobody ever confirmed. Takes no argument, which is what a block on a scheduled run needs: a run the clock starts carries no payload, so a handler that asked for one could never be called.",
       "export": "sweepStale",
       "file": "lib/sweepStale.ts",
+      "line": 9,
       "params": [],
       "returnType": "number"
     },
@@ -192,6 +207,7 @@
       "doc": "Texts the customer the open times and asks them to pick one. The reply arrives as a separate event, so this only sends.",
       "export": "twilioChat",
       "file": "lib/twilioChat.ts",
+      "line": 8,
       "params": [
         {
           "name": "grid",

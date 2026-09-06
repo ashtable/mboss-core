@@ -23,6 +23,19 @@ export const APP_DIR = 'src/app';
 /** Compiler-owned, and rewritten on every run. */
 export const WORKFLOWS_DIR = 'src/workflows';
 
+/**
+ * Where the project is copied to inside the image.
+ *
+ * The Dockerfile's `WORKDIR` is written from this,
+ * and a stack frame captured from a running
+ * container is read against it to recover the
+ * project-relative path that failed. The two
+ * drifting apart would not break a build — it
+ * would quietly stop a stack frame resolving to a
+ * file anyone can open.
+ */
+export const CONTAINER_APP_DIR = '/app';
+
 export const CONTRACT_FILE = `${APP_DIR}/contract.ts`;
 export const REGISTRY_FILE = `${WORKFLOWS_DIR}/index.ts`;
 

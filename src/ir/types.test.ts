@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { WorkflowSpecSchema } from '../apply/proposal.js';
 import { readFixtureJson } from '../test-support/fixtures.js';
 import {
+  DEFAULT_RETRY,
   EdgeSchema,
   NodeSchema,
   RetrySchema,
@@ -80,6 +81,24 @@ describe('defaults', () => {
       intervalSeconds: 1,
       backoffRate: 2,
     });
+  });
+});
+
+describe('DEFAULT_RETRY', () => {
+  it('is the policy a node that says nothing runs under', () => {
+    expect(DEFAULT_RETRY).toEqual({
+      maxAttempts: 3,
+      intervalSeconds: 1,
+      backoffRate: 2,
+    });
+  });
+
+  // The literal above catches a schema default that
+  // moves; this catches the constant and the schema
+  // drifting apart, which is the failure the single
+  // definition exists to make impossible.
+  it('is what the schema fills an empty block with', () => {
+    expect(DEFAULT_RETRY).toEqual(RetrySchema.parse({}));
   });
 });
 
