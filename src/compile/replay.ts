@@ -217,13 +217,17 @@ function defaultsByNode(
  * Every point in `rows` a replay of `ir` may start
  * from, and every point it may not.
  *
- * A row that names no block in this document is in
- * neither list. A run outlives the document it was
- * compiled from — a block gets renamed, a block
- * gets deleted, and one ledger holds workflows
- * this compiler never wrote — and there is nothing
- * useful to say to a person about a block that is
- * not in front of them.
+ * A row that finished and names no block in this
+ * document is in neither list. A run outlives the
+ * document it was compiled from — a block gets
+ * renamed, a block gets deleted, and one ledger
+ * holds workflows this compiler never wrote — and
+ * there is nothing useful to say to a person about
+ * a block that is not in front of them. Where the
+ * run is sitting now is the exception: an open row
+ * is `parked-here` whatever the document says, so
+ * a renamed block cannot make a parked run look
+ * finished.
  */
 export function replayBoundaries(
   ir: WorkflowIR,

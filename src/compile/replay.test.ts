@@ -407,6 +407,24 @@ describe('replayBoundaries', () => {
     expect(offered.map((boundary) => boundary.functionId)).toEqual([3]);
     expect(unoffered).toEqual([]);
   });
+
+  it('still says where a parked run is when its block is gone', () => {
+    // The one thing worth saying about a block a
+    // person cannot see: the run is sitting there
+    // now. Where a run is does not stop being true
+    // because somebody renamed the block it is in,
+    // and a frontier nothing reported would leave
+    // the run looking finished.
+    const ir = makeIR({ nodes: [{ id: 'find_slot', title: 'Find a slot' }] });
+
+    const { offered, unoffered } = replayBoundaries(ir, [
+      row(1, 'find_slot'),
+      row(2, 'gone_away.register', { completedAt: undefined }),
+    ]);
+
+    expect(offered.map((boundary) => boundary.functionId)).toEqual([1]);
+    expect(unoffered).toEqual([{ functionId: 2, because: 'parked-here' }]);
+  });
 });
 
 /** A run that recorded these names, from id 0. */
