@@ -33,5 +33,22 @@ export {
   type Owner,
   type RecordedSegment,
 } from './names.js';
+export {
+  planWorkflow,
+  type ArmTarget,
+  type EmissionPlan,
+  type GuardGroup,
+  type PlanArm,
+  type PlanItem,
+  type PlanRegion,
+  type RegionOutcome,
+  type TriggerNode,
+} from './plan.js';
+export {
+  replayBoundaries,
+  type RecordedRow,
+  type ReplayBoundary,
+  type Unoffered,
+} from './replay.js';
 export { UnsupportedIR } from './unsupported.js';
 export * from './typecheck.js';
