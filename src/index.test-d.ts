@@ -17,15 +17,20 @@ import * as core from './index.js';
 import {
   NODE_HEIGHT,
   PositionSchema,
+  blankSpec,
   carryPositions,
   decisionValues,
   deleteNode,
   handlerFit,
+  listPatterns,
   nextEdgeId,
+  patternNamed,
+  patternSpec,
   place,
   renameNode,
   starterId,
   starterNode,
+  usePattern,
   withDecisionCases,
   withoutPositions,
 } from './index.js';
@@ -37,8 +42,10 @@ import type {
   LibFunction,
   NodeBox,
   Position,
+  UsePatternOutcome,
   WorkflowIR,
   WorkflowNode,
+  WorkflowPattern,
 } from './index.js';
 
 const branch: Extract<WorkflowNode, { kind: 'branch' }> = {
@@ -152,6 +159,16 @@ const afterRename: WorkflowIR | undefined = renamed.ok ? renamed.ir : undefined;
 const deleted = deleteNode(ir, { nodeId: 'auto_approve', reconnect: true });
 const afterDelete: WorkflowIR | undefined = deleted.ok ? deleted.ir : undefined;
 
+// The gallery: what it offers, what using one
+// comes to, and the two specs a surface writes
+// without a pattern at all.
+const gallery: readonly WorkflowPattern[] = listPatterns();
+const hero: WorkflowPattern | undefined = patternNamed('refund_approval');
+const used: Promise<UsePatternOutcome> | undefined =
+  hero && usePattern('/tmp/project', { pattern: hero, name: 'refunds' });
+const fromDocument = patternSpec(ir);
+const fromNothing = blankSpec('refunds');
+
 // @ts-expect-error every kind is drawn in one box,
 // so nothing computes a height from a count of the
 // config rows a node would have shown
@@ -177,6 +194,10 @@ void [
   edgeId,
   afterRename,
   afterDelete,
+  gallery,
+  used,
+  fromDocument,
+  fromNothing,
   baseHeight,
   configRowHeight,
 ];

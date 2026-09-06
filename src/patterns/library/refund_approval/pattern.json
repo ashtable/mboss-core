@@ -1,0 +1,7 @@
+{
+  "summary": "Policy auto-approves the safe ones; people decide the rest; payment and data settle durably.",
+  "group": "backend",
+  "tags": ["refunds", "approvals", "payments", "policy"],
+  "glyphs": ["trigger", "step", "branch", "approval"],
+  "demo": true
+}
