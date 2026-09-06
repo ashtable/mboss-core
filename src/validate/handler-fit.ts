@@ -72,6 +72,36 @@ export const HANDLER_KINDS: ReadonlySet<NodeKind> = new Set<NodeKind>([
   'branch',
 ]);
 
+/**
+ * Whether the call to a block's handler hands it a
+ * value.
+ *
+ * The emitter asks this to choose between
+ * `handler()` and `handler(input)`. The check that
+ * every way into a block carries the same value has
+ * to ask it too: a block whose handler is handed
+ * nothing cannot disagree with itself about what it
+ * reads, and a block whose handler is handed
+ * something reads a value whatever the document
+ * says about its own input.
+ *
+ * Counted over every parameter rather than the
+ * required ones — the opposite of the count in
+ * `misfitOf` below, and deliberately so. That one
+ * asks how many values a call cannot leave out;
+ * this one asks whether the call hands over
+ * anything at all. A handler declaring one optional
+ * parameter is offered the value.
+ *
+ * `undefined` is a function the scan never found,
+ * and reads as taking nothing: a block whose
+ * handler is missing is refused on its own terms
+ * before any value matters.
+ */
+export function consumesValue(fn: LibFunction | undefined): boolean {
+  return (fn?.params.length ?? 0) > 0;
+}
+
 export function handlerFit(node: WorkflowNode, fn: LibFunction): HandlerFit {
   const reason = misfitOf(node, fn);
 

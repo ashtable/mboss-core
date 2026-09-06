@@ -12,6 +12,7 @@ import {
   type WorkflowNode,
 } from '../ir/index.js';
 import type { LibManifest } from '../manifest/index.js';
+import { consumesValue } from '../validate/index.js';
 
 import {
   expandedCall,
@@ -963,7 +964,7 @@ class Emitter {
       (each) => each.export === handler.export,
     );
 
-    if ((fn?.params.length ?? 0) === 0) return `${binding}()`;
+    if (!consumesValue(fn)) return `${binding}()`;
     if (input === undefined) throw this.#unreachableValue(node);
 
     return `${binding}(${input})`;
