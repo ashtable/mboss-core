@@ -142,16 +142,25 @@ function withholding(
     return { because: 'inside-wait' };
   }
 
-  // A form's link names the run it was minted
-  // for. Only the email can mint another, so the
-  // wait sends a person one block back rather than
-  // offering a park nobody can answer. An event
-  // wait carries no link and is offered as it is.
-  if (region === 'register' && node.kind === 'durableWait') {
-    const { source } = node.config;
+  // A link names the run it was minted for, and
+  // only the block that mailed it can mint
+  // another — so a wait a link opens sends a
+  // person back to that block rather than offering
+  // a park nobody can answer. An approval mails
+  // its own, so it sends them to itself: its first
+  // row is the mail. An event wait carries no link
+  // and is offered as it is.
+  if (region === 'register') {
+    if (node.kind === 'approval') {
+      return { because: 'link-scoped', instead: node.id };
+    }
 
-    if (source.kind === 'form') {
-      return { because: 'link-scoped', instead: source.email };
+    if (node.kind === 'durableWait') {
+      const { source } = node.config;
+
+      if (source.kind === 'form') {
+        return { because: 'link-scoped', instead: source.email };
+      }
     }
   }
 

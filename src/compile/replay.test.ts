@@ -270,7 +270,15 @@ describe('replayBoundaries', () => {
   it('offers the mail an approval asks its question in', () => {
     // An approval is its own email, so the row
     // that asks is both the block's first row and
-    // the one that mints a fresh link.
+    // the one that mints a fresh link. The row
+    // that registers the correlation is not: the
+    // link already in the approver's inbox names
+    // the run it was minted for, so beginning
+    // again there would correlate a new run to an
+    // answer that can only come back for the old
+    // one. The block to begin at instead is this
+    // same one, whose own first row mints a fresh
+    // link.
     const ir = makeIR({
       nodes: [
         {
@@ -295,14 +303,35 @@ describe('replayBoundaries', () => {
         label: 'Request approval · ask',
         preferred: true,
       },
-      {
-        functionId: 2,
-        nodeId: 'manager_ok',
-        label: 'Request approval · register',
-        preferred: false,
-      },
     ]);
-    expect(unoffered).toEqual([{ functionId: 3, because: 'inside-wait' }]);
+    expect(unoffered).toEqual([
+      { functionId: 2, because: 'link-scoped', instead: 'manager_ok' },
+      { functionId: 3, because: 'inside-wait' },
+    ]);
+  });
+
+  it('keeps an approval link-scoped from inside a loop', () => {
+    // The round is on the row and changes nothing
+    // about whose link it is, exactly as it does
+    // not for a form wait.
+    const ir = makeIR({
+      nodes: [
+        {
+          id: 'manager_ok',
+          kind: 'approval',
+          title: 'Request approval',
+          config: { to: 'ops@example.com' },
+        },
+      ],
+    });
+
+    const { unoffered } = replayBoundaries(ir, [
+      row(1, 'manager_ok.r2.register'),
+    ]);
+
+    expect(unoffered).toEqual([
+      { functionId: 1, because: 'link-scoped', instead: 'manager_ok' },
+    ]);
   });
 
   it('does not offer the point a parked run is sitting at', () => {
