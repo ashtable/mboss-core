@@ -23,6 +23,7 @@ export {
   determinismProblems,
   headerProblems,
   placementProblems,
+  recordedNameLiterals,
   registrationProblems,
   stepProblems,
   type AuditProblem,
@@ -45,9 +46,13 @@ export {
   type TriggerNode,
 } from './plan.js';
 export {
+  matchTrace,
   replayBoundaries,
+  traceGrammar,
   type RecordedRow,
   type ReplayBoundary,
+  type TraceGrammar,
+  type TraceMatch,
   type Unoffered,
 } from './replay.js';
 export { UnsupportedIR } from './unsupported.js';

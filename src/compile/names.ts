@@ -184,6 +184,86 @@ export type RecordedSegment =
   | { kind: 'resend'; count: number };
 
 /**
+ * The name a run would write for one step, with
+ * the values filled in.
+ *
+ * `stepNameLiteral` renders the template the
+ * emitter writes and `ownerOf` reads a row back;
+ * this renders the row itself, which is what
+ * anything predicting a run rather than reading
+ * one needs.
+ */
+export function recordedName(
+  nodeId: string,
+  segments: readonly RecordedSegment[],
+): string {
+  return `${nodeId}${segments.map(recordedText).join('')}`;
+}
+
+function recordedText(segment: RecordedSegment): string {
+  switch (segment.kind) {
+    case 'round':
+      return `.r${segment.round}`;
+
+    case 'item':
+      return `[${segment.index}]`;
+
+    case 'register':
+      return '.register';
+
+    case 'clear':
+      return '.clear';
+
+    case 'ask':
+      return '.ask';
+
+    case 'resend':
+      return `.resend.${segment.count}`;
+  }
+}
+
+/**
+ * The same name with every filled-in value reduced
+ * to `#`, so `find_slot.r1` and `find_slot.r2` are
+ * one thing.
+ *
+ * It takes the regions rather than the values
+ * because either kind of segment answers it: a
+ * template the emitter wrote and a row a run wrote
+ * describe the same region, and comparing the two
+ * is the whole point — a round is a round whether
+ * the name spells it `${round}` or `2`.
+ */
+export function nameShape(
+  nodeId: string,
+  segments: readonly { kind: RecordedSegment['kind'] }[],
+): string {
+  return `${nodeId}${segments.map((segment) => shapeText(segment.kind)).join('')}`;
+}
+
+function shapeText(kind: RecordedSegment['kind']): string {
+  switch (kind) {
+    case 'round':
+      return '.r#';
+
+    case 'item':
+      return '[#]';
+
+    case 'register':
+      return '.register';
+
+    case 'clear':
+      return '.clear';
+
+    case 'ask':
+      return '.ask';
+
+    case 'resend':
+      return '.resend.#';
+  }
+}
+
+/**
  * Who a recorded row belongs to.
  *
  * `unknown` keeps the name rather than throwing it

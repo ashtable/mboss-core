@@ -111,8 +111,13 @@ const FORM_LINK_MAX_DAYS = FORM_LINK_MAX_SECONDS / SECONDS_PER_DAY;
  * One: the smallest number that makes "remind
  * them" mean anything, and the run still ends
  * rather than nagging forever.
+ *
+ * Exported because each reminder records a
+ * numbered row of its own, so anything working out
+ * what a run can have recorded has to count them
+ * the same way this does.
  */
-const DEFAULT_RESENDS = 1;
+export const DEFAULT_RESENDS = 1;
 
 /**
  * How long a link to something in storage lasts.

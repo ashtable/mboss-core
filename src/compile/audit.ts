@@ -1,5 +1,7 @@
 import { ts } from 'ts-morph';
 
+import { nameShape, type RecordedSegment } from './names.js';
+
 /**
  * What has to be true of a generated workflow
  * file, checked by reading the file back.
@@ -235,7 +237,11 @@ export function stepProblems(source: string): AuditProblem[] {
       config !== undefined && ts.isObjectLiteralExpression(config)
         ? config
         : undefined;
-    const name = options ? propertyText(file, options, 'name') : undefined;
+    const declared = options ? propertyText(file, options, 'name') : undefined;
+    // Two steps in the same region differ only by
+    // a counter, and that is not a collision. Two
+    // that differ by nothing is.
+    const name = declared === undefined ? undefined : normalise(declared);
     const label = name ?? '';
 
     if (name === undefined) {
@@ -280,6 +286,181 @@ export function stepProblems(source: string): AuditProblem[] {
   }
 
   return found.sort((a, b) => a.line - b.line);
+}
+
+/**
+ * Every row a compiled workflow would record, in
+ * source order, read back off the file.
+ *
+ * The names come back as source text — `'search'`,
+ * `` `search.r${round}` `` — rather than as the
+ * strings a run would write. A step inside a loop
+ * records a different name every round, and the
+ * hole is the part that says which region varies;
+ * flattening it away would leave a round
+ * indistinguishable from a reminder.
+ *
+ * It exists because `stepProblems` walks the same
+ * calls and reports problems rather than names.
+ * Holding the trace grammar to what the emitter
+ * actually writes needs the names, so this is a
+ * second reader of the same file with a different
+ * question.
+ */
+export function recordedNameLiterals(source: string): string[] {
+  const file = parse(source);
+  const found: string[] = [];
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) found.push(...rowsRecordedBy(file, node));
+    ts.forEachChild(node, visit);
+  };
+
+  visit(file);
+
+  return found;
+}
+
+/**
+ * The rows one call writes.
+ *
+ * A checkpoint writes the name it declares.
+ * `DBOS.recv` reserves two ids and writes under
+ * both — its own row and the durable sleep that
+ * times it out — which is why a file with no
+ * `DBOS.sleep(` anywhere in it still records a
+ * sleep. Starting a run writes the child's own
+ * registered name, and the call site spells that
+ * child as a binding rather than as the name it
+ * registered under, so the only row a reader of
+ * the text can name is the result the handle is
+ * awaited for.
+ */
+function rowsRecordedBy(
+  file: ts.SourceFile,
+  call: ts.CallExpression,
+): string[] {
+  const callee = text(file, call.expression);
+
+  if (STEP_CALLS.includes(callee) || TRANSACTION_CALLS.includes(callee)) {
+    const [, config] = call.arguments;
+    const options =
+      config !== undefined && ts.isObjectLiteralExpression(config)
+        ? config
+        : undefined;
+    const name = options ? propertyText(file, options, 'name') : undefined;
+
+    return name === undefined ? [] : [name];
+  }
+
+  if (callee === 'DBOS.recv') return ['DBOS.recv', 'DBOS.sleep'];
+  if (callee === 'DBOS.sleep') return ['DBOS.sleep'];
+
+  // Matched on the last name rather than on the
+  // whole callee: a run is started off `DBOS` or
+  // off the workflow itself, and both spellings
+  // record the same pair of rows.
+  if (calleeName(call.expression) === 'startWorkflow') {
+    return ['DBOS.getResult'];
+  }
+
+  return [];
+}
+
+// The node id's own shape, and the two ways a
+// name literal spells a value: a hole the run
+// fills in, or a number somebody already filled
+// in. Reading both is what lets a name the
+// emitter wrote and a name a run wrote be
+// compared with each other.
+const LITERAL_NODE_ID = /^[a-z][a-z0-9_]{0,40}/;
+const VALUE = String.raw`(?:\d+|\$\{[^}]*\})`;
+const LITERAL_SEGMENT = new RegExp(
+  `^(?:\\[${VALUE}\\]|\\.resend\\.${VALUE}|\\.r${VALUE}|` +
+    `\\.register|\\.clear|\\.ask)`,
+);
+
+/**
+ * One recorded-name literal as the shape of row it
+ * writes: `` `find_slot.r${round}` `` and
+ * `'find_slot.r2'` are both `find_slot.r#`.
+ *
+ * Read region by region rather than by blanking
+ * out the holes, so a literal carrying something
+ * this emitter does not write fails to be read
+ * rather than comparing equal to something that
+ * does. What it cannot read comes back unchanged,
+ * which fails the comparison this exists for
+ * instead of passing quietly as something else.
+ */
+export function nameLiteralShape(literal: string): string {
+  const text = unquoted(literal);
+  const nodeId = LITERAL_NODE_ID.exec(text)?.[0];
+
+  if (nodeId === undefined) return literal;
+
+  const segments = literalSegments(text.slice(nodeId.length));
+
+  return segments === null ? literal : nameShape(nodeId, segments);
+}
+
+/** The literal without whichever quote opened it.
+ *  A row the SDK named carries none. */
+function unquoted(literal: string): string {
+  const quote = literal[0];
+
+  if (quote !== "'" && quote !== '`') return literal;
+  if (!literal.endsWith(quote)) return literal;
+
+  return literal.slice(1, -1);
+}
+
+/**
+ * Every region of what follows a node id, or
+ * `null` when any of it is not a region this
+ * emitter writes.
+ */
+function literalSegments(
+  tail: string,
+): { kind: RecordedSegment['kind'] }[] | null {
+  const segments: { kind: RecordedSegment['kind'] }[] = [];
+  let rest = tail;
+
+  while (rest.length > 0) {
+    const match = LITERAL_SEGMENT.exec(rest);
+    if (match === null) return null;
+
+    segments.push({ kind: segmentKind(match[0]) });
+    rest = rest.slice(match[0].length);
+  }
+
+  return segments;
+}
+
+/**
+ * Which region one matched piece is. `.register`
+ * and `.resend` are asked about before the round,
+ * because all three open `.r` and reading a wait's
+ * row as a loop's would put them in the same
+ * place.
+ */
+function segmentKind(text: string): RecordedSegment['kind'] {
+  if (text.startsWith('[')) return 'item';
+  if (text.startsWith('.resend.')) return 'resend';
+  if (text.startsWith('.register')) return 'register';
+  if (text.startsWith('.clear')) return 'clear';
+  if (text.startsWith('.ask')) return 'ask';
+
+  return 'round';
+}
+
+/** What a call's callee is called, ignoring
+ *  whatever it was reached through. */
+function calleeName(expression: ts.Expression): string | undefined {
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+  if (ts.isIdentifier(expression)) return expression.text;
+
+  return undefined;
 }
 
 /**
@@ -417,15 +598,8 @@ function callsTo(file: ts.SourceFile, callee: string): ts.CallExpression[] {
   return found;
 }
 
-/**
- * The source text of one property of an object
- * literal, with a template literal's holes
- * flattened to `*`.
- *
- * Two steps in the same region differ only by a
- * counter, and that is not a name collision. Two
- * that differ by nothing is.
- */
+/** The source text of one property of an object
+ *  literal, exactly as it is written. */
 function propertyText(
   file: ts.SourceFile,
   options: ts.ObjectLiteralExpression,
@@ -435,7 +609,7 @@ function propertyText(
     if (!ts.isPropertyAssignment(property)) continue;
     if (property.name.getText(file) !== key) continue;
 
-    return normalise(text(file, property.initializer));
+    return text(file, property.initializer);
   }
 
   return undefined;
