@@ -16,8 +16,10 @@ import type { LibManifest, NonSerializableReason } from '../manifest/index.js';
 import { diagnostic, warning, type Diagnostic } from './diagnostic.js';
 import {
   decisionValues,
+  declaredTypeMisfit,
   handlerFit,
   HANDLER_KINDS,
+  type DeclaredTypeMisfit,
   type HandlerMisfit,
 } from './handler-fit.js';
 
@@ -800,6 +802,18 @@ export function v12SerializableTypes(ctx: RuleContext): Diagnostic[] {
  * parameters a call can leave out, would put an
  * error on a handler that compiles.
  *
+ * So it asks `declaredTypeMisfit` and not
+ * `handlerFit`, which answers with the first thing
+ * wrong. Those are the same answer right up until
+ * a block is wrong in two ways at once, and then
+ * they are not: a handler taking two values and
+ * returning the wrong type came back refused for
+ * the arity — the one reason this rule will not
+ * report — and the wrong return type went
+ * unmentioned by anybody. What a cache may have
+ * left out is `optional`, and neither type
+ * comparison reads it.
+ *
  * It stays quiet wherever it cannot know: with no
  * scan, with no handler, and with a handler the
  * scan never saw, which is V07's to report.
@@ -819,31 +833,34 @@ export function v13HandlerSignatures(ctx: RuleContext): Diagnostic[] {
     );
     if (fn === undefined) continue;
 
-    const fit = handlerFit(node, fn);
-    if (fit.fits) continue;
+    // The declared types on their own, not the
+    // first thing wrong with the pairing. They are
+    // the only misfits this rule reports, and
+    // asking the wider question meant a reason it
+    // stays quiet about could hide one it does not:
+    // a handler taking two values and returning the
+    // wrong type was refused for the arity, and the
+    // wrong type went unmentioned by anybody.
+    const misfit = declaredTypeMisfit(node, fn);
+    if (misfit === undefined) continue;
 
-    const message = mismatchMessage(node.id, fn.export, fit.reason);
-
-    if (message !== undefined) {
-      found.push(diagnostic('V13', message, { nodeId: node.id }));
-    }
+    found.push(
+      diagnostic('V13', mismatchMessage(node.id, fn.export, misfit), {
+        nodeId: node.id,
+      }),
+    );
   }
 
   return found;
 }
 
-/**
- * What to tell an author about a misfit, or
- * `undefined` for the four this rule leaves to
- * somebody else: the three the doc above explains,
- * and a handler that reaches another system, which
- * is V16's to report.
- */
+/** What to tell an author about a type the block
+ *  and its code-behind do not agree on. */
 function mismatchMessage(
   nodeId: string,
   handler: string,
-  reason: HandlerMisfit,
-): string | undefined {
+  reason: DeclaredTypeMisfit,
+): string {
   switch (reason.kind) {
     case 'input-mismatch':
       return (
@@ -858,9 +875,6 @@ function mismatchMessage(
         `\`${handler}\` returns \`${reason.returns}\`. The generated code ` +
         `would pass on the wrong value.`
       );
-
-    default:
-      return undefined;
   }
 }
 

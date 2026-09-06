@@ -1061,11 +1061,71 @@ describe('V13 handler signatures', () => {
     // cache that may not have recorded which
     // parameters a call may leave out, and would
     // put an error on a handler that compiles.
+    //
+    // The declarations agree, so the arity is the
+    // only thing wrong: this has to be a node whose
+    // types match, or it would pass for the wrong
+    // reason.
+    const ir = makeIR({
+      nodes: [
+        { id: 'pair_up', in: 'BookingReq', handler: { export: 'pairUp' } },
+      ],
+    });
+
+    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);
+  });
+
+  it('reports a wrong type on a handler that also takes too many', () => {
+    // The arity stays unreported, for the reason
+    // above. What must not happen is the silence
+    // spreading: the types here disagree, that
+    // disagreement is this rule's to report, and it
+    // does not depend on anything a cache may have
+    // left out.
     const ir = makeIR({
       nodes: [{ id: 'pair_up', in: 'SlotGrid', handler: { export: 'pairUp' } }],
     });
 
-    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);
+    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([
+      {
+        code: 'V13',
+        severity: 'error',
+        nodeId: 'pair_up',
+        message:
+          '`pair_up` takes `SlotGrid`, but its code-behind `pairUp` takes ' +
+          '`BookingReq`. The generated code would hand it the wrong value.',
+      },
+    ]);
+  });
+
+  it('reports a wrong return type the arity used to hide', () => {
+    // The defect this rule's shape allowed: an
+    // out that disagrees, on a handler taking two
+    // values, was reported by nobody at all —
+    // `validateWorkflow` came back empty and the
+    // document compiled.
+    const ir = makeIR({
+      nodes: [
+        {
+          id: 'pair_up',
+          in: 'BookingReq',
+          out: 'SlotGrid',
+          handler: { export: 'pairUp' },
+        },
+      ],
+    });
+
+    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([
+      {
+        code: 'V13',
+        severity: 'error',
+        nodeId: 'pair_up',
+        message:
+          '`pair_up` produces `SlotGrid`, but its code-behind `pairUp` ' +
+          'returns `Booking`. The generated code would pass on the wrong ' +
+          'value.',
+      },
+    ]);
   });
 
   it('says nothing when the handler’s type is not a plain name', () => {
