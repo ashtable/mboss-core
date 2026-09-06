@@ -199,8 +199,38 @@ type LoopRegion = {
   onExhausted: 'abort' | 'continue';
 };
 
-export function planWorkflow(ir: WorkflowIR): EmissionPlan {
-  return new Planner(ir).plan();
+/**
+ * Whether a block reads a value, when nobody says.
+ *
+ * What the document declares about itself, which is
+ * the question this module can answer alone. It is
+ * the wrong question — a handler takes what its
+ * signature says whatever the block declares — and
+ * the right one needs the scan, which the planner
+ * has no way to reach.
+ */
+function declaresInput(node: WorkflowNode): boolean {
+  return node.in !== undefined;
+}
+
+/**
+ * `readsValue` is the answer, not the means to it:
+ * the planner is handed a predicate rather than a
+ * manifest, so `ir/` and `zod` stay the whole of
+ * its graph and the extension goes on bundling it.
+ * The compiler passes one built from the scan;
+ * `traceGrammar`, which has no scan, passes none
+ * and gets what the document declares.
+ */
+export type PlanOptions = {
+  readsValue?: (node: WorkflowNode) => boolean;
+};
+
+export function planWorkflow(
+  ir: WorkflowIR,
+  options?: PlanOptions,
+): EmissionPlan {
+  return new Planner(ir, options?.readsValue ?? declaresInput).plan();
 }
 
 class Planner {
@@ -208,12 +238,14 @@ class Planner {
   readonly #graph: WorkflowGraph;
   readonly #trigger: TriggerNode;
   readonly #order: readonly string[];
+  readonly #readsValue: (node: WorkflowNode) => boolean;
   readonly #position = new Map<string, number>();
   readonly #producers = new Map<string, string>();
   readonly #loops = new Map<string, LoopRegion>();
   readonly #claimed = new Set<string>();
 
-  constructor(ir: WorkflowIR) {
+  constructor(ir: WorkflowIR, readsValue: (node: WorkflowNode) => boolean) {
+    this.#readsValue = readsValue;
     this.#ir = ir;
     this.#graph = buildGraph(ir);
 
@@ -245,7 +277,7 @@ class Planner {
     }
 
     for (const node of chain) {
-      if (node.in !== undefined) {
+      if (this.#readsValue(node)) {
         this.#checkWaysInAgree(node, this.#dominatingProducer(node.id));
       }
     }

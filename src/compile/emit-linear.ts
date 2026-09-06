@@ -11,7 +11,7 @@ import {
   type WorkflowIR,
   type WorkflowNode,
 } from '../ir/index.js';
-import type { LibManifest } from '../manifest/index.js';
+import type { LibFunction, LibManifest } from '../manifest/index.js';
 import { consumesValue } from '../validate/index.js';
 
 import {
@@ -198,7 +198,12 @@ class Emitter {
     this.#ir = request.ir;
     this.#manifest = request.manifest;
     this.#timezone = request.timezone;
-    this.#plan = planWorkflow(request.ir);
+    // The scan is what settles whether a block
+    // reads a value, and this is the first place
+    // that holds both it and the document.
+    this.#plan = planWorkflow(request.ir, {
+      readsValue: (node) => consumesValue(this.#functionFor(node)),
+    });
     this.#exported = camelCase(request.ir.name);
     this.#inner = `${this.#exported}Fn`;
 
@@ -960,14 +965,24 @@ class Emitter {
 
     this.#want(binding === entry.name ? entry : { ...entry, alias: binding });
 
-    const fn = this.#manifest.functions.find(
-      (each) => each.export === handler.export,
-    );
-
-    if (!consumesValue(fn)) return `${binding}()`;
+    if (!consumesValue(this.#functionFor(node))) return `${binding}()`;
     if (input === undefined) throw this.#unreachableValue(node);
 
     return `${binding}(${input})`;
+  }
+
+  /** What the scan recorded about the function
+   *  behind a block, or `undefined` where the block
+   *  names none and where it names one the scan
+   *  never found. */
+  #functionFor(node: WorkflowNode): LibFunction | undefined {
+    const handler = node.handler;
+
+    if (handler === undefined) return undefined;
+
+    return this.#manifest.functions.find(
+      (each) => each.export === handler.export,
+    );
   }
 
   /**

@@ -41,6 +41,7 @@ export {
   type GuardGroup,
   type PlanArm,
   type PlanItem,
+  type PlanOptions,
   type PlanRegion,
   type RegionOutcome,
   type TriggerNode,

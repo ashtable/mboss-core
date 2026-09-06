@@ -5,7 +5,6 @@ import {
   determinismProblems,
   headerProblems,
   placementProblems,
-  planWorkflow,
   registrationProblems,
   stepProblems,
   type CompileResult,
@@ -243,46 +242,48 @@ describe('a block bound on one arm above the shared blocks', () => {
 /**
  * The shape above with one line of the document
  * taken out: `refund_payment` no longer says what
- * it reads. Nothing else moves, and the compiler
- * goes from turning the drawing down to emitting a
- * file for it — a file that is wrong.
+ * it reads. Nothing else moves — and it is refused
+ * just the same, because what a block declares
+ * about its own input was never what decided
+ * whether it reads one.
  *
- * These three tests pin that rather than fix it.
- * Running the same producer check over every block
- * that binds a value, instead of only over blocks
- * that declare an input, does close the hole; it
- * also turns down the ordinary shape of two arms
- * meeting again at a block that reads nothing,
- * which is drawn all over this repository's own
- * fixtures. Closing it without that cost means the
- * check knowing how many parameters a handler
- * takes, and that is a larger change than this
- * one. Until then, what the compiler does is
- * written down here, so that nobody reads its
- * silence as agreement.
+ * The block's handler takes a parameter, so the
+ * emitter was always going to hand it a value; the
+ * only question was which of the two reaching it,
+ * and that is the question the refusal asks. The
+ * check runs over the blocks whose handler takes
+ * something rather than over the blocks that
+ * declare an input, which is why the ordinary shape
+ * of two arms meeting again at a block that reads
+ * nothing — drawn all over this repository's own
+ * fixtures — goes on compiling: those handlers take
+ * no parameter, so nothing is picked for them.
  */
 describe('that same shape with the input left undeclared', () => {
   const ir = reviewRecorded({ refundPaymentDeclaresIn: false });
 
-  it('compiles', () => {
-    expect(compile(ir).ok).toBe(true);
+  it('leaves validation with nothing to report', () => {
+    // Undeclaring an input does not make a document
+    // invalid. The refusal below is the compiler's,
+    // exactly as it is for the shape above.
+    expect(validateWorkflow(ir, { manifest: MANIFEST })).toEqual([]);
   });
 
-  it('hands the payment the value from before the fork', () => {
-    expect(planWorkflow(ir).producers.get('refund_payment')).toBe(
-      'load_purchase',
+  it('is refused, naming both blocks the value could come from', () => {
+    const message = refusalFor(ir);
+
+    expect(message).toContain('load_purchase');
+    expect(message).toContain('record_review');
+  });
+
+  it('is refused whether or not the block declares what it reads', () => {
+    // The one line of the document that used to
+    // decide this now changes nothing, which is the
+    // whole point: a handler takes what its
+    // signature says either way.
+    expect(refusalFor(reviewRecorded({ refundPaymentDeclaresIn: true }))).toBe(
+      refusalFor(ir),
     );
-    expect(sourceOf(ir)).toContain('refundPayment(loadPurchaseOut)');
-  });
-
-  it('throws away what the approved arm produced', () => {
-    const source = sourceOf(ir);
-
-    // Bound, and then named nowhere else in the
-    // file: the value the arm produced is written
-    // and dropped on the floor.
-    expect(source).toContain('const recordReviewOut = ');
-    expect(source.split('recordReviewOut')).toHaveLength(2);
   });
 });
 
