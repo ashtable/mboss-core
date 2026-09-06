@@ -1,15 +1,23 @@
 /**
- * What generated code calls things.
+ * What generated code calls things, and how a
+ * recorded name is read back.
  *
- * Three separate jobs live here because all three
- * have to agree with each other: the identifier a
- * workflow function is exported under, the local a
- * node's result is bound to, and the name a step
- * is recorded under. The last of those is not
- * cosmetic — DBOS compares the recorded name at
- * each function id when it replays a run, and a
- * name that moves turns every recovery into an
- * error days after the change that caused it.
+ * Four jobs live here because all four have to
+ * agree with each other: the identifier a workflow
+ * function is exported under, the local a node's
+ * result is bound to, the name a step is recorded
+ * under, and the parse that says which block a
+ * recorded row belongs to. The recorded name is
+ * not cosmetic — DBOS compares it at each function
+ * id when it replays a run, and a name that moves
+ * turns every recovery into an error days after
+ * the change that caused it. Keeping the parse
+ * beside the rendering is what makes a new segment
+ * kind fail a test here instead of silently
+ * misattributing rows wherever a run is read.
+ *
+ * This module imports nothing, so the browser
+ * bundles that draw a run can carry it whole.
  */
 
 /**
@@ -155,4 +163,140 @@ function segmentText(segment: StepSegment): string {
     case 'resend':
       return `.resend.\${${segment.counter}}`;
   }
+}
+
+/**
+ * The same six regions, read back off a row that
+ * was recorded.
+ *
+ * `StepSegment` carries the variable a template
+ * names; this carries the value that variable was
+ * filled with. `.r${round}` is rendered from the
+ * first and parsed into the second, so the two
+ * cannot be one type however alike they look.
+ */
+export type RecordedSegment =
+  | { kind: 'round'; round: number }
+  | { kind: 'item'; index: number }
+  | { kind: 'register' }
+  | { kind: 'clear' }
+  | { kind: 'ask' }
+  | { kind: 'resend'; count: number };
+
+/**
+ * Who a recorded row belongs to.
+ *
+ * `unknown` keeps the name rather than throwing it
+ * away: one ledger holds every workflow an app
+ * runs, including hand-written ones this compiler
+ * never saw, and a reader has to be able to say so
+ * rather than guess or fail.
+ */
+export type Owner =
+  | { kind: 'node'; nodeId: string; segments: RecordedSegment[] }
+  | { kind: 'sdk'; name: string }
+  | { kind: 'unknown'; name: string };
+
+/**
+ * Every name the SDK reserves for a primitive of
+ * its own, so a row carrying one is never read as
+ * a block that happens to share the spelling.
+ *
+ * `getStatus` is the odd one out and the only
+ * reason a set is needed at all: it is the one
+ * primitive the SDK records without the prefix,
+ * and read syntactically it is a plausible node
+ * name.
+ */
+export const SDK_OPERATIONS: ReadonlySet<string> = new Set([
+  'DBOS.send',
+  'DBOS.recv',
+  'DBOS.setEvent',
+  'DBOS.getEvent',
+  'DBOS.sleep',
+  'DBOS.getResult',
+  'DBOS.writeStream',
+  'DBOS.closeStream',
+  'DBOS.readStream',
+  'DBOS.readStreamOffset',
+  'getStatus',
+]);
+
+// Checked on its own as well as against the set,
+// so a primitive a later SDK adds still reads as
+// the SDK's without this file changing. No block
+// can answer to it: a node id is lowercase.
+const SDK_PREFIX = 'DBOS.';
+
+// The node id's own shape, restated rather than
+// imported because this module imports nothing.
+// What the parse leans on is that an id admits
+// neither `.` nor `[`, so it always ends exactly
+// where the first segment begins.
+const NODE_ID = /^[a-z][a-z0-9_]{0,40}/;
+
+// One region of the tail. The three kinds that
+// carry a value capture it; the three that do not
+// are told apart by the text they matched. `.r`
+// wants a digit next, which is what stops it
+// swallowing the front of `.register` and
+// `.resend`.
+const SEGMENT =
+  /^(?:\[(\d+)\]|\.r(\d+)|\.resend\.(\d+)|\.register|\.clear|\.ask)/;
+
+/** One matched region, as the value it recorded. */
+function parseSegment(match: RegExpExecArray): RecordedSegment {
+  const [text, index, round, count] = match;
+
+  if (index !== undefined) return { kind: 'item', index: Number(index) };
+  if (round !== undefined) return { kind: 'round', round: Number(round) };
+  if (count !== undefined) return { kind: 'resend', count: Number(count) };
+  if (text === '.register') return { kind: 'register' };
+  if (text === '.clear') return { kind: 'clear' };
+
+  // The alternation admits nothing else.
+  return { kind: 'ask' };
+}
+
+/**
+ * Every region of what follows a node id, or
+ * `null` if any of it is not a region this
+ * emitter renders.
+ */
+function parseSegments(tail: string): RecordedSegment[] | null {
+  const segments: RecordedSegment[] = [];
+  let rest = tail;
+
+  while (rest.length > 0) {
+    const match = SEGMENT.exec(rest);
+    if (match === null) return null;
+
+    segments.push(parseSegment(match));
+    rest = rest.slice(match[0].length);
+  }
+
+  return segments;
+}
+
+/**
+ * Which block, if any, a recorded row belongs to.
+ *
+ * Syntactic and never throwing, because it is
+ * handed names off a ledger rather than out of a
+ * document: it decides from the name alone, and
+ * whether the block it names still exists is a
+ * separate question for whoever holds the
+ * workflow.
+ */
+export function ownerOf(name: string): Owner {
+  if (name.startsWith(SDK_PREFIX) || SDK_OPERATIONS.has(name))
+    return { kind: 'sdk', name };
+
+  const nodeId = NODE_ID.exec(name)?.[0];
+  if (nodeId === undefined) return { kind: 'unknown', name };
+
+  const segments = parseSegments(name.slice(nodeId.length));
+  if (segments === null) return { kind: 'unknown', name };
+
+  return { kind: 'node', nodeId, segments };
 }

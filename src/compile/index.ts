@@ -27,5 +27,11 @@ export {
   stepProblems,
   type AuditProblem,
 } from './audit.js';
+export {
+  SDK_OPERATIONS,
+  ownerOf,
+  type Owner,
+  type RecordedSegment,
+} from './names.js';
 export { UnsupportedIR } from './unsupported.js';
 export * from './typecheck.js';

@@ -252,3 +252,26 @@ describe('the compiler import graph', () => {
     }
   });
 });
+
+/**
+ * The recorded-name grammar.
+ *
+ * `src/compile/names.ts` both renders the name a
+ * step records and reads one back, and the reading
+ * half is what tells a webview which block a row
+ * in the ledger belongs to. So it is a leaf on
+ * purpose — not even the id schema, whose shape it
+ * restates in a comment rather than imports.
+ */
+describe('the recorded-name import graph', () => {
+  const entry = join(SRC, 'compile', 'names.ts');
+
+  it('imports nothing at all', () => {
+    const { external, visited } = walk(entry, join(SRC, 'compile'));
+
+    // Non-vacuous: the walk really did read the
+    // module, and that one file is all it reached.
+    expect(visited).toEqual([entry]);
+    expect(external).toEqual([]);
+  });
+});
