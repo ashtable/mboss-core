@@ -42,6 +42,18 @@ import {
 const ACCENT_TINT = '#eef2f7';
 const ACCENT_TEXT = '#31506f';
 
+/**
+ * What a page says something is wrong in, tinted
+ * and darkened the same way the accent is.
+ *
+ * Warm rather than red: the only thing these pages
+ * ever report is a question left blank, and the
+ * person reading it has done nothing worse than
+ * miss one.
+ */
+const ALERT_TINT = '#fbf1ee';
+const ALERT_TEXT = '#8a4a37';
+
 const STYLE = `*{box-sizing:border-box}
 body{margin:0;background:#fff;color:${NEUTRAL_700};
 font:400 14px/1.6 ${BODY_FONT}}
@@ -64,6 +76,14 @@ padding:18px;text-align:center;color:${ACCENT_TEXT}}
 .drop.off{border-color:${DIVIDER};background:#fff;color:${NEUTRAL_600}}
 .choice{margin-top:6px;display:flex;gap:16px}
 .note{color:${NEUTRAL_600};font-size:13px;margin:6px 0 0}
+.alert{margin-top:18px;padding:12px 14px;background:${ALERT_TINT};
+color:${ALERT_TEXT};border-left:2px solid ${ALERT_TEXT}}
+.alert p{margin:0}
+.alert ul{margin:6px 0 0;padding-left:18px}
+.field.missing .label{color:${ALERT_TEXT}}
+.field.missing input[type=text],.field.missing textarea{
+border-color:${ALERT_TEXT}}
+.why{color:${ALERT_TEXT};font-size:13px;margin:6px 0 0}
 button{margin-top:24px;background:${ACCENT};color:#fff;border:0;
 font:600 13px ${HEADING_FONT};letter-spacing:.05em;padding:11px 20px;
 cursor:pointer}

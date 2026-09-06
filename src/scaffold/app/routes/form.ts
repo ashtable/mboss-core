@@ -20,6 +20,7 @@ import {
   renderInvalidPage,
   renderResolvedPage,
   renderSubmittedPage,
+  shownBy,
 } from '../pages/form.js';
 import { verifyLink, type LinkKeyRing } from '../signed-links.js';
 
@@ -266,6 +267,31 @@ async function submit(
     answers[field.id] = field.type === 'yesNo' ? value === 'yes' : value;
   }
 
+  const missing = missingRequired(opened.wait, posted, answers);
+
+  if (missing.length > 0) {
+    // The run is left parked and the token goes on
+    // working, so this is a page somebody can
+    // finish rather than a dead end. What they
+    // already typed comes back with it.
+    response
+      .status(422)
+      .type('html')
+      .send(
+        renderFormPage({
+          appTitle: deps.appTitle,
+          runId: opened.runId,
+          recipient: opened.recipient,
+          action: request.originalUrl,
+          wait: opened.wait,
+          uploadsEnabled: deps.store !== null,
+          missing,
+          posted: posted.fields,
+        }),
+      );
+    return;
+  }
+
   await wake(deps, opened, answers);
   response.type('html').send(
     renderSubmittedPage({
@@ -274,6 +300,66 @@ async function submit(
       downstream: opened.wait.downstream,
     }),
   );
+}
+
+/**
+ * The required fields this submit arrived without.
+ *
+ * The browser asks for them too, and that is not
+ * enough on its own: the `required` attribute is a
+ * courtesy to whoever is filling the form in, and
+ * anything at all can post to this route. Without
+ * this the run woke with an object missing
+ * properties the compiled message type declares as
+ * present, and the handler behind it read
+ * `undefined` where its own signature promised a
+ * string.
+ *
+ * A conditional field is only asked for when its
+ * condition holds, which is what the page does too
+ * — it clears requiredness on a field it hides. The
+ * conditions are read in field order because a
+ * `showIf` names a field asked before it, so by the
+ * time one is evaluated the answer it reads is
+ * already known.
+ *
+ * A blank string counts as unanswered here and
+ * nowhere else. An empty box fails the browser's
+ * own check on a required field, so this agrees
+ * with it; an optional one left empty goes on being
+ * sent as the empty string it was, because what a
+ * workflow receives for a question nobody had to
+ * answer is not this function's to change.
+ */
+function missingRequired(
+  wait: WaitDescriptor,
+  posted: PostedBody,
+  answers: Readonly<Record<string, unknown>>,
+): string[] {
+  const missing: string[] = [];
+
+  for (const field of wait.fields) {
+    if (field.required !== true) continue;
+    if (field.showIf !== undefined && !shownBy(field.showIf, posted.fields))
+      continue;
+
+    if (field.type === 'fileUpload') {
+      const stored = answers[field.id];
+      const none =
+        stored === undefined ||
+        stored === null ||
+        (Array.isArray(stored) && stored.length === 0);
+
+      if (none) missing.push(field.id);
+      continue;
+    }
+
+    const given = posted.fields[field.id];
+
+    if (given === undefined || given === '') missing.push(field.id);
+  }
+
+  return missing;
 }
 
 async function submitDecision(

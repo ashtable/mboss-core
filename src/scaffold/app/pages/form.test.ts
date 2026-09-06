@@ -2,13 +2,18 @@ import { runInNewContext } from 'node:vm';
 
 import { describe, expect, it } from 'vitest';
 
-import type { EmailFormField, WaitDescriptor } from '../contract.js';
+import type {
+  EmailFormField,
+  FieldCondition,
+  WaitDescriptor,
+} from '../contract.js';
 
 import {
   renderFormPage,
   renderInvalidPage,
   renderResolvedPage,
   renderSubmittedPage,
+  shownBy,
 } from './form.js';
 
 /**
@@ -508,5 +513,105 @@ describe('a conditional field that is also required', () => {
     await expect(required).toMatchFileSnapshot(
       './__snapshots__/form-conditional-required.html',
     );
+  });
+});
+
+/**
+ * The server's copy of the reveal script's rule.
+ *
+ * `shownBy` and the `holds` inside `REVEAL_SCRIPT`
+ * decide the same thing in two languages, and only
+ * one of them can be called from a test directly.
+ * So every case runs through both — the script in
+ * a VM against the stub document above, and the
+ * function against the same answer — and the two
+ * are asserted to agree. A change made to one and
+ * not the other fails here rather than in somebody
+ * else's inbox.
+ */
+describe('shownBy', () => {
+  const CASES: {
+    op: FieldCondition['op'];
+    value?: string | number | boolean;
+    answer: string;
+    shown: boolean;
+  }[] = [
+    { op: 'exists', answer: '', shown: false },
+    { op: 'exists', answer: 'anything', shown: true },
+    { op: 'nonempty', answer: '', shown: false },
+    { op: 'nonempty', answer: 'anything', shown: true },
+    { op: 'eq', value: 'yes', answer: 'yes', shown: true },
+    { op: 'eq', value: 'yes', answer: 'no', shown: false },
+    { op: 'eq', value: true, answer: 'yes', shown: true },
+    { op: 'eq', value: false, answer: 'no', shown: true },
+    { op: 'eq', value: false, answer: 'yes', shown: false },
+    { op: 'neq', value: 'yes', answer: 'no', shown: true },
+    { op: 'neq', value: 'yes', answer: 'yes', shown: false },
+    { op: 'gt', value: 3, answer: '4', shown: true },
+    { op: 'gt', value: 3, answer: '3', shown: false },
+    { op: 'gte', value: 3, answer: '3', shown: true },
+    { op: 'lt', value: 3, answer: '2', shown: true },
+    { op: 'lt', value: 3, answer: '3', shown: false },
+    { op: 'lte', value: 3, answer: '3', shown: true },
+    // An unanswered number reads as zero on both
+    // sides, which is worth pinning: it is the one
+    // case where a blank box satisfies a condition.
+    { op: 'lt', value: 3, answer: '', shown: true },
+    { op: 'gt', value: 3, answer: '', shown: false },
+  ];
+
+  const pageFor = (condition: FieldCondition): string =>
+    renderFormPage({
+      appTitle: 'Sermon Helper',
+      runId: 'wf_81c2',
+      recipient: 'sam@hillsong.io',
+      action: '/f/tok-form',
+      wait: {
+        ...WAIT,
+        fields: [
+          {
+            id: 'probe',
+            label: 'The answer it watches',
+            type: 'text',
+            required: false,
+            multiple: false,
+          },
+          {
+            id: 'dependent',
+            label: 'The field that depends on it',
+            type: 'text',
+            required: false,
+            multiple: false,
+            showIf: condition,
+          },
+        ],
+      },
+      uploadsEnabled: true,
+    });
+
+  it.each(CASES)(
+    'agrees with the page for $op $value against "$answer"',
+    ({ op, value, answer, shown }) => {
+      const condition: FieldCondition = {
+        fieldId: 'probe',
+        op,
+        ...(value === undefined ? {} : { value }),
+      };
+      const run = runRevealScript(pageFor(condition), [
+        { id: 'probe', value: answer },
+        { id: 'dependent', showIf: condition },
+      ]);
+
+      const byTheScript = run.wrappers[0]?.hidden === false;
+
+      expect(shownBy(condition, { probe: answer })).toBe(shown);
+      expect(byTheScript).toBe(shown);
+    },
+  );
+
+  it('reads a field nobody answered as blank rather than throwing', () => {
+    const condition: FieldCondition = { fieldId: 'probe', op: 'nonempty' };
+
+    expect(shownBy(condition, {})).toBe(false);
   });
 });
