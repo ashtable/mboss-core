@@ -1,7 +1,5 @@
 import { ts } from 'ts-morph';
 
-import { nameShape, type RecordedSegment } from './names.js';
-
 /**
  * What has to be true of a generated workflow
  * file, checked by reading the file back.
@@ -365,93 +363,6 @@ function rowsRecordedBy(
   }
 
   return [];
-}
-
-// The node id's own shape, and the two ways a
-// name literal spells a value: a hole the run
-// fills in, or a number somebody already filled
-// in. Reading both is what lets a name the
-// emitter wrote and a name a run wrote be
-// compared with each other.
-const LITERAL_NODE_ID = /^[a-z][a-z0-9_]{0,40}/;
-const VALUE = String.raw`(?:\d+|\$\{[^}]*\})`;
-const LITERAL_SEGMENT = new RegExp(
-  `^(?:\\[${VALUE}\\]|\\.resend\\.${VALUE}|\\.r${VALUE}|` +
-    `\\.register|\\.clear|\\.ask)`,
-);
-
-/**
- * One recorded-name literal as the shape of row it
- * writes: `` `find_slot.r${round}` `` and
- * `'find_slot.r2'` are both `find_slot.r#`.
- *
- * Read region by region rather than by blanking
- * out the holes, so a literal carrying something
- * this emitter does not write fails to be read
- * rather than comparing equal to something that
- * does. What it cannot read comes back unchanged,
- * which fails the comparison this exists for
- * instead of passing quietly as something else.
- */
-export function nameLiteralShape(literal: string): string {
-  const text = unquoted(literal);
-  const nodeId = LITERAL_NODE_ID.exec(text)?.[0];
-
-  if (nodeId === undefined) return literal;
-
-  const segments = literalSegments(text.slice(nodeId.length));
-
-  return segments === null ? literal : nameShape(nodeId, segments);
-}
-
-/** The literal without whichever quote opened it.
- *  A row the SDK named carries none. */
-function unquoted(literal: string): string {
-  const quote = literal[0];
-
-  if (quote !== "'" && quote !== '`') return literal;
-  if (!literal.endsWith(quote)) return literal;
-
-  return literal.slice(1, -1);
-}
-
-/**
- * Every region of what follows a node id, or
- * `null` when any of it is not a region this
- * emitter writes.
- */
-function literalSegments(
-  tail: string,
-): { kind: RecordedSegment['kind'] }[] | null {
-  const segments: { kind: RecordedSegment['kind'] }[] = [];
-  let rest = tail;
-
-  while (rest.length > 0) {
-    const match = LITERAL_SEGMENT.exec(rest);
-    if (match === null) return null;
-
-    segments.push({ kind: segmentKind(match[0]) });
-    rest = rest.slice(match[0].length);
-  }
-
-  return segments;
-}
-
-/**
- * Which region one matched piece is. `.register`
- * and `.resend` are asked about before the round,
- * because all three open `.r` and reading a wait's
- * row as a loop's would put them in the same
- * place.
- */
-function segmentKind(text: string): RecordedSegment['kind'] {
-  if (text.startsWith('[')) return 'item';
-  if (text.startsWith('.resend.')) return 'resend';
-  if (text.startsWith('.register')) return 'register';
-  if (text.startsWith('.clear')) return 'clear';
-  if (text.startsWith('.ask')) return 'ask';
-
-  return 'round';
 }
 
 /** What a call's callee is called, ignoring

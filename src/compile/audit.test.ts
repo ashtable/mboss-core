@@ -5,7 +5,6 @@ import { readFixture } from '../test-support/fixtures.js';
 import {
   determinismProblems,
   headerProblems,
-  nameLiteralShape,
   placementProblems,
   recordedNameLiterals,
   registrationProblems,
@@ -620,47 +619,5 @@ describe('recordedNameLiterals', () => {
     ].join('\n');
 
     expect(recordedNameLiterals(source)).toEqual(['DBOS.getResult']);
-  });
-});
-
-describe('nameLiteralShape', () => {
-  it('reduces the parts that vary to the region they name', () => {
-    // A round is a round whether the name spells
-    // it with a hole or with a number, and both
-    // have to read as the same thing as what a
-    // document says it can record.
-    expect(nameLiteralShape('`find_slot.r${round}`')).toBe('find_slot.r#');
-    expect(nameLiteralShape("'find_slot.r2'")).toBe('find_slot.r#');
-    expect(nameLiteralShape('`confirm_each[${offset + index}]`')).toBe(
-      'confirm_each[#]',
-    );
-    expect(nameLiteralShape('`await_details.r${round}.resend.${sent}`')).toBe(
-      'await_details.r#.resend.#',
-    );
-  });
-
-  it('tells a register apart from a round', () => {
-    // Both open `.r`, and reading one as the other
-    // would make a wait's rows compare equal to a
-    // loop's.
-    expect(nameLiteralShape("'await_details.register'")).toBe(
-      'await_details.register',
-    );
-    expect(nameLiteralShape("'await_details.clear'")).toBe(
-      'await_details.clear',
-    );
-    expect(nameLiteralShape("'manager_ok.ask'")).toBe('manager_ok.ask');
-  });
-
-  it('leaves a row the SDK named as it is', () => {
-    expect(nameLiteralShape('DBOS.recv')).toBe('DBOS.recv');
-    expect(nameLiteralShape('DBOS.sleep')).toBe('DBOS.sleep');
-  });
-
-  it('hands back what it cannot read, unchanged', () => {
-    // Which fails the comparison it exists for
-    // rather than passing quietly as something it
-    // is not.
-    expect(nameLiteralShape("'find_slot.middle'")).toBe("'find_slot.middle'");
   });
 });

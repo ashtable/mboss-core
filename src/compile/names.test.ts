@@ -5,8 +5,12 @@ import {
   LocalNames,
   SDK_OPERATIONS,
   camelCase,
+  nameLiteralShape,
+  nameShape,
   ownerOf,
   stepNameLiteral,
+  type RecordedSegment,
+  type StepSegment,
 } from './names.js';
 
 describe('camelCase', () => {
@@ -158,6 +162,75 @@ describe('stepNameLiteral', () => {
         { kind: 'resend', counter: 'awaitFormResends' },
       ]),
     ).toBe('`await_form.r${round}.resend.${awaitFormResends}`');
+  });
+});
+
+/**
+ * One `StepSegment` per region, written out rather
+ * than derived, so a seventh kind fails to compile
+ * here until somebody says what it looks like.
+ *
+ * That is what makes the round trip below binding:
+ * a region the emitter starts rendering but the
+ * literal parse cannot read would otherwise land
+ * rows on the wrong block with nothing going red.
+ */
+const EVERY_REGION: Record<RecordedSegment['kind'], StepSegment> = {
+  round: { kind: 'round', name: 'round' },
+  item: { kind: 'item' },
+  register: { kind: 'register' },
+  clear: { kind: 'clear' },
+  ask: { kind: 'ask' },
+  resend: { kind: 'resend', counter: 'sent' },
+};
+
+describe('nameLiteralShape', () => {
+  it('reads back every region the emitter renders', () => {
+    for (const segment of Object.values(EVERY_REGION)) {
+      const literal = stepNameLiteral('find_slot', [segment]);
+
+      expect(nameLiteralShape(literal)).toBe(nameShape('find_slot', [segment]));
+    }
+  });
+
+  it('reduces the parts that vary to the region they name', () => {
+    // A round is a round whether the name spells
+    // it with a hole or with a number, and both
+    // have to read as the same thing as what a
+    // document says it can record.
+    expect(nameLiteralShape('`find_slot.r${round}`')).toBe('find_slot.r#');
+    expect(nameLiteralShape("'find_slot.r2'")).toBe('find_slot.r#');
+    expect(nameLiteralShape('`confirm_each[${offset + index}]`')).toBe(
+      'confirm_each[#]',
+    );
+    expect(nameLiteralShape('`await_details.r${round}.resend.${sent}`')).toBe(
+      'await_details.r#.resend.#',
+    );
+  });
+
+  it('tells a register apart from a round', () => {
+    // Both open `.r`, and reading one as the other
+    // would make a wait's rows compare equal to a
+    // loop's.
+    expect(nameLiteralShape("'await_details.register'")).toBe(
+      'await_details.register',
+    );
+    expect(nameLiteralShape("'await_details.clear'")).toBe(
+      'await_details.clear',
+    );
+    expect(nameLiteralShape("'manager_ok.ask'")).toBe('manager_ok.ask');
+  });
+
+  it('leaves a row the SDK named as it is', () => {
+    expect(nameLiteralShape('DBOS.recv')).toBe('DBOS.recv');
+    expect(nameLiteralShape('DBOS.sleep')).toBe('DBOS.sleep');
+  });
+
+  it('hands back what it cannot read, unchanged', () => {
+    // Which fails the comparison it exists for
+    // rather than passing quietly as something it
+    // is not.
+    expect(nameLiteralShape("'find_slot.middle'")).toBe("'find_slot.middle'");
   });
 });
 

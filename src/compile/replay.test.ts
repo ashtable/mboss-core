@@ -12,7 +12,8 @@ import {
 } from '../test-support/goldens.js';
 import { makeIR, type NodeSpec } from '../test-support/ir.js';
 
-import { nameLiteralShape, recordedNameLiterals } from './audit.js';
+import { recordedNameLiterals } from './audit.js';
+import { nameLiteralShape } from './names.js';
 import {
   matchTrace,
   replayBoundaries,
