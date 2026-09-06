@@ -96,9 +96,10 @@ export type PlanItem =
    * What the person who answered is told happens
    * next starts where the two arms meet again
    * rather than at the block after this one — the
-   * arm they did not take is not that — and
-   * `downstream` on the plan says so for every
-   * block, this one included.
+   * arm they did not take is not that — or, where
+   * the arms never meet, at the approved arm's own
+   * work. `downstream` on the plan says so for
+   * every block, this one included.
    */
   | { kind: 'approval'; node: WorkflowNode; arms: readonly PlanArm[] }
   | {
@@ -308,6 +309,12 @@ class Planner {
    * no disagreement can reach it — which is the
    * ordinary shape of arms meeting again at a block
    * that only tidies up.
+   *
+   * The sentence carries the way out of it as well
+   * as the problem. The Problems panel and the
+   * tools an agent calls both show this message and
+   * nothing beside it, so a remedy written anywhere
+   * else reaches one of them and not the other.
    */
   #checkWaysInAgree(node: WorkflowNode, dominating: string): void {
     const sources = new Set<string>();
@@ -330,7 +337,9 @@ class Planner {
     throw new UnsupportedIR(
       `\`${node.id}\` reads what \`${first}\` produced on one way into ` +
         `it and what \`${second}\` produced on another. This compiler ` +
-        `gives a block one value, so it cannot follow both.`,
+        `gives a block one value, so it cannot follow both. Give the arm ` +
+        `its own copy of the shared blocks, wired to the same handlers, ` +
+        `and each copy reads the one value that reaches it.`,
       node.id,
     );
   }
@@ -355,12 +364,36 @@ class Planner {
       titles.set(
         id,
         node.kind === 'approval'
-          ? this.#titlesFrom(joinOf(this.#graph, id), true)
+          ? this.#titlesFrom(this.#afterApproval(id), true)
           : this.#titlesFrom(id, false),
       );
     }
 
     return titles;
+  }
+
+  /**
+   * Where an approval's list of what is still to
+   * come starts.
+   *
+   * Where the arms meet again, so the list holds
+   * only work that either answer leads to. Arms
+   * that never meet have no such block, and the
+   * approved arm's own first block is the answer
+   * there: somebody approving something is being
+   * told what approving it sets off, and an empty
+   * list tells them nothing at all.
+   */
+  #afterApproval(id: string): string | undefined {
+    const join = joinOf(this.#graph, id);
+    if (join !== undefined) return join;
+
+    return (this.#graph.outgoing.get(id) ?? []).find(
+      (edge) =>
+        edge.from.port === 'approved' &&
+        !edge.back &&
+        this.#graph.nodes.has(edge.to.node),
+    )?.to.node;
   }
 
   /**

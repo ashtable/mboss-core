@@ -74,7 +74,7 @@ async function refundApprovalFn(evt: RefundRequest): Promise<void> {
             nodeId: 'request_approval',
             expiresInSeconds: 604800,
           },
-          downstream: [],
+          downstream: ['Refund payment', 'Update order', 'Email customer'],
         }),
       {
         name: 'request_approval.ask',
@@ -246,7 +246,7 @@ export const waits: Record<string, WaitDescriptor> = {
     title: 'Request approval',
     page: 'approval',
     fields: [],
-    downstream: [],
+    downstream: ['Refund payment', 'Update order', 'Email customer'],
   },
 };
 
