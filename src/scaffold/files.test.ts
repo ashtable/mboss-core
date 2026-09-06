@@ -292,6 +292,34 @@ describe('the settings a project shares with mBoss', () => {
   });
 });
 
+describe('the conventions a handler author reads', () => {
+  /**
+   * The one rule about two arms that end at the
+   * same blocks, as the sentence both copies of
+   * this document have to carry: the one a project
+   * is created with, and the one the mBoss skill
+   * ships for an agent to read.
+   */
+  const SHARED_BLOCKS =
+    'Two arms may share the blocks below them only when no block on ' +
+    'either arm binds a value between the fork and the first block they ' +
+    'both reach, and no arm rejoins later than that block.';
+
+  it('states the rule about shared blocks word for word', () => {
+    // Whitespace is collapsed before the
+    // comparison. The file is hand-wrapped to the
+    // width every emitted file is held to, so the
+    // sentence is not contiguous bytes in it, and
+    // the skill's copy is wrapped differently
+    // again. The words are what the two have to
+    // agree on, and a rewording on either side
+    // should turn the other red.
+    const written = contentsOf('.mboss/conventions.md').replace(/\s+/g, ' ');
+
+    expect(written).toContain(SHARED_BLOCKS);
+  });
+});
+
 describe('the example test the project ships', () => {
   it('is somewhere the emitted vitest config looks', () => {
     // `vitest run` with no test files at all exits
