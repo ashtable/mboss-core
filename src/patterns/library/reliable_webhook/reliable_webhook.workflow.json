@@ -1,0 +1,32 @@
+{
+  "$schema": "https://mboss.dev/schemas/workflow-v1.json",
+  "version": 1,
+  "revision": 1,
+  "name": "reliable_webhook",
+  "title": "Reliable webhook",
+  "nodes": [
+    { "id": "delivery_received", "kind": "trigger",
+      "title": "Delivery received",
+      "config": { "mode": "event", "topic": "webhook.received",
+        "idempotencyKeyPath": "deliveryId" },
+      "out": "WebhookDelivery" },
+    { "id": "verify", "kind": "step", "title": "Verify signature",
+      "handler": { "export": "verifySignature" },
+      "in": "WebhookDelivery", "out": "VerifiedDelivery", "config": {} },
+    { "id": "apply_event", "kind": "transaction", "title": "Apply event",
+      "handler": { "export": "applyEvent" },
+      "in": "VerifiedDelivery", "out": "AppliedEvent", "config": {} },
+    { "id": "acknowledge", "kind": "apiCall", "title": "Acknowledge",
+      "handler": { "export": "acknowledgeDelivery" },
+      "in": "AppliedEvent", "out": "Acknowledgement",
+      "config": { "service": "event source" } }
+  ],
+  "edges": [
+    { "id": "e1", "from": { "node": "delivery_received", "port": "out" },
+      "to": { "node": "verify" }, "type": "WebhookDelivery" },
+    { "id": "e2", "from": { "node": "verify", "port": "out" },
+      "to": { "node": "apply_event" }, "type": "VerifiedDelivery" },
+    { "id": "e3", "from": { "node": "apply_event", "port": "out" },
+      "to": { "node": "acknowledge" }, "type": "AppliedEvent" }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "summary": "Build, approve, deploy, watch the rollout, roll back on bad health.",
+  "group": "devops",
+  "tags": ["releases", "approvals", "rollback", "health"],
+  "glyphs": ["trigger", "step", "approval", "durableWait"]
+}

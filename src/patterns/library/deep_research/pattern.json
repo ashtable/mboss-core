@@ -1,0 +1,6 @@
+{
+  "summary": "Search, judge the evidence, loop until it's enough, write the report.",
+  "group": "ai",
+  "tags": ["research", "agents", "loops", "reports"],
+  "glyphs": ["trigger", "step", "branch", "codeStep"]
+}

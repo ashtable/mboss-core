@@ -1,0 +1,6 @@
+{
+  "summary": "Agent output held durably until a person signs off.",
+  "group": "ai",
+  "tags": ["agents", "review", "approvals", "email"],
+  "glyphs": ["trigger", "step", "approval", "emailSend"]
+}

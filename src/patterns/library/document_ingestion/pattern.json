@@ -1,0 +1,6 @@
+{
+  "summary": "Parse an upload, fan out embedding work per page, finalize once.",
+  "group": "ai",
+  "tags": ["rag", "embeddings", "uploads", "fan-out"],
+  "glyphs": ["trigger", "codeStep", "step", "transaction"]
+}

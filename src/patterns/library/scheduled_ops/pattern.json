@@ -1,0 +1,6 @@
+{
+  "summary": "Cron-style durable jobs over your own functions.",
+  "group": "devops",
+  "tags": ["cron", "batch", "sweeps", "fan-out"],
+  "glyphs": ["trigger", "step", "transaction", "emailSend"]
+}

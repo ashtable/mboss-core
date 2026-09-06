@@ -1,0 +1,6 @@
+{
+  "summary": "Ingest a Stripe or GitHub event once; apply it transactionally.",
+  "group": "backend",
+  "tags": ["webhooks", "idempotency", "stripe", "github"],
+  "glyphs": ["trigger", "step", "transaction", "apiCall"]
+}

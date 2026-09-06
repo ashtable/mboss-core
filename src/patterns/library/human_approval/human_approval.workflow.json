@@ -1,0 +1,35 @@
+{
+  "$schema": "https://mboss.dev/schemas/workflow-v1.json",
+  "version": 1,
+  "revision": 1,
+  "name": "human_approval",
+  "title": "Human approval",
+  "nodes": [
+    { "id": "question_asked", "kind": "trigger", "title": "Question asked",
+      "config": { "mode": "event", "topic": "question.asked",
+        "idempotencyKeyPath": "requestId",
+        "requesterEmailPath": "asker.email" },
+      "out": "QuestionAsked" },
+    { "id": "draft_answer", "kind": "step", "title": "Draft answer",
+      "handler": { "export": "draftAnswer" },
+      "in": "QuestionAsked", "out": "AnswerDraft", "config": {} },
+    { "id": "sign_off", "kind": "approval", "title": "Sign off",
+      "config": { "to": "reviews@example.com",
+        "subject": "Ready to send this answer?",
+        "message": "An answer is waiting to go out. Open the link to send it or hold it back.",
+        "timeoutDays": 3 } },
+    { "id": "send_answer", "kind": "emailSend", "title": "Send answer",
+      "config": { "to": "requestingUser",
+        "subject": "Your answer",
+        "bodyMarkdown": "Your question has been answered, and a person read the answer over before this went out.",
+        "attach": { "type": "none" } } }
+  ],
+  "edges": [
+    { "id": "e1", "from": { "node": "question_asked", "port": "out" },
+      "to": { "node": "draft_answer" }, "type": "QuestionAsked" },
+    { "id": "e2", "from": { "node": "draft_answer", "port": "out" },
+      "to": { "node": "sign_off" }, "type": "AnswerDraft" },
+    { "id": "e3", "from": { "node": "sign_off", "port": "approved" },
+      "to": { "node": "send_answer" } }
+  ]
+}

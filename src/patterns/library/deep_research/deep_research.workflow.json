@@ -1,0 +1,38 @@
+{
+  "$schema": "https://mboss.dev/schemas/workflow-v1.json",
+  "version": 1,
+  "revision": 1,
+  "name": "deep_research",
+  "title": "Deep research",
+  "nodes": [
+    { "id": "research_requested", "kind": "trigger",
+      "title": "Research requested",
+      "config": { "mode": "manual" },
+      "out": "ResearchBrief" },
+    { "id": "search", "kind": "step", "title": "Search sources",
+      "handler": { "export": "searchSources" },
+      "in": "ResearchBrief", "out": "Evidence", "config": {} },
+    { "id": "enough", "kind": "branch", "title": "Enough to write with?",
+      "in": "Evidence", "handler": { "export": "enoughEvidence" },
+      "config": { "cases": [
+        { "port": "keep_looking",
+          "when": { "path": "", "op": "eq", "value": false },
+          "maxIterations": 6, "onExhausted": "continue" },
+        { "port": "write_it",
+          "when": { "path": "", "op": "eq", "value": true } } ],
+        "elsePort": "else" } },
+    { "id": "write_report", "kind": "codeStep", "title": "Write report",
+      "handler": { "export": "writeReport" },
+      "in": "Evidence", "out": "ResearchReport", "config": {} }
+  ],
+  "edges": [
+    { "id": "e1", "from": { "node": "research_requested", "port": "out" },
+      "to": { "node": "search" }, "type": "ResearchBrief" },
+    { "id": "e2", "from": { "node": "search", "port": "out" },
+      "to": { "node": "enough" }, "type": "Evidence" },
+    { "id": "e3", "from": { "node": "enough", "port": "keep_looking" },
+      "to": { "node": "search" }, "type": "ResearchBrief", "back": true },
+    { "id": "e4", "from": { "node": "enough", "port": "write_it" },
+      "to": { "node": "write_report" }, "type": "Evidence" }
+  ]
+}
