@@ -12,6 +12,7 @@ import { makeIR, type NodeSpec } from '../test-support/ir.js';
 
 import type { Diagnostic } from './diagnostic.js';
 import { canCompile, hasErrors, validateWorkflow } from './index.js';
+import * as rules from './rules.js';
 import {
   RULES,
   v01TriggerShape,
@@ -30,6 +31,7 @@ import {
   v14DecisionBranches,
   v15GuardedProducers,
   v16TransactionExternalCalls,
+  type Rule,
   type RuleContext,
 } from './rules.js';
 
@@ -1061,11 +1063,71 @@ describe('V13 handler signatures', () => {
     // cache that may not have recorded which
     // parameters a call may leave out, and would
     // put an error on a handler that compiles.
+    //
+    // The declarations agree, so the arity is the
+    // only thing wrong: this has to be a node whose
+    // types match, or it would pass for the wrong
+    // reason.
+    const ir = makeIR({
+      nodes: [
+        { id: 'pair_up', in: 'BookingReq', handler: { export: 'pairUp' } },
+      ],
+    });
+
+    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);
+  });
+
+  it('reports a wrong type on a handler that also takes too many', () => {
+    // The arity stays unreported, for the reason
+    // above. What must not happen is the silence
+    // spreading: the types here disagree, that
+    // disagreement is this rule's to report, and it
+    // does not depend on anything a cache may have
+    // left out.
     const ir = makeIR({
       nodes: [{ id: 'pair_up', in: 'SlotGrid', handler: { export: 'pairUp' } }],
     });
 
-    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([]);
+    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([
+      {
+        code: 'V13',
+        severity: 'error',
+        nodeId: 'pair_up',
+        message:
+          '`pair_up` takes `SlotGrid`, but its code-behind `pairUp` takes ' +
+          '`BookingReq`. The generated code would hand it the wrong value.',
+      },
+    ]);
+  });
+
+  it('reports a wrong return type the arity used to hide', () => {
+    // The defect this rule's shape allowed: an
+    // out that disagrees, on a handler taking two
+    // values, was reported by nobody at all —
+    // `validateWorkflow` came back empty and the
+    // document compiled.
+    const ir = makeIR({
+      nodes: [
+        {
+          id: 'pair_up',
+          in: 'BookingReq',
+          out: 'SlotGrid',
+          handler: { export: 'pairUp' },
+        },
+      ],
+    });
+
+    expect(check(v13HandlerSignatures, ir, manifest)).toEqual([
+      {
+        code: 'V13',
+        severity: 'error',
+        nodeId: 'pair_up',
+        message:
+          '`pair_up` produces `SlotGrid`, but its code-behind `pairUp` ' +
+          'returns `Booking`. The generated code would pass on the wrong ' +
+          'value.',
+      },
+    ]);
   });
 
   it('says nothing when the handler’s type is not a plain name', () => {
@@ -1476,5 +1538,38 @@ describe('the rule list', () => {
       v14DecisionBranches,
       v16TransactionExternalCalls,
     ]);
+  });
+
+  it('runs every rule this module exports', () => {
+    // Every rule above is checked by calling it
+    // directly, which says what the rule does and
+    // nothing about whether anybody runs it. The
+    // list is what `validateWorkflow` walks, and a
+    // rule left off it goes quiet with the whole
+    // suite still passing — a document that used to
+    // be refused becomes one that validates clean,
+    // and no test anywhere fails.
+    //
+    // Found by name, so a rule that does not follow
+    // the convention is a rule this misses. That is
+    // the trade for not having to name all sixteen
+    // here as well, and the convention is the one
+    // thing every rule in the file already keeps.
+    const exported = Object.entries(rules)
+      .filter(
+        ([name, value]) => /^v\d+/.test(name) && typeof value === 'function',
+      )
+      .map(([name, value]) => [name, value as Rule] as const);
+
+    // Non-vacuous: the filter really did find them.
+    expect(exported.length).toBeGreaterThan(10);
+
+    for (const [name, rule] of exported) {
+      expect(RULES.includes(rule), `${name} is not in RULES`).toBe(true);
+    }
+
+    // And nothing is in the list twice, which would
+    // report the same finding two ways.
+    expect(RULES).toHaveLength(exported.length);
   });
 });

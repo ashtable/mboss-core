@@ -81,7 +81,7 @@ export {
   DiagnosticSeveritySchema,
   DiagnosticSchema,
 } from './diagnostic.js';
-export { handlerFit, decisionValues } from './handler-fit.js';
+export { handlerFit, decisionValues, consumesValue } from './handler-fit.js';
 
 export type {
   Diagnostic,

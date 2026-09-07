@@ -1,0 +1,33 @@
+{
+  "$schema": "https://mboss.dev/schemas/workflow-v1.json",
+  "version": 1,
+  "revision": 1,
+  "name": "document_ingestion",
+  "title": "Document ingestion",
+  "nodes": [
+    { "id": "document_uploaded", "kind": "trigger",
+      "title": "Document uploaded",
+      "config": { "mode": "event", "topic": "document.uploaded",
+        "idempotencyKeyPath": "uploadId" },
+      "out": "UploadEvent" },
+    { "id": "parse_pages", "kind": "codeStep", "title": "Parse pages",
+      "handler": { "export": "parsePages" },
+      "in": "UploadEvent", "out": "ParsedDocument", "config": {} },
+    { "id": "embed_page", "kind": "step", "title": "Embed page",
+      "handler": { "export": "embedPage" },
+      "in": "ParsedDocument", "out": "EmbeddedPage",
+      "forEach": { "itemsPath": "pages", "concurrency": 4 },
+      "config": {} },
+    { "id": "finalize", "kind": "transaction", "title": "Finalize ingestion",
+      "handler": { "export": "finalizeIngestion" },
+      "out": "IngestionSummary", "config": {} }
+  ],
+  "edges": [
+    { "id": "e1", "from": { "node": "document_uploaded", "port": "out" },
+      "to": { "node": "parse_pages" }, "type": "UploadEvent" },
+    { "id": "e2", "from": { "node": "parse_pages", "port": "out" },
+      "to": { "node": "embed_page" }, "type": "ParsedDocument" },
+    { "id": "e3", "from": { "node": "embed_page", "port": "out" },
+      "to": { "node": "finalize" }, "type": "EmbeddedPage" }
+  ]
+}

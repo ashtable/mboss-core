@@ -16,19 +16,28 @@ import type { LibManifest, NonSerializableReason } from '../manifest/index.js';
 import { diagnostic, warning, type Diagnostic } from './diagnostic.js';
 import {
   decisionValues,
+  declaredTypeMisfit,
   handlerFit,
   HANDLER_KINDS,
+  type DeclaredTypeMisfit,
   type HandlerMisfit,
 } from './handler-fit.js';
 
 /**
- * The fifteen rules, one function each.
+ * The rules, one function each.
  *
  * They are separate functions rather than one pass
  * because they are read one at a time: a person
  * looking at a `V05` on their canvas should be
  * able to open one function and see the whole of
  * what that code means.
+ *
+ * `RULES` at the foot of the file is the list
+ * `validateWorkflow` walks, and being written here
+ * is not the same as being on it. A test holds the
+ * two together, because a rule left off the list
+ * goes quiet with every test of the rule itself
+ * still passing.
  */
 
 /**
@@ -800,6 +809,18 @@ export function v12SerializableTypes(ctx: RuleContext): Diagnostic[] {
  * parameters a call can leave out, would put an
  * error on a handler that compiles.
  *
+ * So it asks `declaredTypeMisfit` and not
+ * `handlerFit`, which answers with the first thing
+ * wrong. Those are the same answer right up until
+ * a block is wrong in two ways at once, and then
+ * they are not: a handler taking two values and
+ * returning the wrong type came back refused for
+ * the arity — the one reason this rule will not
+ * report — and the wrong return type went
+ * unmentioned by anybody. What a cache may have
+ * left out is `optional`, and neither type
+ * comparison reads it.
+ *
  * It stays quiet wherever it cannot know: with no
  * scan, with no handler, and with a handler the
  * scan never saw, which is V07's to report.
@@ -819,31 +840,34 @@ export function v13HandlerSignatures(ctx: RuleContext): Diagnostic[] {
     );
     if (fn === undefined) continue;
 
-    const fit = handlerFit(node, fn);
-    if (fit.fits) continue;
+    // The declared types on their own, not the
+    // first thing wrong with the pairing. They are
+    // the only misfits this rule reports, and
+    // asking the wider question meant a reason it
+    // stays quiet about could hide one it does not:
+    // a handler taking two values and returning the
+    // wrong type was refused for the arity, and the
+    // wrong type went unmentioned by anybody.
+    const misfit = declaredTypeMisfit(node, fn);
+    if (misfit === undefined) continue;
 
-    const message = mismatchMessage(node.id, fn.export, fit.reason);
-
-    if (message !== undefined) {
-      found.push(diagnostic('V13', message, { nodeId: node.id }));
-    }
+    found.push(
+      diagnostic('V13', mismatchMessage(node.id, fn.export, misfit), {
+        nodeId: node.id,
+      }),
+    );
   }
 
   return found;
 }
 
-/**
- * What to tell an author about a misfit, or
- * `undefined` for the four this rule leaves to
- * somebody else: the three the doc above explains,
- * and a handler that reaches another system, which
- * is V16's to report.
- */
+/** What to tell an author about a type the block
+ *  and its code-behind do not agree on. */
 function mismatchMessage(
   nodeId: string,
   handler: string,
-  reason: HandlerMisfit,
-): string | undefined {
+  reason: DeclaredTypeMisfit,
+): string {
   switch (reason.kind) {
     case 'input-mismatch':
       return (
@@ -858,9 +882,6 @@ function mismatchMessage(
         `\`${handler}\` returns \`${reason.returns}\`. The generated code ` +
         `would pass on the wrong value.`
       );
-
-    default:
-      return undefined;
   }
 }
 
@@ -1015,12 +1036,6 @@ function shown(value: unknown): string {
 }
 
 /**
- * Every rule, in code order. The order is the
- * order findings come back in, so a document with
- * several problems reports them the same way every
- * time.
- */
-/**
  * Whoever reads a guarded block's value across
  * something in between is skipped under the same
  * condition.
@@ -1160,6 +1175,23 @@ function externalCallMessage(
   );
 }
 
+/**
+ * Every rule, in the order findings come back in,
+ * so a document with several problems reports them
+ * the same way every time.
+ *
+ * Not code order: `v15GuardedProducers` runs
+ * eleventh, so the four rules that read what the
+ * scan recorded stay together at the end — those
+ * are the ones that say nothing at all without a
+ * manifest, and a document checked without one
+ * should lose findings off the bottom of the list
+ * rather than out of the middle.
+ *
+ * A rule written and not added here is a rule that
+ * never runs. `rules.test.ts` holds the two
+ * together, because nothing else would notice.
+ */
 export const RULES: readonly Rule[] = [
   v01TriggerShape,
   v02Structure,

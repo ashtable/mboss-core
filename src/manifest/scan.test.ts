@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -92,6 +98,24 @@ describe('scanLib', () => {
 
   it('records where each handler lives, project-relative and posix', () => {
     expect(exported('findSlot').file).toBe('lib/findSlot.ts');
+  });
+
+  it('records the line each handler is declared on', () => {
+    // Compared against the fixture as it reads
+    // today rather than a number written here,
+    // which would rot the moment anyone edits a
+    // fixture. A handler with a JSDoc block above
+    // it points at the signature, not at the
+    // comment, because that is the line worth
+    // landing a cursor on.
+    for (const fn of manifest.functions) {
+      expect(fn.line).toBeGreaterThan(0);
+
+      const source = readFileSync(join(fixturesRoot, fn.file), 'utf8');
+      const declared = source.split('\n')[(fn.line ?? 0) - 1];
+
+      expect(declared).toContain(`function ${fn.export}(`);
+    }
   });
 
   it('records each parameter by name and written type', () => {

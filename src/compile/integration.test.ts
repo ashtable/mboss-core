@@ -1,5 +1,5 @@
-import { readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { join, relative, resolve, sep } from 'node:path';
+import { readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -15,6 +15,7 @@ import { copyFixtureLib, readFixtureJson } from '../test-support/fixtures.js';
 import { eslintProblems, prettierProblems } from '../test-support/lint.js';
 import { relativeSpecifiersEndInJs } from '../test-support/specifiers.js';
 import { citationProblems, widthProblems } from '../test-support/style.js';
+import { repoSnapshot, treeOf } from '../test-support/tree.js';
 import {
   makeTypecheckProject,
   removeTypecheckProject,
@@ -79,58 +80,6 @@ const WORKFLOWS = [
  */
 function specOf(name: string): ParsedWorkflowSpec {
   return WorkflowSpecSchema.parse(readFixtureJson(`ir/${name}.workflow.json`));
-}
-
-/**
- * Every file in the project, project-relative and
- * posix, with the directories a project is told to
- * leave alone left out.
- */
-async function treeOf(dir: string, base = dir): Promise<string[]> {
-  const found: string[] = [];
-
-  for (const name of (await readdir(dir)).sort()) {
-    if (SKIP.has(name)) continue;
-
-    const path = join(dir, name);
-    if ((await stat(path)).isDirectory()) {
-      found.push(...(await treeOf(path, base)));
-      continue;
-    }
-    found.push(relative(base, path).split(sep).join('/'));
-  }
-
-  return found;
-}
-
-/**
- * Directories no walk here descends into: two that
- * belong to tooling, and one that every throwaway
- * project in the suite is created inside — so a
- * concurrently running test file is not mistaken
- * for something this one wrote.
- */
-const SKIP = new Set(['node_modules', '.git', '.tmp']);
-
-const REPO = resolve(import.meta.dirname, '../..');
-
-/**
- * The repository as it stands: every path, with
- * its size and the moment it was last written.
- *
- * Content is not read. What is being looked for is
- * a file appearing, disappearing or being written
- * to, and all three show here.
- */
-async function repoSnapshot(): Promise<Record<string, string>> {
-  const found: Record<string, string> = {};
-
-  for (const rel of await treeOf(REPO)) {
-    const info = await stat(join(REPO, rel));
-    found[rel] = `${info.size} ${info.mtimeMs}`;
-  }
-
-  return found;
 }
 
 let REPO_BEFORE: Record<string, string>;

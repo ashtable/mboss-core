@@ -133,3 +133,16 @@ export type FanOut = z.infer<typeof FanOutSchema>;
 export type HandlerRef = z.infer<typeof HandlerRefSchema>;
 export type Position = z.infer<typeof PositionSchema>;
 export type WorkflowEdge = z.infer<typeof EdgeSchema>;
+
+/**
+ * The policy a node that carries no `retry` runs
+ * under.
+ *
+ * Read by the emitter, which has to write a
+ * concrete policy out, and by the editor, which
+ * shows an unconfigured node these numbers rather
+ * than three blanks. Derived from the schema
+ * rather than written out again, so the two cannot
+ * come to say different things.
+ */
+export const DEFAULT_RETRY: Retry = RetrySchema.parse({});

@@ -696,3 +696,165 @@ describe('two workflows that named a wait the same', () => {
     expect(response.body).not.toContain('Confirm your subscription');
   });
 });
+
+/**
+ * A form posted without an answer to something it
+ * had to have.
+ *
+ * The browser asks for these too, and that is a
+ * courtesy to whoever is filling the form in
+ * rather than a check: anything at all can post to
+ * this route, and a submit that skipped the page
+ * used to wake the run with an object missing
+ * properties the compiled message type declares as
+ * present.
+ */
+describe('a form submitted with a required answer missing', () => {
+  it('does not wake the run', async () => {
+    const { app, sent } = harness({});
+    const result = await postForm(
+      app,
+      `/f/${formToken('wf_1', 'await_form')}`,
+      { urgent: 'yes' },
+    );
+
+    expect(result.status).toBe(422);
+    expect(sent).toEqual([]);
+  });
+
+  it('serves the form back, naming what is still blank', async () => {
+    const { app } = harness({});
+    const result = await postForm(
+      app,
+      `/f/${formToken('wf_1', 'await_form')}`,
+      { urgent: 'yes' },
+    );
+
+    expect(result.body).toContain('still blank');
+    expect(result.body).toContain('Your request');
+    expect(result.body).toContain('<form');
+  });
+
+  it('gives back what was already filled in', async () => {
+    const { app } = harness({});
+    const result = await postForm(
+      app,
+      `/f/${formToken('wf_1', 'await_form')}`,
+      { urgent: 'yes' },
+    );
+
+    // The yes stays chosen: a person who missed one
+    // question does not answer the others again.
+    expect(result.body).toMatch(/value="yes"[^>]*checked/);
+    expect(result.body).not.toMatch(/value="no"[^>]*checked/);
+  });
+
+  it('counts a box submitted empty as unanswered', async () => {
+    const { app, sent } = harness({});
+    const result = await postForm(
+      app,
+      `/f/${formToken('wf_1', 'await_form')}`,
+      { request: '', urgent: 'yes' },
+    );
+
+    expect(result.status).toBe(422);
+    expect(sent).toEqual([]);
+  });
+
+  it('leaves the link working, so the form can be finished', async () => {
+    const { app, sent } = harness({});
+    const path = `/f/${formToken('wf_1', 'await_form')}`;
+
+    expect((await postForm(app, path, { urgent: 'yes' })).status).toBe(422);
+
+    const second = await postForm(app, path, {
+      request: 'Notes on Amos',
+      urgent: 'yes',
+    });
+
+    expect(second.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.message).toEqual({
+      // `docs` is a file field nobody had to fill
+      // in, and a multiple one answers with the
+      // empty list either way.
+      docs: [],
+      request: 'Notes on Amos',
+      urgent: true,
+    });
+  });
+
+  it('says nothing about a field that was never asked', async () => {
+    // `details` is required, and only when the
+    // answer above it says so. Not asked, not
+    // demanded — the same rule the page applies
+    // when it clears requiredness on a field it
+    // hides.
+    const conditional: WaitDescriptor = {
+      ...FORM_WAIT,
+      fields: [
+        {
+          id: 'urgent',
+          label: 'Is this urgent?',
+          type: 'yesNo',
+          required: true,
+          multiple: false,
+        },
+        {
+          id: 'details',
+          label: 'What is the rush?',
+          type: 'text',
+          required: true,
+          multiple: false,
+          showIf: { fieldId: 'urgent', op: 'eq', value: true },
+        },
+      ],
+    };
+    const { app, sent } = harness({
+      workflows: [workflow([conditional])],
+    });
+
+    const calm = await postForm(app, `/f/${formToken('wf_1', 'await_form')}`, {
+      urgent: 'no',
+    });
+
+    expect(calm.status).toBe(200);
+    expect(sent[0]?.message).toEqual({ urgent: false });
+  });
+
+  it('demands a conditional field once its condition holds', async () => {
+    const conditional: WaitDescriptor = {
+      ...FORM_WAIT,
+      fields: [
+        {
+          id: 'urgent',
+          label: 'Is this urgent?',
+          type: 'yesNo',
+          required: true,
+          multiple: false,
+        },
+        {
+          id: 'details',
+          label: 'What is the rush?',
+          type: 'text',
+          required: true,
+          multiple: false,
+          showIf: { fieldId: 'urgent', op: 'eq', value: true },
+        },
+      ],
+    };
+    const { app, sent } = harness({
+      workflows: [workflow([conditional])],
+    });
+
+    const rushed = await postForm(
+      app,
+      `/f/${formToken('wf_1', 'await_form')}`,
+      { urgent: 'yes' },
+    );
+
+    expect(rushed.status).toBe(422);
+    expect(rushed.body).toContain('What is the rush?');
+    expect(sent).toEqual([]);
+  });
+});

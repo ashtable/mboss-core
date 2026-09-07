@@ -23,9 +23,38 @@ export {
   determinismProblems,
   headerProblems,
   placementProblems,
+  recordedNameLiterals,
   registrationProblems,
   stepProblems,
   type AuditProblem,
 } from './audit.js';
+export {
+  SDK_OPERATIONS,
+  ownerOf,
+  type Owner,
+  type RecordedSegment,
+} from './names.js';
+export {
+  planWorkflow,
+  type ArmTarget,
+  type EmissionPlan,
+  type GuardGroup,
+  type PlanArm,
+  type PlanItem,
+  type PlanOptions,
+  type PlanRegion,
+  type RegionOutcome,
+  type TriggerNode,
+} from './plan.js';
+export {
+  matchTrace,
+  replayBoundaries,
+  traceGrammar,
+  type RecordedRow,
+  type ReplayBoundary,
+  type TraceGrammar,
+  type TraceMatch,
+  type Unoffered,
+} from './replay.js';
 export { UnsupportedIR } from './unsupported.js';
 export * from './typecheck.js';

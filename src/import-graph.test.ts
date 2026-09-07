@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { basename, join, relative, resolve, sep } from 'node:path';
 
+import { ts } from 'ts-morph';
 import { describe, expect, it } from 'vitest';
 
 import { specifiersOf } from './test-support/specifiers.js';
@@ -250,5 +251,136 @@ describe('the compiler import graph', () => {
     ]) {
       expect(external).not.toContain(name);
     }
+  });
+});
+
+/**
+ * The recorded-name grammar.
+ *
+ * `src/compile/names.ts` both renders the name a
+ * step records and reads one back, and the reading
+ * half is what tells a webview which block a row
+ * in the ledger belongs to. So it is a leaf on
+ * purpose — not even the id schema, whose shape it
+ * restates in a comment rather than imports.
+ */
+describe('the recorded-name import graph', () => {
+  const entry = join(SRC, 'compile', 'names.ts');
+
+  it('imports nothing at all', () => {
+    const { external, visited } = walk(entry, join(SRC, 'compile'));
+
+    // Non-vacuous: the walk really did read the
+    // module, and that one file is all it reached.
+    expect(visited).toEqual([entry]);
+    expect(external).toEqual([]);
+  });
+});
+
+/**
+ * The reads a filesystem call makes, and whether
+ * each one waited to be asked.
+ *
+ * Written out rather than matched by prefix,
+ * because the point is a closed list: a read this
+ * does not know about is one nothing here would
+ * catch.
+ */
+const FILESYSTEM_READS = new Set([
+  'readFile',
+  'readFileSync',
+  'readdir',
+  'readdirSync',
+  'statSync',
+]);
+
+/** One call to one of those, and where it sits. */
+type Read = { where: string; eager: boolean };
+
+/**
+ * Every filesystem read in a file, each marked
+ * with whether it runs at import — that is,
+ * whether nothing but module scope encloses it.
+ */
+function readsIn(file: string): Read[] {
+  const source = ts.createSourceFile(
+    file,
+    readFileSync(file, 'utf8'),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const found: Read[] = [];
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      const name = node.expression.text;
+
+      if (FILESYSTEM_READS.has(name)) {
+        found.push({
+          where: `${basename(file)}: ${name}`,
+          eager: !insideFunction(node),
+        });
+      }
+    }
+
+    ts.forEachChild(node, visit);
+  };
+
+  visit(source);
+
+  return found;
+}
+
+function insideFunction(node: ts.Node): boolean {
+  for (let up = node.parent; up !== undefined; up = up.parent) {
+    if (ts.isFunctionLike(up)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * The pattern library's graph.
+ *
+ * `src/patterns/` ships a directory of documents
+ * and handler sources beside itself and reads them
+ * off disk. Reading them at import would put the
+ * whole gallery into the cost of loading the
+ * module — which the MCP server does to answer any
+ * tool call at all, and the gallery is asked for
+ * by almost none of them. So every read waits to
+ * be called, and this checks it by parsing rather
+ * than by reading the code.
+ */
+describe('the pattern library import graph', () => {
+  const dir = join(SRC, 'patterns');
+  const entry = join(dir, 'index.ts');
+
+  it('reads the library only when it is asked to', () => {
+    const own = walk(entry, dir).visited.filter((file) =>
+      file.startsWith(dir + sep),
+    );
+    const reads = own.flatMap(readsIn);
+
+    // Non-vacuous: the module really does read the
+    // filesystem, so an empty second list means
+    // lazy rather than misspelled.
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.filter((read) => read.eager)).toEqual([]);
+  });
+
+  it('never imports the handlers it copies', () => {
+    // They are a project's code, not this one's.
+    // An import would bind this module to whatever
+    // a pattern's handlers happen to import, and
+    // would carry them into every bundle that
+    // takes the barrel.
+    const { visited } = walk(entry, dir);
+    const library = visited
+      .filter((file) => file.startsWith(join(dir, 'library') + sep))
+      .map((file) => relative(SRC, file));
+
+    expect(visited.length).toBeGreaterThan(1);
+    expect(library).toEqual([]);
   });
 });

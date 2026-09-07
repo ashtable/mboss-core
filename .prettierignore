@@ -12,6 +12,16 @@ src/scaffold/app/**/__snapshots__
 # deliberate type error.
 fixtures
 
+# The pattern library's documents. The hero's is
+# the copy the compiler was actually run over,
+# compared byte for byte against the drawing it
+# came from, so reformatting it would rewrite the
+# artifact under test. The other seven were
+# written here and are excluded beside it, so one
+# gallery is not formatted two ways. The handlers
+# beside them are ordinary source and are checked.
+src/patterns/library/**/*.workflow.json
+
 # Vendored skill content, kept byte-identical to its
 # source so re-syncing it never shows a reformatting
 # diff.

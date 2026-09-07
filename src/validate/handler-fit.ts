@@ -57,6 +57,16 @@ export type HandlerFit =
   { fits: true } | { fits: false; reason: HandlerMisfit };
 
 /**
+ * The two misfits that are about a type somebody
+ * wrote down, rather than about the shape of the
+ * function or where it is being put.
+ */
+export type DeclaredTypeMisfit = Extract<
+  HandlerMisfit,
+  { kind: 'input-mismatch' } | { kind: 'output-mismatch' }
+>;
+
+/**
  * The kinds that run code of the author's.
  *
  * The other five start a run, repeat, wait, ask a
@@ -71,6 +81,36 @@ export const HANDLER_KINDS: ReadonlySet<NodeKind> = new Set<NodeKind>([
   'codeStep',
   'branch',
 ]);
+
+/**
+ * Whether the call to a block's handler hands it a
+ * value.
+ *
+ * The emitter asks this to choose between
+ * `handler()` and `handler(input)`. The check that
+ * every way into a block carries the same value has
+ * to ask it too: a block whose handler is handed
+ * nothing cannot disagree with itself about what it
+ * reads, and a block whose handler is handed
+ * something reads a value whatever the document
+ * says about its own input.
+ *
+ * Counted over every parameter rather than the
+ * required ones — the opposite of the count in
+ * `misfitOf` below, and deliberately so. That one
+ * asks how many values a call cannot leave out;
+ * this one asks whether the call hands over
+ * anything at all. A handler declaring one optional
+ * parameter is offered the value.
+ *
+ * `undefined` is a function the scan never found,
+ * and reads as taking nothing: a block whose
+ * handler is missing is refused on its own terms
+ * before any value matters.
+ */
+export function consumesValue(fn: LibFunction | undefined): boolean {
+  return (fn?.params.length ?? 0) > 0;
+}
 
 export function handlerFit(node: WorkflowNode, fn: LibFunction): HandlerFit {
   const reason = misfitOf(node, fn);
@@ -134,6 +174,39 @@ function misfitOf(
   if (node.kind === 'branch' && decisionValues(fn) === undefined) {
     return { kind: 'not-a-decision', returns: fn.returnType };
   }
+
+  return declaredTypeMisfit(node, fn);
+}
+
+/**
+ * Where a block and the function behind it
+ * disagree about a type one of them has written
+ * down, or `undefined` where they do not.
+ *
+ * The tail of `misfitOf`, named because validation
+ * needs this half on its own. `handlerFit` answers
+ * with the first thing wrong, which is the right
+ * answer for a picker greying one row — but two of
+ * the things that come first are ones V13 does not
+ * report, and an unreported reason used to hide a
+ * reported one: a handler taking two values and
+ * returning the wrong type was refused for the
+ * arity, so the wrong type went unmentioned by
+ * anybody.
+ *
+ * Kept here rather than copied into the rule.
+ * There is one comparison and two questions asked
+ * of it, which is the arrangement `handlerFit`
+ * itself exists to keep.
+ */
+export function declaredTypeMisfit(
+  node: WorkflowNode,
+  fn: LibFunction,
+): DeclaredTypeMisfit | undefined {
+  // A declared type is a promise about code that
+  // runs. On a kind that runs none there is
+  // nothing to hold to it.
+  if (!HANDLER_KINDS.has(node.kind)) return undefined;
 
   // A node that fans out takes the collection while
   // its handler takes one item of it, so the two

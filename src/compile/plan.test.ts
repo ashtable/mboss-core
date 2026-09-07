@@ -204,6 +204,56 @@ describe('a form the run waits on', () => {
   });
 });
 
+/**
+ * What the page somebody answers an approval on
+ * lists as still to come.
+ *
+ * It starts where the two ways out meet again,
+ * because the arm that was not taken is not what
+ * happens next. Where they never meet there is no
+ * such block — and the answer is then the approved
+ * arm itself, which is what approving the thing
+ * sets off.
+ */
+describe('what an approval says happens next', () => {
+  it('reads the approved arm where the two arms never meet', () => {
+    const plan = planWorkflow(
+      makeIR({
+        name: 'no_join',
+        nodes: [
+          TRIGGER,
+          FIND_SLOT,
+          {
+            id: 'sign_off',
+            kind: 'approval',
+            title: 'Sign it off',
+            config: {
+              to: 'manager@example.com',
+              subject: 'Approve this booking?',
+              timeoutDays: 3,
+            },
+          },
+          { id: 'book_now', kind: 'step', title: 'Book it now' },
+          { id: 'send_note', kind: 'step', title: 'Send the note' },
+          { id: 'say_sorry', kind: 'step', title: 'Say sorry' },
+        ],
+        edges: [
+          { from: 'review_started', to: 'find_slot', type: 'BookingReq' },
+          { from: 'find_slot', to: 'sign_off', type: 'SlotGrid' },
+          { from: 'sign_off', port: 'approved', to: 'book_now' },
+          { from: 'sign_off', port: 'rejected', to: 'say_sorry' },
+          { from: 'book_now', to: 'send_note' },
+        ],
+      }),
+    );
+
+    expect(plan.downstream.get('sign_off')).toEqual([
+      'Book it now',
+      'Send the note',
+    ]);
+  });
+});
+
 describe('what control flow this compiler will not follow', () => {
   it('refuses a loop with two ways out', () => {
     // The alternatives are duplicating the tail —
@@ -448,6 +498,14 @@ describe('what control flow this compiler will not follow', () => {
     expect(result.nodeId).toBe('record_final');
     expect(result.message).toContain('`record_a`');
     expect(result.message).toContain('`record_b`');
+
+    // The Problems panel and the tools an agent
+    // calls both show this sentence and nothing
+    // beside it, so what to do about the drawing
+    // is written into the sentence itself.
+    expect(result.message).toContain(
+      'its own copy of the shared blocks, wired to the same handlers',
+    );
   });
 
   it('refuses a document where a block it can reach is never written', () => {

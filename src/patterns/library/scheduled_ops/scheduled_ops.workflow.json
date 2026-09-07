@@ -1,0 +1,33 @@
+{
+  "$schema": "https://mboss.dev/schemas/workflow-v1.json",
+  "version": 1,
+  "revision": 1,
+  "name": "scheduled_ops",
+  "title": "Scheduled operations",
+  "nodes": [
+    { "id": "every_hour", "kind": "trigger", "title": "Every hour",
+      "config": { "mode": "schedule", "cron": "0 * * * *",
+        "timezone": "UTC" } },
+    { "id": "list_work", "kind": "step", "title": "List what is due",
+      "handler": { "export": "listWork" },
+      "out": "WorkBatch", "config": {} },
+    { "id": "process_each", "kind": "transaction", "title": "Process each job",
+      "handler": { "export": "processItem" },
+      "in": "WorkBatch", "out": "WorkResult",
+      "forEach": { "itemsPath": "items", "concurrency": 4 },
+      "config": {} },
+    { "id": "report", "kind": "emailSend", "title": "Report the sweep",
+      "config": { "to": "ops@example.com",
+        "subject": "The hourly sweep has finished",
+        "bodyMarkdown": "Every job that was due has been processed. Open the run in mBoss to see what it did.",
+        "attach": { "type": "none" } } }
+  ],
+  "edges": [
+    { "id": "e1", "from": { "node": "every_hour", "port": "out" },
+      "to": { "node": "list_work" } },
+    { "id": "e2", "from": { "node": "list_work", "port": "out" },
+      "to": { "node": "process_each" }, "type": "WorkBatch" },
+    { "id": "e3", "from": { "node": "process_each", "port": "out" },
+      "to": { "node": "report" }, "type": "WorkResult" }
+  ]
+}

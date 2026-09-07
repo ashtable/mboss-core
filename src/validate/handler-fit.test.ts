@@ -4,7 +4,7 @@ import { NodeSchema, type WorkflowNode } from '../ir/index.js';
 import type { LibFunction } from '../manifest/types.js';
 import type { NodeSpec } from '../test-support/ir.js';
 
-import { decisionValues, handlerFit } from './handler-fit.js';
+import { consumesValue, decisionValues, handlerFit } from './handler-fit.js';
 
 /**
  * One node, parsed the way a document's nodes are,
@@ -322,6 +322,53 @@ describe('handlerFit', () => {
         takes: 'ChatReply',
       },
     });
+  });
+});
+
+describe('consumesValue', () => {
+  it('hands a value to a handler that declares a parameter', () => {
+    expect(consumesValue(fn({}))).toBe(true);
+  });
+
+  it('hands nothing to a handler that declares none', () => {
+    expect(consumesValue(fn({ params: [] }))).toBe(false);
+  });
+
+  it('hands the value to a handler whose only parameter is optional', () => {
+    // The count here is every parameter, not the
+    // ones a call cannot leave out: the emitter
+    // writes `handler(input)` for this signature,
+    // so the block reads a value.
+    const lenient = fn({
+      params: [{ name: 'req', type: 'BookingReq', optional: true }],
+    });
+
+    expect(consumesValue(lenient)).toBe(true);
+  });
+
+  it('hands nothing to a function the scan never found', () => {
+    expect(consumesValue(undefined)).toBe(false);
+  });
+
+  it('is a different question from whether the function fits', () => {
+    // Two required parameters is a misfit, and the
+    // block still reads a value — the emitter would
+    // hand it one. Keeping the two counts in one
+    // file is what stops either being ‘corrected’
+    // into the other.
+    const greedy = fn({
+      params: [
+        { name: 'req', type: 'BookingReq' },
+        { name: 'opts', type: 'Options' },
+      ],
+    });
+    const work = node({ id: 'find_slot', in: 'BookingReq', out: 'SlotGrid' });
+
+    expect(handlerFit(work, greedy)).toEqual({
+      fits: false,
+      reason: { kind: 'too-many-params', count: 2 },
+    });
+    expect(consumesValue(greedy)).toBe(true);
   });
 });
 

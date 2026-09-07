@@ -126,12 +126,12 @@ describe('loadOrScan', () => {
     // not on the build that wrote it, so a file an
     // older build left behind is served until
     // `lib/` next changes. That is why optionality,
-    // decisions and the calls that reach another
-    // system are all optional in the schema:
-    // rejecting the file would rescan every project
-    // once on upgrade, and every consumer already
-    // reads a missing field as "this build did not
-    // know".
+    // decisions, the declaration line and the calls
+    // that reach another system are all optional in
+    // the schema: rejecting the file would rescan
+    // every project once on upgrade, and every
+    // consumer already reads a missing field as
+    // "this build did not know".
     const { scan, calls } = countingScan();
 
     const fresh = loadOrScan(projectDir, { scan });
@@ -143,7 +143,10 @@ describe('loadOrScan', () => {
     };
     writeFileSync(cachePath, JSON.stringify({ ...fresh, functions: [older] }));
 
-    expect(loadOrScan(projectDir, { scan }).functions).toEqual([older]);
+    const served = loadOrScan(projectDir, { scan }).functions;
+
+    expect(served).toEqual([older]);
+    expect(served[0]?.line).toBeUndefined();
     expect(calls()).toBe(1);
   });
 

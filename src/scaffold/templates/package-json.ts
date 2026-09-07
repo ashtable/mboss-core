@@ -24,8 +24,8 @@
  * a version no project will ever install.
  */
 const DEPENDENCIES = {
-  '@dbos-inc/dbos-sdk': '^4.25.14',
-  '@dbos-inc/prisma-datasource': '^4.25.14',
+  '@dbos-inc/dbos-sdk': '^4.27.6',
+  '@dbos-inc/prisma-datasource': '^4.27.6',
   '@prisma/adapter-pg': '^7.9.1',
   '@prisma/client': '^7.9.1',
   express: '^5.2.1',

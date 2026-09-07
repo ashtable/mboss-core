@@ -282,6 +282,11 @@ function handlerOf(
   return {
     export: name,
     file,
+    // The signature's line and not the JSDoc's,
+    // which is what this reports by default:
+    // opening a handler should land the cursor on
+    // the code, not above the comment.
+    line: declaration.getStartLineNumber(),
     params: declaration.getParameters().map((parameter) => ({
       name: parameter.getName(),
       type:

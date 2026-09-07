@@ -1,15 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
+import { readFixture } from '../test-support/fixtures.js';
+
 import {
   determinismProblems,
   headerProblems,
   placementProblems,
+  recordedNameLiterals,
   registrationProblems,
   stepProblems,
 } from './audit.js';
 
 function why(problems: { why: string }[]): string[] {
   return problems.map((problem) => problem.why);
+}
+
+/** One blessed compiler output, as its source. */
+function golden(name: string): string {
+  return readFixture(`golden/compile/${name}.workflow.ts`);
 }
 
 describe('determinismProblems', () => {
@@ -508,5 +516,108 @@ describe('minting a link', () => {
     ].join('\n');
 
     expect(determinismProblems(source)).toEqual([]);
+  });
+});
+
+describe('recordedNameLiterals', () => {
+  it('lists every row a compiled approval writes, in source order', () => {
+    // The four steps after the decision are on the
+    // list as much as the wait's own rows are:
+    // what this answers is "what would this file
+    // record", and the arms are part of that.
+    expect(recordedNameLiterals(golden('approval_flow'))).toEqual([
+      "'manager_ok.ask'",
+      "'manager_ok.register'",
+      'DBOS.recv',
+      'DBOS.sleep',
+      "'manager_ok.clear'",
+      "'pay_claim'",
+      "'send_receipt'",
+      "'file_refusal'",
+      "'close_claim'",
+    ]);
+  });
+
+  it('leaves out the name the workflow registers under', () => {
+    // The last `name:` in that file is the
+    // registration's, and a registration records
+    // no row. Matching `name:` rather than the
+    // call it sits in would put it on the list.
+    expect(recordedNameLiterals(golden('approval_flow'))).not.toContain(
+      "'approval_flow'",
+    );
+  });
+
+  it('reads a sleep out of a recv that has no sleep of its own', () => {
+    // `recv` reserves two ids and records under
+    // both: its own row and the durable sleep that
+    // times it out. Nothing in the file says so.
+    const source = golden('approval_flow');
+
+    expect(source).not.toContain('DBOS.sleep(');
+    expect(recordedNameLiterals(source)).toContain('DBOS.sleep');
+  });
+
+  it('hands back the source text, holes and all', () => {
+    // A step inside a loop records a different
+    // name every round, and the hole is what says
+    // which region varies. Flattening it would
+    // throw away the only thing that tells a round
+    // apart from a reminder.
+    expect(recordedNameLiterals(golden('form_retry'))).toEqual([
+      '`ask_details.r${round}`',
+      '`await_details.r${round}.register`',
+      'DBOS.recv',
+      'DBOS.sleep',
+      '`await_details.r${round}.resend.${awaitDetailsResends}`',
+      '`await_details.r${round}.clear`',
+      "'record_intake'",
+    ]);
+  });
+
+  it('counts a transaction and a literal sleep', () => {
+    // A transaction records its name the way a
+    // step does, and the timer wait is the one
+    // golden with a `DBOS.sleep(` of its own.
+    expect(recordedNameLiterals(golden('timer_wait'))).toEqual([
+      'DBOS.sleep',
+      "'record_booking'",
+    ]);
+    expect(recordedNameLiterals(golden('transaction'))).toEqual([
+      "'record_booking'",
+    ]);
+  });
+
+  it('reads nothing out of the run id, which is a property', () => {
+    // `DBOS.workflowID` is read in four goldens
+    // and records nothing anywhere. A rule written
+    // on the `DBOS.` prefix rather than on the
+    // call would put a row on the list for each.
+    const source = golden('form_intake');
+
+    expect(source).toContain('DBOS.workflowID');
+    expect(recordedNameLiterals(source)).toEqual([
+      "'ask_details'",
+      "'await_details.register'",
+      'DBOS.recv',
+      'DBOS.sleep',
+      "'await_details.clear'",
+      "'record_intake'",
+    ]);
+  });
+
+  it('reads a result row out of a started run, which no golden has', () => {
+    // Written against a source string on purpose:
+    // nothing this compiler emits yet starts
+    // another run, so there is no golden to read
+    // it out of and pretending otherwise would
+    // leave the rule untested.
+    const source = [
+      'async function fn(): Promise<void> {',
+      '  const handle = await DBOS.startWorkflow(sendReceipt)(claim);',
+      '}',
+    ].join('\n');
+
+    expect(recordedNameLiterals(source)).toEqual(['DBOS.getResult']);
   });
 });

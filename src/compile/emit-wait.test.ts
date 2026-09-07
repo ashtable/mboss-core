@@ -1375,8 +1375,13 @@ describe('an approval with the two optional fields left out', () => {
     );
   });
 
-  it('shows nothing after a decision whose arms never meet again', () => {
-    expect(written_).toContain('downstream: [],');
+  it('shows what approving sets off where the arms never meet', () => {
+    // There is nowhere the two answers lead to
+    // alike, so the list is the approved arm's own
+    // work. Listing nothing would leave the person
+    // deciding with no idea what they are setting
+    // off, which is the one thing the page is for.
+    expect(written_).toContain("downstream: ['Pay it'],");
   });
 
   it('waits the same seven days any other wait with no limit does', () => {

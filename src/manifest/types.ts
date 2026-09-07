@@ -65,6 +65,14 @@ export const LibFunctionSchema = z.object({
   ),
   returnType: z.string(),
   /**
+   * The 1-based line the function is declared on,
+   * so a reader can be taken straight to it.
+   * Absent in a cache an older build wrote, and
+   * read there as "open the file at the top"
+   * rather than as a cache worth rejecting.
+   */
+  line: z.number().int().positive().optional(),
+  /**
    * The values the function decides between, read
    * off its resolved return type. Absent for a
    * function that decides nothing.

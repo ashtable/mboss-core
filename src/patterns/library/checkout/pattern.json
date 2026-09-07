@@ -1,0 +1,6 @@
+{
+  "summary": "Reserve, charge, fulfill — completed steps never run twice.",
+  "group": "backend",
+  "tags": ["orders", "payments", "inventory", "exactly-once"],
+  "glyphs": ["trigger", "transaction", "apiCall", "branch"]
+}

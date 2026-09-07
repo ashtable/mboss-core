@@ -1,7 +1,11 @@
 // Written by mBoss when this project was created.
 // It is yours now — edit it freely.
 
-import type { EmailFormField, WaitDescriptor } from '../contract.js';
+import type {
+  EmailFormField,
+  FieldCondition,
+  WaitDescriptor,
+} from '../contract.js';
 import { escapeHtml } from '../email/html.js';
 
 import { chipStrip, linkBanner, renderPage } from './shell.js';
@@ -22,6 +26,59 @@ const SUBMIT_LABEL = 'Submit & resume the workflow';
 
 const NO_UPLOADS =
   'File uploads are switched off: this app has no object store configured.';
+
+const MISSING_LEAD = 'Nothing has been sent yet — these are still blank:';
+
+const MISSING_FIELD = 'This one is needed before the workflow can carry on.';
+
+/**
+ * Whether a conditional field is being asked, given
+ * the answers filled in so far.
+ *
+ * The same rule as `holds` inside `REVEAL_SCRIPT`
+ * below, in the language the server speaks. The two
+ * cannot share an implementation — that one is a
+ * string of JavaScript sent to a browser with
+ * nothing to bundle it — so they are kept next to
+ * each other, and `shownBy` is tested against every
+ * operator so a change to one that is not made to
+ * the other fails here.
+ *
+ * It reads the raw posted strings rather than the
+ * converted answers, because that is what the
+ * browser compares: a yes-or-no arrives as `yes`
+ * long before anything turns it into a boolean.
+ */
+export function shownBy(
+  condition: FieldCondition,
+  posted: Readonly<Record<string, string>>,
+): boolean {
+  const got = posted[condition.fieldId] ?? '';
+  const want =
+    typeof condition.value === 'boolean'
+      ? condition.value
+        ? 'yes'
+        : 'no'
+      : condition.value;
+
+  switch (condition.op) {
+    case 'exists':
+    case 'nonempty':
+      return got !== '';
+    case 'eq':
+      return got === String(want);
+    case 'neq':
+      return got !== String(want);
+    case 'gt':
+      return Number(got) > Number(want);
+    case 'gte':
+      return Number(got) >= Number(want);
+    case 'lt':
+      return Number(got) < Number(want);
+    case 'lte':
+      return Number(got) <= Number(want);
+  }
+}
 
 /**
  * Reveals conditional fields in the browser.
@@ -117,10 +174,23 @@ export type FormPageInput = {
   wait: WaitDescriptor;
   /** False when no object store is configured. */
   uploadsEnabled: boolean;
+  /**
+   * The ids of required fields a submit arrived
+   * without. Empty on the page a link opens; filled
+   * only when the form is served back after being
+   * posted incomplete.
+   */
+  missing?: readonly string[];
+  /** What was posted, so a form served back is the
+   *  one the person filled in rather than an empty
+   *  one they have to start again. */
+  posted?: Readonly<Record<string, string>>;
 };
 
 export function renderFormPage(input: FormPageInput): string {
   const { appTitle, runId, recipient, action, wait, uploadsEnabled } = input;
+  const missing = input.missing ?? [];
+  const posted = input.posted ?? {};
   const takesFiles =
     uploadsEnabled && wait.fields.some((f) => f.type === 'fileUpload');
   const conditional = wait.fields.some((f) => f.showIf !== undefined);
@@ -129,7 +199,9 @@ export function renderFormPage(input: FormPageInput): string {
     `<form method="post" action="${escapeHtml(action)}"` +
       (takesFiles ? ` enctype="multipart/form-data"` : '') +
       `>`,
-    ...wait.fields.map((field) => renderField(field, uploadsEnabled)),
+    ...wait.fields.map((field) =>
+      renderField(field, uploadsEnabled, missing, posted),
+    ),
     `<button type="submit">${escapeHtml(SUBMIT_LABEL)}</button>`,
     `</form>`,
   ].join('\n');
@@ -140,15 +212,57 @@ export function renderFormPage(input: FormPageInput): string {
     body: [
       `<h1>${escapeHtml(appTitle)} needs your input</h1>`,
       `<p class="lede">${escapeHtml(wait.title)}</p>`,
+      missingSummary(wait, missing),
       form,
-    ].join('\n'),
+    ]
+      .filter((line) => line !== '')
+      .join('\n'),
     ...(conditional ? { script: REVEAL_SCRIPT } : {}),
   });
 }
 
-function renderField(field: EmailFormField, uploadsEnabled: boolean): string {
+/**
+ * What the page says above the form when a submit
+ * arrived incomplete.
+ *
+ * It leads with the run not having moved, because
+ * that is the thing a person wants to know: they
+ * pressed the button and something came back, and
+ * the question is whether they have to do this
+ * again from the top.
+ */
+function missingSummary(
+  wait: WaitDescriptor,
+  missing: readonly string[],
+): string {
+  if (missing.length === 0) return '';
+
+  const labels = missing.map((id) => {
+    const field = wait.fields.find((each) => each.id === id);
+
+    return `<li>${escapeHtml(field?.label ?? id)}</li>`;
+  });
+
+  return [
+    `<div class="alert" role="alert">`,
+    `<p>${escapeHtml(MISSING_LEAD)}</p>`,
+    `<ul>${labels.join('')}</ul>`,
+    `</div>`,
+  ].join('\n');
+}
+
+function renderField(
+  field: EmailFormField,
+  uploadsEnabled: boolean,
+  missing: readonly string[],
+  posted: Readonly<Record<string, string>>,
+): string {
   const id = escapeHtml(field.id);
-  const attributes = [`class="field"`, `data-field="${id}"`];
+  const absent = missing.includes(field.id);
+  const attributes = [
+    `class="field${absent ? ' missing' : ''}"`,
+    `data-field="${id}"`,
+  ];
 
   if (field.showIf !== undefined) {
     const rule = escapeHtml(JSON.stringify(field.showIf));
@@ -158,19 +272,30 @@ function renderField(field: EmailFormField, uploadsEnabled: boolean): string {
   return [
     `<div ${attributes.join(' ')}>`,
     `<label class="label" for="f-${id}">${escapeHtml(field.label)}</label>`,
-    control(field, uploadsEnabled),
+    control(field, uploadsEnabled, posted),
+    ...(absent ? [`<p class="why">${escapeHtml(MISSING_FIELD)}</p>`] : []),
     `</div>`,
   ].join('\n');
 }
 
-function control(field: EmailFormField, uploadsEnabled: boolean): string {
+function control(
+  field: EmailFormField,
+  uploadsEnabled: boolean,
+  posted: Readonly<Record<string, string>>,
+): string {
   const id = escapeHtml(field.id);
   const required = field.required ? ' required' : '';
+  const given = posted[field.id] ?? '';
 
   switch (field.type) {
     case 'fileUpload':
       return uploadsEnabled
-        ? `<div class="drop">` +
+        ? // Never carried back: a browser will not
+          // let a page put a file into a file input,
+          // so there is nothing to restore and
+          // pretending otherwise would show a
+          // filename that is no longer attached.
+          `<div class="drop">` +
             `<input type="file" id="f-${id}" name="${id}"` +
             `${field.multiple ? ' multiple' : ''}${required}>` +
             `</div>`
@@ -190,17 +315,25 @@ function control(field: EmailFormField, uploadsEnabled: boolean): string {
             `<p class="note">${escapeHtml(NO_UPLOADS)}</p>` +
             `</div>`;
     case 'textarea':
-      return `<textarea id="f-${id}" name="${id}"${required}></textarea>`;
+      return (
+        `<textarea id="f-${id}" name="${id}"${required}>` +
+        `${escapeHtml(given)}</textarea>`
+      );
     case 'yesNo':
       return (
         `<div class="choice">` +
         `<label><input type="radio" id="f-${id}" name="${id}" ` +
-        `value="yes"${required}> Yes</label>` +
-        `<label><input type="radio" name="${id}" value="no"> No</label>` +
+        `value="yes"${required}${given === 'yes' ? ' checked' : ''}> ` +
+        `Yes</label>` +
+        `<label><input type="radio" name="${id}" value="no"` +
+        `${given === 'no' ? ' checked' : ''}> No</label>` +
         `</div>`
       );
     case 'text':
-      return `<input type="text" id="f-${id}" name="${id}"${required}>`;
+      return (
+        `<input type="text" id="f-${id}" name="${id}"${required}` +
+        `${given === '' ? '' : ` value="${escapeHtml(given)}"`}>`
+      );
   }
 }
 

@@ -3,3 +3,10 @@ coverage/
 .tmp/
 *.tsbuildinfo
 .DS_Store
+
+# Where working notes are dropped while a change is
+# being built. Not repository content. The
+# superproject ignores its own the same way, and
+# prettier reads this file, so a note left here
+# neither gets committed nor reformatted.
+scratch/

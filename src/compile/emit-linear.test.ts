@@ -3,14 +3,26 @@ import { join } from 'node:path';
 import prettier from 'prettier';
 import { describe, expect, it } from 'vitest';
 
-import { WorkflowIRSchema, type WorkflowIR } from '../ir/index.js';
+import type { WorkflowIR } from '../ir/index.js';
 import { scanLib } from '../manifest/index.js';
 import { ESLINT_CONFIG_MJS } from '../scaffold/templates/dotfiles.js';
+import { expectGolden, fixturesRoot } from '../test-support/fixtures.js';
 import {
-  expectGolden,
-  fixturesRoot,
-  readFixtureJson,
-} from '../test-support/fixtures.js';
+  API_CALL,
+  CODE_STEP,
+  EVENT_TRIGGER,
+  FOR_EACH,
+  FOR_EACH_TRANSACTION,
+  GOLDENS,
+  GUARD,
+  GUARDED_CHAIN,
+  MANUAL_TRIGGER,
+  NAME_COLLISION,
+  SCHEDULE_TRIGGER,
+  STEP,
+  TRANSACTION,
+  irFixture,
+} from '../test-support/goldens.js';
 import { eslintProblems } from '../test-support/lint.js';
 import { makeIR, type EdgeSpec, type NodeSpec } from '../test-support/ir.js';
 import {
@@ -88,87 +100,6 @@ function workflow(parts: {
   return makeIR(parts);
 }
 
-const EVENT_TRIGGER = workflow({
-  name: 'event_trigger',
-  nodes: [
-    {
-      id: 'booking_requested',
-      kind: 'trigger',
-      title: 'Booking request',
-      out: 'WebhookEvent',
-      config: {
-        mode: 'event',
-        topic: 'booking.requested',
-        idempotencyKeyPath: 'requestId',
-        requesterEmailPath: 'customer.email',
-      },
-    },
-    {
-      id: 'parse_request',
-      kind: 'step',
-      title: 'Parse request',
-      handler: { export: 'parseRequest' },
-      in: 'WebhookEvent',
-      out: 'BookingReq',
-      config: {},
-    },
-  ],
-  edges: [
-    { from: 'booking_requested', to: 'parse_request', type: 'WebhookEvent' },
-  ],
-});
-
-const MANUAL_TRIGGER = workflow({
-  name: 'manual_trigger',
-  nodes: [
-    {
-      id: 'started_by_hand',
-      kind: 'trigger',
-      title: 'Started by hand',
-      out: 'WebhookEvent',
-      config: { mode: 'manual' },
-    },
-    {
-      id: 'parse_request',
-      kind: 'step',
-      title: 'Parse request',
-      handler: { export: 'parseRequest' },
-      in: 'WebhookEvent',
-      out: 'BookingReq',
-      config: {},
-    },
-  ],
-  edges: [
-    { from: 'started_by_hand', to: 'parse_request', type: 'WebhookEvent' },
-  ],
-});
-
-const SCHEDULE_TRIGGER = workflow({
-  name: 'schedule_trigger',
-  nodes: [
-    {
-      id: 'every_night',
-      kind: 'trigger',
-      title: 'Every night',
-      config: {
-        mode: 'schedule',
-        cron: '0 3 * * *',
-        timezone: 'Europe/Berlin',
-        start: '2026-01-01T00:00:00.000Z',
-        ends: '2026-12-31T23:59:59.000Z',
-      },
-    },
-    {
-      id: 'sweep_stale',
-      kind: 'step',
-      title: 'Sweep stale bookings',
-      handler: { export: 'sweepStale' },
-      config: {},
-    },
-  ],
-  edges: [{ from: 'every_night', to: 'sweep_stale' }],
-});
-
 /**
  * A scheduled run with a block that wants the
  * payload the run does not have.
@@ -208,200 +139,6 @@ const SCHEDULE_NO_ZONE = workflow({
 });
 
 /**
- * The three retry shapes, in one file: the
- * schema's defaults written out, a policy of the
- * author's, and a single attempt.
- */
-function retryChain(kind: 'step' | 'apiCall'): readonly NodeSpec[] {
-  const work = (node: NodeSpec): NodeSpec =>
-    kind === 'apiCall'
-      ? { ...node, kind: 'apiCall', config: { service: 'stripe' } }
-      : { ...node, kind: 'step', config: {} };
-
-  return [
-    {
-      id: 'booking_requested',
-      kind: 'trigger',
-      title: 'Booking request',
-      out: 'WebhookEvent',
-      config: { mode: 'event', topic: 'booking.requested' },
-    },
-    work({
-      id: 'parse_request',
-      title: 'Parse request',
-      handler: { export: 'parseRequest' },
-      in: 'WebhookEvent',
-      out: 'BookingReq',
-    }),
-    work({
-      id: 'find_slot',
-      title: 'Find open slot',
-      handler: { export: 'findSlot' },
-      in: 'BookingReq',
-      out: 'SlotGrid',
-      retry: { maxAttempts: 5, intervalSeconds: 2, backoffRate: 3 },
-    }),
-    work({
-      id: 'twilio_chat',
-      title: 'Text the customer',
-      handler: { export: 'twilioChat' },
-      in: 'SlotGrid',
-      out: 'ChatPrompt',
-      retry: { maxAttempts: 1 },
-    }),
-  ];
-}
-
-const RETRY_EDGES: readonly EdgeSpec[] = [
-  { from: 'booking_requested', to: 'parse_request', type: 'WebhookEvent' },
-  { from: 'parse_request', to: 'find_slot', type: 'BookingReq' },
-  { from: 'find_slot', to: 'twilio_chat', type: 'SlotGrid' },
-];
-
-const STEP = workflow({
-  name: 'step',
-  nodes: retryChain('step'),
-  edges: RETRY_EDGES,
-});
-
-const API_CALL = workflow({
-  name: 'api_call',
-  nodes: retryChain('apiCall'),
-  edges: RETRY_EDGES,
-});
-
-const CODE_STEP = workflow({
-  name: 'code_step',
-  nodes: [
-    {
-      id: 'booking_requested',
-      kind: 'trigger',
-      title: 'Booking request',
-      out: 'WebhookEvent',
-      config: { mode: 'event', topic: 'booking.requested' },
-    },
-    {
-      id: 'parse_request',
-      kind: 'codeStep',
-      title: 'Parse request',
-      handler: { export: 'parseRequest' },
-      in: 'WebhookEvent',
-      out: 'BookingReq',
-      config: {},
-    },
-  ],
-  edges: [
-    { from: 'booking_requested', to: 'parse_request', type: 'WebhookEvent' },
-  ],
-});
-
-const TRANSACTION = workflow({
-  name: 'transaction',
-  nodes: [
-    {
-      id: 'booking_placed',
-      kind: 'trigger',
-      title: 'Booking placed',
-      out: 'Booking',
-      config: { mode: 'event', topic: 'booking.placed' },
-    },
-    {
-      id: 'record_booking',
-      kind: 'transaction',
-      title: 'Record booking',
-      handler: { export: 'recordBooking' },
-      in: 'Booking',
-      out: 'Booking',
-      config: {},
-    },
-  ],
-  edges: [{ from: 'booking_placed', to: 'record_booking', type: 'Booking' }],
-});
-
-const FOR_EACH = workflow({
-  name: 'for_each',
-  nodes: [
-    {
-      id: 'slots_found',
-      kind: 'trigger',
-      title: 'Slots found',
-      out: 'SlotGrid',
-      config: { mode: 'event', topic: 'slots.found' },
-    },
-    {
-      id: 'confirm_each',
-      kind: 'step',
-      title: 'Confirm each alternative',
-      handler: { export: 'confirmSlot' },
-      in: 'SlotGrid',
-      out: 'Booking',
-      forEach: { itemsPath: 'alternatives', concurrency: 4 },
-      config: {},
-    },
-  ],
-  edges: [{ from: 'slots_found', to: 'confirm_each', type: 'SlotGrid' }],
-});
-
-/**
- * The same fan-out, drawn as a transaction. Every
- * item writes, so every item needs a transaction of
- * its own.
- */
-const FOR_EACH_TRANSACTION = workflow({
-  name: 'for_each_transaction',
-  nodes: [
-    {
-      id: 'slots_found',
-      kind: 'trigger',
-      title: 'Slots found',
-      out: 'SlotGrid',
-      config: { mode: 'event', topic: 'slots.found' },
-    },
-    {
-      id: 'confirm_each',
-      kind: 'transaction',
-      title: 'Confirm each alternative',
-      handler: { export: 'confirmSlot' },
-      in: 'SlotGrid',
-      out: 'Booking',
-      forEach: { itemsPath: 'alternatives', concurrency: 2 },
-      config: {},
-    },
-  ],
-  edges: [{ from: 'slots_found', to: 'confirm_each', type: 'SlotGrid' }],
-});
-
-/**
- * A workflow named the way one of its handlers is.
- * The file would otherwise import and declare the
- * same identifier.
- */
-const NAME_COLLISION = workflow({
-  name: 'parse_request',
-  nodes: [
-    {
-      id: 'booking_requested',
-      kind: 'trigger',
-      title: 'Booking request',
-      out: 'WebhookEvent',
-      config: { mode: 'event', topic: 'booking.requested' },
-    },
-    {
-      id: 'parse_request',
-      kind: 'step',
-      title: 'Parse request',
-      handler: { export: 'parseRequest' },
-      in: 'WebhookEvent',
-      out: 'BookingReq',
-      config: {},
-    },
-  ],
-  edges: [
-    { from: 'booking_requested', to: 'parse_request', type: 'WebhookEvent' },
-  ],
-});
-
-/**
  * A name long enough that the registration cannot
  * be written on one line. Every name the goldens
  * carry is short, so nothing else in this file
@@ -431,93 +168,6 @@ const LONG_NAME = workflow({
     { from: 'booking_requested', to: 'parse_request', type: 'WebhookEvent' },
   ],
 });
-
-const GUARD = { path: 'service', op: 'eq', value: 'groom' } as const;
-
-const GUARDED_CHAIN = workflow({
-  name: 'guarded_chain',
-  nodes: [
-    {
-      id: 'booking_requested',
-      kind: 'trigger',
-      title: 'Booking request',
-      out: 'WebhookEvent',
-      config: { mode: 'event', topic: 'booking.requested' },
-    },
-    {
-      id: 'parse_request',
-      kind: 'step',
-      title: 'Parse request',
-      handler: { export: 'parseRequest' },
-      in: 'WebhookEvent',
-      out: 'BookingReq',
-      config: {},
-    },
-    {
-      id: 'find_slot',
-      kind: 'step',
-      title: 'Find open slot',
-      handler: { export: 'findSlot' },
-      in: 'BookingReq',
-      out: 'SlotGrid',
-      guard: GUARD,
-      config: {},
-    },
-    {
-      id: 'book_appointment',
-      kind: 'step',
-      title: 'Book appointment',
-      handler: { export: 'bookAppointment' },
-      in: 'SlotGrid',
-      out: 'Booking',
-      guard: GUARD,
-      config: {},
-    },
-  ],
-  edges: [
-    { from: 'booking_requested', to: 'parse_request', type: 'WebhookEvent' },
-    { from: 'parse_request', to: 'find_slot', type: 'BookingReq' },
-    { from: 'find_slot', to: 'book_appointment', type: 'SlotGrid' },
-  ],
-});
-
-/**
- * The control-flow fixtures live on disk rather
- * than being built here: they are whole workflows
- * with branches, loops and joins, and a document
- * that big is easier to read as the document it is.
- */
-function fixture(name: string): WorkflowIR {
-  return WorkflowIRSchema.parse(readFixtureJson(`ir/${name}.workflow.json`));
-}
-
-const GOLDENS = [
-  ['approval_flow', fixture('approval_flow')],
-  ['branch_three_ways', fixture('branch_three_ways')],
-  ['chat_retry_abort', fixture('chat_retry_abort')],
-  ['chat_retry_continue', fixture('chat_retry_continue')],
-  ['decision_three_ways', fixture('decision_three_ways')],
-  ['decision_yes_no', fixture('decision_yes_no')],
-  ['form_intake', fixture('form_intake')],
-  ['form_retry', fixture('form_retry')],
-  ['groom_booking', fixture('groom_booking')],
-  ['review_loop', fixture('review_loop')],
-  ['slot_retry_abort', fixture('slot_retry_abort')],
-  ['slot_retry_continue', fixture('slot_retry_continue')],
-  ['slot_retry_rechecked', fixture('slot_retry_rechecked')],
-  ['timer_wait', fixture('timer_wait')],
-  ['event_trigger', EVENT_TRIGGER],
-  ['manual_trigger', MANUAL_TRIGGER],
-  ['schedule_trigger', SCHEDULE_TRIGGER],
-  ['step', STEP],
-  ['api_call', API_CALL],
-  ['code_step', CODE_STEP],
-  ['transaction', TRANSACTION],
-  ['for_each', FOR_EACH],
-  ['for_each_transaction', FOR_EACH_TRANSACTION],
-  ['guarded_chain', GUARDED_CHAIN],
-  ['parse_request', NAME_COLLISION],
-] as const;
 
 describe('an event trigger', () => {
   const source = compile(EVENT_TRIGGER);
@@ -1053,7 +703,7 @@ const DECISION_RETRY = workflow({
 });
 
 describe('a branch that runs code of its own', () => {
-  const source = compile(fixture('decision_yes_no'));
+  const source = compile(irFixture('decision_yes_no'));
 
   it('runs the handler as a step, into a local named for the block', () => {
     expect(source).toContain(
@@ -1100,7 +750,7 @@ describe('a branch that runs code of its own', () => {
 });
 
 describe('a branch deciding between three answers', () => {
-  const source = compile(fixture('decision_three_ways'));
+  const source = compile(irFixture('decision_three_ways'));
 
   it('chains one case per answer and returns on anything else', () => {
     expect(source).toContain("  if (routeClaimDecision === 'pay') {");
@@ -1111,8 +761,8 @@ describe('a branch deciding between three answers', () => {
 });
 
 describe('a loop closed by a decision', () => {
-  const abort = compile(fixture('slot_retry_abort'));
-  const carryOn = compile(fixture('slot_retry_continue'));
+  const abort = compile(irFixture('slot_retry_abort'));
+  const carryOn = compile(irFixture('slot_retry_continue'));
 
   it('records the round in the decision step’s name', () => {
     // DBOS compares the recorded name at each
@@ -1153,7 +803,7 @@ describe('a loop closed by a decision', () => {
     // wrong for a decision, so the two shapes have
     // to be told apart rather than one rule
     // replacing the other.
-    expect(compile(fixture('chat_retry_continue'))).toContain(
+    expect(compile(irFixture('chat_retry_continue'))).toContain(
       "if (round < 10 && readReplyOut.intent === 'reschedule') {",
     );
   });

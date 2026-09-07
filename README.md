@@ -2,6 +2,13 @@
 
 mBoss: Design Durable Apps with DBOS - Shared Core Library
 
+[`CONTEXT.md`](CONTEXT.md) is the vocabulary: what a drawing, a block, a park, a
+recorded name and a code-behind are, with the line of code that says it best.
+[`docs/adr/`](docs/adr/) is why the awkward parts are the way they are — two
+separate ways of refusing a workflow, five files copied byte-for-byte into a
+generated project, a filesystem nothing mocks. Read the first before writing
+code here and the second before changing a shape that looks wrong.
+
 ## signed-links
 
 `src/signed-links/` mints and verifies the compact HMAC-SHA256 bearer tokens behind every

@@ -1,6 +1,7 @@
 import { FORM_LINK_MAX_SECONDS } from '../app-contract/limits.js';
 import { RUNTIME_VALUES } from '../app-contract/index.js';
 import {
+  DEFAULT_RETRY,
   sameGuard,
   type FormField,
   type Predicate,
@@ -10,7 +11,8 @@ import {
   type WorkflowIR,
   type WorkflowNode,
 } from '../ir/index.js';
-import type { LibManifest } from '../manifest/index.js';
+import type { LibFunction, LibManifest } from '../manifest/index.js';
+import { consumesValue } from '../validate/index.js';
 
 import {
   expandedCall,
@@ -73,13 +75,6 @@ import { UnsupportedIR } from './unsupported.js';
  * keeping the two walks in agreement.
  */
 
-/** What the schema uses when a node says nothing. */
-const DEFAULT_RETRY: Retry = {
-  maxAttempts: 3,
-  intervalSeconds: 1,
-  backoffRate: 2,
-};
-
 /** The workflow's own parameter, for the two
  *  trigger modes that carry a payload. */
 const PAYLOAD_PARAMETER = 'evt';
@@ -117,8 +112,13 @@ const FORM_LINK_MAX_DAYS = FORM_LINK_MAX_SECONDS / SECONDS_PER_DAY;
  * One: the smallest number that makes "remind
  * them" mean anything, and the run still ends
  * rather than nagging forever.
+ *
+ * Exported because each reminder records a
+ * numbered row of its own, so anything working out
+ * what a run can have recorded has to count them
+ * the same way this does.
  */
-const DEFAULT_RESENDS = 1;
+export const DEFAULT_RESENDS = 1;
 
 /**
  * How long a link to something in storage lasts.
@@ -198,7 +198,12 @@ class Emitter {
     this.#ir = request.ir;
     this.#manifest = request.manifest;
     this.#timezone = request.timezone;
-    this.#plan = planWorkflow(request.ir);
+    // The scan is what settles whether a block
+    // reads a value, and this is the first place
+    // that holds both it and the document.
+    this.#plan = planWorkflow(request.ir, {
+      readsValue: (node) => consumesValue(this.#functionFor(node)),
+    });
     this.#exported = camelCase(request.ir.name);
     this.#inner = `${this.#exported}Fn`;
 
@@ -960,14 +965,24 @@ class Emitter {
 
     this.#want(binding === entry.name ? entry : { ...entry, alias: binding });
 
-    const fn = this.#manifest.functions.find(
-      (each) => each.export === handler.export,
-    );
-
-    if ((fn?.params.length ?? 0) === 0) return `${binding}()`;
+    if (!consumesValue(this.#functionFor(node))) return `${binding}()`;
     if (input === undefined) throw this.#unreachableValue(node);
 
     return `${binding}(${input})`;
+  }
+
+  /** What the scan recorded about the function
+   *  behind a block, or `undefined` where the block
+   *  names none and where it names one the scan
+   *  never found. */
+  #functionFor(node: WorkflowNode): LibFunction | undefined {
+    const handler = node.handler;
+
+    if (handler === undefined) return undefined;
+
+    return this.#manifest.functions.find(
+      (each) => each.export === handler.export,
+    );
   }
 
   /**

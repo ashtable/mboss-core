@@ -235,7 +235,11 @@ export function stepProblems(source: string): AuditProblem[] {
       config !== undefined && ts.isObjectLiteralExpression(config)
         ? config
         : undefined;
-    const name = options ? propertyText(file, options, 'name') : undefined;
+    const declared = options ? propertyText(file, options, 'name') : undefined;
+    // Two steps in the same region differ only by
+    // a counter, and that is not a collision. Two
+    // that differ by nothing is.
+    const name = declared === undefined ? undefined : normalise(declared);
     const label = name ?? '';
 
     if (name === undefined) {
@@ -280,6 +284,94 @@ export function stepProblems(source: string): AuditProblem[] {
   }
 
   return found.sort((a, b) => a.line - b.line);
+}
+
+/**
+ * Every row a compiled workflow would record, in
+ * source order, read back off the file.
+ *
+ * The names come back as source text — `'search'`,
+ * `` `search.r${round}` `` — rather than as the
+ * strings a run would write. A step inside a loop
+ * records a different name every round, and the
+ * hole is the part that says which region varies;
+ * flattening it away would leave a round
+ * indistinguishable from a reminder.
+ *
+ * It exists because `stepProblems` walks the same
+ * calls and reports problems rather than names.
+ * Holding the trace grammar to what the emitter
+ * actually writes needs the names, so this is a
+ * second reader of the same file with a different
+ * question.
+ */
+export function recordedNameLiterals(source: string): string[] {
+  const file = parse(source);
+  const found: string[] = [];
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) found.push(...rowsRecordedBy(file, node));
+    ts.forEachChild(node, visit);
+  };
+
+  visit(file);
+
+  return found;
+}
+
+/**
+ * The rows one call writes.
+ *
+ * A checkpoint writes the name it declares.
+ * `DBOS.recv` reserves two ids and writes under
+ * both — its own row and the durable sleep that
+ * times it out — which is why a file with no
+ * `DBOS.sleep(` anywhere in it still records a
+ * sleep. Starting a run writes the child's own
+ * registered name, and the call site spells that
+ * child as a binding rather than as the name it
+ * registered under, so the only row a reader of
+ * the text can name is the result the handle is
+ * awaited for.
+ */
+function rowsRecordedBy(
+  file: ts.SourceFile,
+  call: ts.CallExpression,
+): string[] {
+  const callee = text(file, call.expression);
+
+  if (STEP_CALLS.includes(callee) || TRANSACTION_CALLS.includes(callee)) {
+    const [, config] = call.arguments;
+    const options =
+      config !== undefined && ts.isObjectLiteralExpression(config)
+        ? config
+        : undefined;
+    const name = options ? propertyText(file, options, 'name') : undefined;
+
+    return name === undefined ? [] : [name];
+  }
+
+  if (callee === 'DBOS.recv') return ['DBOS.recv', 'DBOS.sleep'];
+  if (callee === 'DBOS.sleep') return ['DBOS.sleep'];
+
+  // Matched on the last name rather than on the
+  // whole callee: a run is started off `DBOS` or
+  // off the workflow itself, and both spellings
+  // record the same pair of rows.
+  if (calleeName(call.expression) === 'startWorkflow') {
+    return ['DBOS.getResult'];
+  }
+
+  return [];
+}
+
+/** What a call's callee is called, ignoring
+ *  whatever it was reached through. */
+function calleeName(expression: ts.Expression): string | undefined {
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text;
+  if (ts.isIdentifier(expression)) return expression.text;
+
+  return undefined;
 }
 
 /**
@@ -417,15 +509,8 @@ function callsTo(file: ts.SourceFile, callee: string): ts.CallExpression[] {
   return found;
 }
 
-/**
- * The source text of one property of an object
- * literal, with a template literal's holes
- * flattened to `*`.
- *
- * Two steps in the same region differ only by a
- * counter, and that is not a name collision. Two
- * that differ by nothing is.
- */
+/** The source text of one property of an object
+ *  literal, exactly as it is written. */
 function propertyText(
   file: ts.SourceFile,
   options: ts.ObjectLiteralExpression,
@@ -435,7 +520,7 @@ function propertyText(
     if (!ts.isPropertyAssignment(property)) continue;
     if (property.name.getText(file) !== key) continue;
 
-    return normalise(text(file, property.initializer));
+    return text(file, property.initializer);
   }
 
   return undefined;
