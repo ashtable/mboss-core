@@ -4,7 +4,12 @@ import { NodeSchema, type WorkflowNode } from '../ir/index.js';
 import type { LibFunction } from '../manifest/types.js';
 import type { NodeSpec } from '../test-support/ir.js';
 
-import { consumesValue, decisionValues, handlerFit } from './handler-fit.js';
+import {
+  consumesValue,
+  declaredTypeMisfit,
+  decisionValues,
+  handlerFit,
+} from './handler-fit.js';
 
 /**
  * One node, parsed the way a document's nodes are,
@@ -322,6 +327,58 @@ describe('handlerFit', () => {
         takes: 'ChatReply',
       },
     });
+  });
+});
+
+describe('declaredTypeMisfit', () => {
+  const QUEUE_CONFIG = {
+    itemsPath: 'pages',
+    queue: { name: 'render_pages' },
+  };
+
+  const QUEUE: NodeSpec = {
+    id: 'render_pages',
+    kind: 'queue',
+    config: QUEUE_CONFIG,
+  };
+
+  it('holds a queue’s item type against what its handler takes', () => {
+    // A queue hands its handler one item, so the
+    // type it names for an item is the one the
+    // handler has to take — the collection it fans
+    // out over is never handed to anybody.
+    const queued = node({
+      ...QUEUE,
+      config: { ...QUEUE_CONFIG, itemType: 'Page' },
+    });
+    const takesPdf = fn({ params: [{ name: 'pdf', type: 'Pdf' }] });
+
+    expect(declaredTypeMisfit(queued, takesPdf)).toEqual({
+      kind: 'input-mismatch',
+      declared: 'Page',
+      takes: 'Pdf',
+    });
+  });
+
+  it('says nothing about a queue that names no item type', () => {
+    // Nothing was written down, so there is nothing
+    // for the handler to contradict.
+    const queued = node(QUEUE);
+
+    expect(declaredTypeMisfit(queued, fn({}))).toBeUndefined();
+  });
+
+  it('says nothing about a step that fans out', () => {
+    // The node takes the collection and its handler
+    // takes one item of it, so the two declarations
+    // are meant to differ.
+    const fanOut = node({
+      id: 'find_slot',
+      in: 'SlotGrid',
+      forEach: { itemsPath: 'items' },
+    });
+
+    expect(declaredTypeMisfit(fanOut, fn({}))).toBeUndefined();
   });
 });
 

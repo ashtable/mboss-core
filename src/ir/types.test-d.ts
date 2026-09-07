@@ -54,9 +54,9 @@ const ir: WorkflowIR = {
 
 const unknownKind: WorkflowNode = {
   id: 'inbox',
-  // @ts-expect-error queues were considered and
-  // left out; the catalog is the whole list
-  kind: 'queue',
+  // @ts-expect-error the catalog is the whole
+  // list; a word that is not on it is not a kind
+  kind: 'mapReduce',
   title: 'Inbox',
   config: {},
 };

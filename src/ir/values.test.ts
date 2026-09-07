@@ -29,6 +29,22 @@ describe('bindsValue', () => {
     expect(bindsValue(undefined)).toBe(false);
   });
 
+  it('counts a queue, which binds what its items produced', () => {
+    const queued = makeIR({
+      nodes: [
+        { id: 'trigger', kind: 'trigger', config: { mode: 'manual' } },
+        {
+          id: 'render_pages',
+          kind: 'queue',
+          config: { itemsPath: 'pages', queue: { name: 'render_pages' } },
+        },
+      ],
+      edges: [],
+    });
+
+    expect(bindsValue(nodeOf(queued, 'render_pages'))).toBe(true);
+  });
+
   it('counts a wait for a person and not a wait on the clock', () => {
     const waits = makeIR({
       nodes: [

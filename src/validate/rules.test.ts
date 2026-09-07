@@ -57,6 +57,12 @@ const EVENT_TRIGGER: NodeSpec = {
   },
 };
 
+const QUEUE: NodeSpec = {
+  id: 'render_pages',
+  kind: 'queue',
+  config: { itemsPath: 'pages', queue: { name: 'render_pages' } },
+};
+
 const YES_NO_BRANCH: NodeSpec = {
   id: 'decide',
   kind: 'branch',
@@ -481,6 +487,34 @@ describe('V07 handlers', () => {
     const ir = makeIR({ nodes: [YES_NO_BRANCH] });
 
     expect(check(v07Handlers, ir, manifestWith({}))).toEqual([]);
+  });
+
+  it('warns about a queue with no handler to run per item', () => {
+    // What a queue queues is a call to a handler,
+    // so a queue without one queues nothing.
+    const ir = makeIR({ nodes: [QUEUE] });
+    const found = check(v07Handlers, ir);
+
+    expect(codes(found)).toEqual(['V07']);
+    expect(found[0]?.nodeId).toBe('render_pages');
+  });
+
+  it('says nothing about a queue whose handler the code-behind has', () => {
+    const ir = makeIR({
+      nodes: [{ ...QUEUE, handler: { export: 'renderPage' } }],
+    });
+    const manifest = manifestWith({
+      functions: [
+        {
+          export: 'renderPage',
+          file: 'lib/renderPage.ts',
+          params: [{ name: 'page', type: 'Page' }],
+          returnType: 'Rendered',
+        },
+      ],
+    });
+
+    expect(check(v07Handlers, ir, manifest)).toEqual([]);
   });
 });
 

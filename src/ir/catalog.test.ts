@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { NODE_PALETTE, NodeKindSchema, NodeSchema, portsOf } from './index.js';
+import {
+  EnqueuePolicySchema,
+  NODE_PALETTE,
+  NodeKindSchema,
+  NodeSchema,
+  QueuePolicySchema,
+  portsOf,
+} from './index.js';
 
 const minimalNodes = [
   { kind: 'trigger', config: { mode: 'manual' } },
@@ -30,6 +37,10 @@ const minimalNodes = [
     },
   },
   { kind: 'codeStep', config: {} },
+  {
+    kind: 'queue',
+    config: { itemsPath: 'pages', queue: { name: 'render_pages' } },
+  },
 ];
 
 describe('every kind in the catalog', () => {
@@ -172,11 +183,67 @@ describe('per-kind config rules', () => {
   });
 });
 
+describe('what a queue holds', () => {
+  const config = { itemsPath: 'pages', queue: { name: 'render_pages' } };
+
+  it('drops a fan-out modifier instead of refusing the node', () => {
+    // A queue is the fan-out, so `forEach` on one
+    // has nothing left to say. The shape leaves the
+    // key out rather than a rule turning the
+    // document down, so a hand-written one loads
+    // and the canvas can then show what it means.
+    const parsed = NodeSchema.parse({
+      id: 'render_pages',
+      kind: 'queue',
+      title: 'Render the pages',
+      forEach: { itemsPath: 'pages' },
+      config,
+    });
+
+    expect(parsed).not.toHaveProperty('forEach');
+  });
+
+  it.each([
+    ['concurrency', 4],
+    ['priorityEnabled', true],
+    ['partitionQueue', true],
+  ])('refuses `%s`, the deprecated way to say it', (key, value) => {
+    // Refused rather than dropped: a limit written
+    // the old way and quietly stripped is a queue
+    // running unbounded with nothing said about it.
+    const parsed = QueuePolicySchema.safeParse({
+      name: 'render_pages',
+      [key]: value,
+    });
+
+    expect(parsed.error?.issues[0]?.code).toBe('unrecognized_keys');
+  });
+
+  it('refuses an enqueue field the deployment owns', () => {
+    const parsed = EnqueuePolicySchema.safeParse({
+      priority: 1,
+      applicationVersion: '1.2.3',
+    });
+
+    expect(parsed.error?.issues[0]?.code).toBe('unrecognized_keys');
+  });
+
+  it('takes the priorities the runtime has and no others', () => {
+    // Its range, not a range of our own, so a
+    // document cannot hold a number the enqueue
+    // would turn down.
+    expect(EnqueuePolicySchema.safeParse({ priority: 0 }).success).toBe(false);
+    expect(
+      EnqueuePolicySchema.safeParse({ priority: 2147483647 }).success,
+    ).toBe(true);
+  });
+});
+
 describe('an unknown kind', () => {
-  it('is rejected against the kind itself, not against ten config shapes', () => {
+  it('is rejected against the kind itself, not eleven config shapes', () => {
     const parsed = NodeSchema.safeParse({
       id: 'a_node',
-      kind: 'queue',
+      kind: 'mapReduce',
       title: 'A node',
       config: {},
     });

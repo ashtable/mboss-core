@@ -76,6 +76,7 @@ const NEEDS_HANDLER: ReadonlySet<NodeKind> = new Set<NodeKind>([
   'transaction',
   'apiCall',
   'codeStep',
+  'queue',
 ]);
 
 function triggersOf(ir: WorkflowIR): TriggerNode[] {

@@ -80,6 +80,7 @@ export const HANDLER_KINDS: ReadonlySet<NodeKind> = new Set<NodeKind>([
   'apiCall',
   'codeStep',
   'branch',
+  'queue',
 ]);
 
 /**
@@ -214,16 +215,23 @@ export function declaredTypeMisfit(
   // exemption every typed fan-out would be a
   // misfit and the picker would grey every
   // per-item handler.
-  if (node.forEach !== undefined) return undefined;
+  //
+  // A queue is the exception. It fans out too, but
+  // what it declares is the item rather than the
+  // collection, so there is something to hold the
+  // handler to after all.
+  if (node.kind !== 'queue' && node.forEach !== undefined) return undefined;
+
+  const takesDeclared = node.kind === 'queue' ? node.config.itemType : node.in;
 
   const takes = fn.params[0]?.type;
 
   if (
-    node.in !== undefined &&
+    takesDeclared !== undefined &&
     takes !== undefined &&
-    disagree(node.in, takes)
+    disagree(takesDeclared, takes)
   ) {
-    return { kind: 'input-mismatch', declared: node.in, takes };
+    return { kind: 'input-mismatch', declared: takesDeclared, takes };
   }
 
   // A branch's decision goes nowhere — nothing

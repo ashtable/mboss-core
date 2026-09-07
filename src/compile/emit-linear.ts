@@ -839,7 +839,7 @@ class Emitter {
    * still in flight have checkpointed, so a retry
    * re-runs work that had already succeeded.
    */
-  #emitForEach(node: WorkflowNode): void {
+  #emitForEach(node: Exclude<WorkflowNode, { kind: 'queue' }>): void {
     const fanOut = node.forEach;
     if (fanOut === undefined) return;
 

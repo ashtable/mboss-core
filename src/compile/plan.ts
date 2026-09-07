@@ -172,6 +172,7 @@ const WORK_KINDS: ReadonlySet<NodeKind> = new Set<NodeKind>([
   'durableWait',
   'approval',
   'emailSend',
+  'queue',
 ]);
 
 /**
