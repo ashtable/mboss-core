@@ -166,14 +166,22 @@ function segmentText(segment: StepSegment): string {
 }
 
 /**
- * The same six regions, read back off a row that
- * was recorded.
+ * The same six regions read back off a row that
+ * was recorded, and a seventh nothing renders per
+ * step.
  *
  * `StepSegment` carries the variable a template
  * names; this carries the value that variable was
  * filled with. `.r${round}` is rendered from the
  * first and parsed into the second, so the two
  * cannot be one type however alike they look.
+ *
+ * The seventh is the queued region. A queue block
+ * records one row per item under the name its
+ * children register as, and that name is written
+ * once into a registration rather than rendered
+ * at each step — so it has a reading here and no
+ * `StepSegment` beside it.
  */
 export type RecordedSegment =
   | { kind: 'round'; round: number }
@@ -181,7 +189,8 @@ export type RecordedSegment =
   | { kind: 'register' }
   | { kind: 'clear' }
   | { kind: 'ask' }
-  | { kind: 'resend'; count: number };
+  | { kind: 'resend'; count: number }
+  | { kind: 'queued'; workflow: string };
 
 /**
  * The name a run would write for one step, with
@@ -219,7 +228,31 @@ function recordedText(segment: RecordedSegment): string {
 
     case 'resend':
       return `.resend.${segment.count}`;
+
+    case 'queued':
+      return `.queued.${segment.workflow}`;
   }
+}
+
+/**
+ * The name a queue block's children register
+ * under, which is the name the block's own rows
+ * are recorded as.
+ *
+ * The block first, because the reading side cuts a
+ * name at its first dot and has to land on the
+ * block. The workflow last, because two workflows
+ * may each hold a queue block of the same id, and
+ * each of them registers a child of its own.
+ * `queued` between them so that a reader of the
+ * ledger can tell this run is one item of a block
+ * from a workflow somebody started on its own.
+ */
+export function queuedWorkflowName(
+  nodeId: string,
+  workflowName: string,
+): string {
+  return recordedName(nodeId, [{ kind: 'queued', workflow: workflowName }]);
 }
 
 /**
@@ -262,6 +295,14 @@ function shapeText(kind: RecordedSegment['kind']): string {
 
     case 'resend':
       return '.resend.#';
+
+    case 'queued':
+      // Reduced like every other part that is
+      // filled in, because this is asked the kind
+      // and never the value — and the two sides of
+      // any comparison are names written for one
+      // workflow anyway.
+      return '.queued.#';
   }
 }
 
@@ -317,22 +358,30 @@ const SDK_PREFIX = 'DBOS.';
 // where the first segment begins.
 const NODE_ID = /^[a-z][a-z0-9_]{0,40}/;
 
-// One region of the tail. The three kinds that
+// The workflow a queued child belongs to. Shaped
+// like a node id because the two share a schema,
+// and restated here for the same reason the id is.
+const WORKFLOW_NAME = String.raw`[a-z][a-z0-9_]{0,40}`;
+
+// One region of the tail. The four kinds that
 // carry a value capture it; the three that do not
 // are told apart by the text they matched. `.r`
 // wants a digit next, which is what stops it
 // swallowing the front of `.register` and
 // `.resend`.
-const SEGMENT =
-  /^(?:\[(\d+)\]|\.r(\d+)|\.resend\.(\d+)|\.register|\.clear|\.ask)/;
+const SEGMENT = new RegExp(
+  String.raw`^(?:\[(\d+)\]|\.r(\d+)|\.resend\.(\d+)|` +
+    String.raw`\.queued\.(${WORKFLOW_NAME})|\.register|\.clear|\.ask)`,
+);
 
 /** One matched region, as the value it recorded. */
 function parseSegment(match: RegExpExecArray): RecordedSegment {
-  const [text, index, round, count] = match;
+  const [text, index, round, count, workflow] = match;
 
   if (index !== undefined) return { kind: 'item', index: Number(index) };
   if (round !== undefined) return { kind: 'round', round: Number(round) };
   if (count !== undefined) return { kind: 'resend', count: Number(count) };
+  if (workflow !== undefined) return { kind: 'queued', workflow };
   if (text === '.register') return { kind: 'register' };
   if (text === '.clear') return { kind: 'clear' };
 
@@ -388,10 +437,15 @@ export function ownerOf(name: string): Owner {
 // already filled in. Reading both is what lets a
 // name the emitter wrote and a name a run wrote be
 // compared with each other.
+//
+// The queued region is spelled neither way. Its
+// value is the workflow the file belongs to, which
+// the emitter knows as it writes, so the literal
+// carries the name itself and never a hole.
 const VALUE = String.raw`(?:\d+|\$\{[^}]*\})`;
 const LITERAL_SEGMENT = new RegExp(
   `^(?:\\[${VALUE}\\]|\\.resend\\.${VALUE}|\\.r${VALUE}|` +
-    `\\.register|\\.clear|\\.ask)`,
+    `\\.queued\\.${WORKFLOW_NAME}|\\.register|\\.clear|\\.ask)`,
 );
 
 /**
@@ -464,6 +518,13 @@ function literalSegments(
  * because all three open `.r` and reading a wait's
  * row as a loop's would put them in the same
  * place.
+ *
+ * The round is the fallback rather than a test of
+ * its own, so every region added here has to be
+ * asked about above it. Nothing in this file
+ * fails to compile if one is not: the regions the
+ * regex reads and the regions this names are held
+ * together by the round trip in the tests alone.
  */
 function segmentKind(text: string): RecordedSegment['kind'] {
   if (text.startsWith('[')) return 'item';
@@ -471,6 +532,7 @@ function segmentKind(text: string): RecordedSegment['kind'] {
   if (text.startsWith('.register')) return 'register';
   if (text.startsWith('.clear')) return 'clear';
   if (text.startsWith('.ask')) return 'ask';
+  if (text.startsWith('.queued.')) return 'queued';
 
   return 'round';
 }

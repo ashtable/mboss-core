@@ -8,6 +8,7 @@ import {
   nameLiteralShape,
   nameShape,
   ownerOf,
+  queuedWorkflowName,
   stepNameLiteral,
   type RecordedSegment,
   type StepSegment,
@@ -165,17 +166,42 @@ describe('stepNameLiteral', () => {
   });
 });
 
+describe('queuedWorkflowName', () => {
+  it('puts the block first and the workflow last', () => {
+    // The block first because the reading side
+    // cuts the name at the first dot and has to
+    // land on the block. The workflow last because
+    // two workflows may each hold a queue block
+    // called `index_pages`, and each of them
+    // registers a child of its own.
+    expect(queuedWorkflowName('index_pages', 'document_ingestion_queued')).toBe(
+      'index_pages.queued.document_ingestion_queued',
+    );
+  });
+});
+
 /**
- * One `StepSegment` per region, written out rather
- * than derived, so a seventh kind fails to compile
- * here until somebody says what it looks like.
+ * One `StepSegment` per region a step name is
+ * built from, written out rather than derived, so
+ * a new kind fails to compile here until somebody
+ * says what it looks like.
  *
  * That is what makes the round trip below binding:
  * a region the emitter starts rendering but the
  * literal parse cannot read would otherwise land
  * rows on the wrong block with nothing going red.
+ *
+ * The queued region is the one recorded region
+ * with no `StepSegment` beside it: a queued child
+ * is a workflow the emitter registers rather than
+ * a step it names, so `queuedWorkflowName` renders
+ * it and the test below that one holds the parse
+ * to it.
  */
-const EVERY_REGION: Record<RecordedSegment['kind'], StepSegment> = {
+const EVERY_REGION: Record<
+  Exclude<RecordedSegment['kind'], 'queued'>,
+  StepSegment
+> = {
   round: { kind: 'round', name: 'round' },
   item: { kind: 'item' },
   register: { kind: 'register' },
@@ -191,6 +217,21 @@ describe('nameLiteralShape', () => {
 
       expect(nameLiteralShape(literal)).toBe(nameShape('find_slot', [segment]));
     }
+  });
+
+  it('reads back the name a queue block starts a child under', () => {
+    // The one region `stepNameLiteral` does not
+    // render. It still has to be read back: the
+    // conformance check compares what a file
+    // writes against what a document says it
+    // records, and a registration this parse
+    // cannot read is a row nobody accounts for.
+    const name = queuedWorkflowName('index_pages', 'document_ingestion_queued');
+
+    expect(nameLiteralShape(`'${name}'`)).toBe(
+      nameShape('index_pages', [{ kind: 'queued' }]),
+    );
+    expect(nameLiteralShape(`'${name}'`)).toBe('index_pages.queued.#');
   });
 
   it('reduces the parts that vary to the region they name', () => {
@@ -411,6 +452,32 @@ describe('ownerOf', () => {
     });
   });
 
+  it('reads a queued child back as the block that started it', () => {
+    // A queue block records one row per item it
+    // enqueues, and the row carries the child's
+    // registered name rather than a name the block
+    // wrote — so this is the only way the ledger
+    // says which block the fan-out belongs to.
+    const name = queuedWorkflowName('index_pages', 'document_ingestion_queued');
+
+    expect(name).toBe('index_pages.queued.document_ingestion_queued');
+    expect(ownerOf(name)).toEqual({
+      kind: 'node',
+      nodeId: 'index_pages',
+      segments: [{ kind: 'queued', workflow: 'document_ingestion_queued' }],
+    });
+  });
+
+  it('leaves the rows a queue block waits on to the SDK', () => {
+    // The other half of what a fan-out records:
+    // every item is awaited through its handle,
+    // and the SDK names each of those rows itself.
+    expect(ownerOf('DBOS.getResult')).toEqual({
+      kind: 'sdk',
+      name: 'DBOS.getResult',
+    });
+  });
+
   it('gives the SDK its own rows, prefixed or not', () => {
     expect(ownerOf('DBOS.recv')).toEqual({ kind: 'sdk', name: 'DBOS.recv' });
 
@@ -483,5 +550,15 @@ describe('the coupling that lets ownerOf split a name', () => {
     expect(NodeIdSchema.safeParse('a.b').success).toBe(false);
     expect(NodeIdSchema.safeParse('a[0]').success).toBe(false);
     expect(NodeIdSchema.safeParse('find_slot').success).toBe(true);
+  });
+
+  it('never lets a block id spell a queued region of its own', () => {
+    // A block whose id held `.queued.` would read
+    // as some other block's fan-out, and every row
+    // it recorded would be filed under a block
+    // that is not it.
+    expect(
+      NodeIdSchema.safeParse('index_pages.queued.other_flow').success,
+    ).toBe(false);
   });
 });

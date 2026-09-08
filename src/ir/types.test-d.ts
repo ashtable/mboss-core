@@ -10,8 +10,12 @@
  * for a kind that is not in the catalog, or
  * pairing a kind with another kind's config.
  */
+import type { z } from 'zod';
+
 import type {
+  EnqueuePolicySchema,
   Position,
+  QueuePolicySchema,
   WorkflowEdge,
   WorkflowIR,
   WorkflowNode,
@@ -54,9 +58,9 @@ const ir: WorkflowIR = {
 
 const unknownKind: WorkflowNode = {
   id: 'inbox',
-  // @ts-expect-error queues were considered and
-  // left out; the catalog is the whole list
-  kind: 'queue',
+  // @ts-expect-error the catalog is the whole
+  // list; a word that is not on it is not a kind
+  kind: 'mapReduce',
   title: 'Inbox',
   config: {},
 };
@@ -101,6 +105,26 @@ const edgeWithoutSource: WorkflowEdge = {
 // to sit
 const halfPlaced: Position = { x: 412 };
 
+/**
+ * The two queue policies do not overlap. What the
+ * queue is registered with is settled once for
+ * every item that ever lands in it; what an
+ * enqueue is given is read off the item in hand.
+ */
+const queueWithEnqueueOption: z.input<typeof QueuePolicySchema> = {
+  name: 'index_pages',
+  // @ts-expect-error a priority orders one item
+  // against the rest; the queue has no priority
+  priority: 3,
+};
+
+const enqueueWithQueueOption: z.input<typeof EnqueuePolicySchema> = {
+  // @ts-expect-error a concurrency limit belongs
+  // to the queue every item lands in, not to one
+  // item's enqueue
+  globalConcurrency: 4,
+};
+
 export type {};
 void [
   ir,
@@ -109,4 +133,6 @@ void [
   branchWithEmailConfig,
   edgeWithoutSource,
   halfPlaced,
+  queueWithEnqueueOption,
+  enqueueWithQueueOption,
 ];

@@ -95,6 +95,7 @@ const GOOD = `
     DBOS.setConfig({ name: 'app' });
     await PrismaDataSource.initializeDBOSSchema(prisma());
     await DBOS.launch();
+    await registerQueues(queues);
     await applyAndPruneSchedules(schedules);
     app.listen(env.PORT, '0.0.0.0');
   }
@@ -111,8 +112,67 @@ describe('bootProblems', () => {
       'app.listen(1); await DBOS.launch();',
     );
 
+    // Two, because a listener that far up is also
+    // above the queue registration: a request that
+    // starts a run in that window enqueues onto a
+    // queue no row exists for yet.
     expect(bootProblems(source)).toEqual([
       'listens before DBOS.launch() resolves',
+      'registers queues after it listens',
+    ]);
+  });
+
+  it('reports queues registered before launch resolves', () => {
+    // `DBOS.registerQueue` waits for the launch
+    // that owns the connection it writes through,
+    // so a registration above it throws instead of
+    // registering anything.
+    const source = GOOD.replace(
+      'await DBOS.launch();\n    await registerQueues(queues);',
+      'await registerQueues(queues);\n    await DBOS.launch();',
+    );
+
+    expect(bootProblems(source)).toEqual([
+      'registers queues before DBOS.launch() resolves',
+    ]);
+  });
+
+  it('reports queues registered after the listener is open', () => {
+    const source = GOOD.replace(
+      'await registerQueues(queues);\n    await applyAndPruneSchedules(' +
+        "schedules);\n    app.listen(env.PORT, '0.0.0.0');",
+      "app.listen(env.PORT, '0.0.0.0');\n    await registerQueues(queues);" +
+        '\n    await applyAndPruneSchedules(schedules);',
+    );
+
+    expect(bootProblems(source)).toEqual(['registers queues after it listens']);
+  });
+
+  it('reports queues registered after the schedules are applied', () => {
+    // A scheduled run may enqueue the moment its
+    // schedule is applied, and a row enqueued onto
+    // a queue with no configuration waits with
+    // nothing said.
+    const source = GOOD.replace(
+      'await registerQueues(queues);\n    await applyAndPruneSchedules(' +
+        'schedules);',
+      'await applyAndPruneSchedules(schedules);\n    await registerQueues(' +
+        'queues);',
+    );
+
+    expect(bootProblems(source)).toEqual([
+      'registers queues after the schedules are applied',
+    ]);
+  });
+
+  it('reports a queue registration nothing waits for', () => {
+    const source = GOOD.replace(
+      'await registerQueues(queues);',
+      'void registerQueues(queues);',
+    );
+
+    expect(bootProblems(source)).toEqual([
+      'does not await the queue registration',
     ]);
   });
 

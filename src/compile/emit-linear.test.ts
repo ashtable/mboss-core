@@ -486,10 +486,13 @@ describe('a forEach', () => {
   });
 
   it('registers no queue', () => {
-    // A generated app has none, deliberately: the
-    // fan-out happens inside the run.
+    // This fan-out has none, deliberately: it
+    // happens inside the run. A queue block is the
+    // other kind, and it declares its queue rather
+    // than registering it.
     expect(source).not.toContain('registerQueue');
     expect(source).not.toContain('WorkflowQueue');
+    expect(source).not.toContain('export const queues');
   });
 
   it('chunks at the concurrency the node asked for', () => {
@@ -527,6 +530,268 @@ describe('a forEach', () => {
     // a list of that.
     expect(source).toContain(
       'const settled: PromiseSettledResult<Booking>[] = [];',
+    );
+  });
+});
+
+/**
+ * A queue block whose handler takes an item the
+ * block never named.
+ */
+const QUEUE_UNTYPED_ITEM = workflow({
+  name: 'queue_untyped_item',
+  nodes: [
+    {
+      id: 'batch_arrived',
+      kind: 'trigger',
+      title: 'Batch arrived',
+      out: 'Batch',
+      config: { mode: 'manual' },
+    },
+    {
+      id: 'index_items',
+      kind: 'queue',
+      title: 'Index each item',
+      handler: { export: 'indexItem' },
+      in: 'Batch',
+      out: 'Indexed',
+      config: { itemsPath: 'items', queue: { name: 'document-index' } },
+    },
+  ],
+  edges: [{ from: 'batch_arrived', to: 'index_items', type: 'Batch' }],
+});
+
+/** The same block, with an enqueue policy of the
+ *  caller's choosing. */
+function queueWith(enqueue: Record<string, unknown>): WorkflowIR {
+  return workflow({
+    name: 'queue_enqueue',
+    nodes: [
+      {
+        id: 'batch_arrived',
+        kind: 'trigger',
+        title: 'Batch arrived',
+        out: 'Batch',
+        config: { mode: 'manual' },
+      },
+      {
+        id: 'index_items',
+        kind: 'queue',
+        title: 'Index each item',
+        handler: { export: 'indexItem' },
+        in: 'Batch',
+        out: 'Indexed',
+        config: {
+          itemsPath: 'items',
+          itemType: 'Item',
+          queue: { name: 'document-index' },
+          enqueue,
+        },
+      },
+    ],
+    edges: [{ from: 'batch_arrived', to: 'index_items', type: 'Batch' }],
+  });
+}
+
+describe('a queue block', () => {
+  const source = compile(irFixture('queue_partitioned'));
+
+  it('registers the child it enqueues, and keeps it to the file', () => {
+    // Under the block and the workflow both, so a
+    // row it records says which block of which
+    // document started it. Unexported, because an
+    // app that could start one by name could start
+    // it off the queue that exists to hold it.
+    expect(source).toContain(
+      [
+        'const indexItemsQueued = DBOS.registerWorkflow(indexItemsQueuedFn, {',
+        "  name: 'index_items.queued.queue_partitioned',",
+        '});',
+      ].join('\n'),
+    );
+    expect(source).not.toContain('export const indexItemsQueued');
+    expect(source).not.toContain('export async function indexItemsQueuedFn');
+  });
+
+  it('hands the child one item, typed the way the block says', () => {
+    expect(source).toContain(
+      'async function indexItemsQueuedFn(item: Item): Promise<Indexed> {',
+    );
+    expect(source).toContain('async () => indexItem(item)');
+  });
+
+  it('starts one run per item, on the queue the block names', () => {
+    expect(source).toContain(
+      [
+        '  for (const item of items) {',
+        '    handles.push(',
+        '      await DBOS.startWorkflow(indexItemsQueued, {',
+        "        queueName: 'document-index',",
+      ].join('\n'),
+    );
+  });
+
+  it('reads each item key through the runtime, never inline', () => {
+    // An item with no key sits on a partitioned
+    // queue for ever and nothing says so, which is
+    // what the runtime call is there to refuse.
+    expect(source).toContain(
+      [
+        '          queuePartitionKey: queueKey(',
+        "            'index_items',",
+        "            'customerId',",
+        '            item.customerId,',
+        '          ),',
+      ].join('\n'),
+    );
+    expect(source).toContain("import { queueKey } from '../app/queues.js';");
+  });
+
+  it('writes the priority the block set as a literal', () => {
+    expect(source).toContain('          priority: 5,');
+  });
+
+  it('waits on every run it started, and keeps the rejections', () => {
+    expect(source).toContain(
+      [
+        '  for (const handle of handles) {',
+        '    try {',
+        "      settled.push({ status: 'fulfilled', value: await handle.getResult() });",
+        '    } catch (reason) {',
+        "      settled.push({ status: 'rejected', reason });",
+        '    }',
+        '  }',
+      ].join('\n'),
+    );
+    expect(source).not.toContain('Promise.allSettled(');
+  });
+
+  it('fails the run and names the count when items are rejected', () => {
+    expect(source).toContain(
+      '`index_items: ${failed.length} of ${settled.length} items failed`,',
+    );
+  });
+
+  it('declares its queue for the boot and registers none itself', () => {
+    // Registering a queue is a call against the
+    // system database, and it belongs to the boot:
+    // a generated file that made it would make it
+    // again on every import.
+    expect(source).toContain(
+      [
+        'export const queues: QueueEntry[] = [',
+        '  {',
+        "    name: 'document-index',",
+        '    options: { workerConcurrency: 4, partitionConcurrency: 2 },',
+        '  },',
+        '];',
+      ].join('\n'),
+    );
+    expect(source).not.toContain('registerQueue');
+    expect(source).not.toContain('WorkflowQueue(');
+  });
+
+  it('never asks a step to run on a queue', () => {
+    // A queue holds workflow executions. A step
+    // handed a queue name would be a step DBOS
+    // runs at once, outside every limit.
+    for (const call of source.split('DBOS.runStep(').slice(1)) {
+      expect(call.slice(0, call.indexOf('});'))).not.toContain('queueName');
+    }
+  });
+});
+
+describe('a queue block inside a loop', () => {
+  const source = compile(
+    workflow({
+      name: 'queue_in_loop',
+      nodes: [
+        {
+          id: 'batch_arrived',
+          kind: 'trigger',
+          title: 'Batch arrived',
+          out: 'Batch',
+          config: { mode: 'manual' },
+        },
+        {
+          id: 'index_rounds',
+          kind: 'loop',
+          title: 'Index again',
+          config: { minRounds: 1, maxRounds: 3, body: ['index_items'] },
+        },
+        {
+          id: 'index_items',
+          kind: 'queue',
+          title: 'Index each item',
+          handler: { export: 'indexItem' },
+          in: 'Batch',
+          out: 'Indexed',
+          config: {
+            itemsPath: 'items',
+            itemType: 'Item',
+            queue: { name: 'document-index' },
+          },
+        },
+      ],
+      edges: [
+        { from: 'batch_arrived', to: 'index_rounds', type: 'Batch' },
+        { from: 'index_rounds', to: 'index_items', type: 'Batch' },
+      ],
+    }),
+  );
+
+  it('names the item step without the round the block sits in', () => {
+    // The child is a run of its own. Its ledger
+    // starts from nothing however many rounds the
+    // block that started it has been through, so a
+    // round in the name would be a name that never
+    // replays.
+    expect(source).toContain("name: 'index_items',");
+    expect(source).not.toContain('index_items.r$');
+  });
+
+  it('registers one child for the block, not one per round', () => {
+    expect(source.split('DBOS.registerWorkflow')).toHaveLength(3);
+  });
+});
+
+describe('a queue block that deduplicates its items', () => {
+  it('says what to do when two items carry one key', () => {
+    // Returning the run already in flight rather
+    // than refusing: two items carrying one key
+    // are one piece of work, and a refusal would
+    // fail the block instead of doing it once.
+    const source = compile(queueWith({ deduplicationPath: 'itemId' }));
+
+    expect(source).toContain(
+      "          deduplicationID: queueKey('index_items', 'itemId', item.itemId),",
+    );
+    expect(source).toContain("        duplicationPolicy: 'return-existing',");
+  });
+
+  it('says nothing about duplicates where there is no key', () => {
+    const source = compile(queueWith({}));
+
+    expect(source).not.toContain('duplicationPolicy');
+    expect(source).not.toContain('enqueueOptions');
+  });
+
+  it('writes a delay the block asked for as a literal', () => {
+    const source = compile(queueWith({ delaySeconds: 30 }));
+
+    expect(source).toContain('        enqueueOptions: { delaySeconds: 30 },');
+  });
+});
+
+describe('a queue block that never says what one item is', () => {
+  it('refuses it rather than handing its handler an unknown', () => {
+    const refused = refuse(QUEUE_UNTYPED_ITEM);
+
+    expect(refused).toMatchObject({ reason: 'UNSUPPORTED' });
+    expect('message' in refused ? refused.message : '').toBe(
+      '`index_items` hands each item to `indexItem`, which takes a ' +
+        '`Item`, but the block does not say what one item is. Set its ' +
+        'item type.',
     );
   });
 });

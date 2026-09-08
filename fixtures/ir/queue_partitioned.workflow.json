@@ -1,0 +1,22 @@
+{
+  "$schema": "https://mboss.dev/schemas/workflow-v1.json",
+  "version": 1,
+  "revision": 1,
+  "name": "queue_partitioned",
+  "title": "Index a batch",
+  "nodes": [
+    { "id": "batch_arrived", "kind": "trigger", "title": "Batch arrived",
+      "config": { "mode": "manual" }, "out": "Batch" },
+    { "id": "index_items", "kind": "queue", "title": "Index each item",
+      "handler": { "export": "indexItem" }, "in": "Batch", "out": "Indexed",
+      "config": {
+        "itemsPath": "items",
+        "itemType": "Item",
+        "queue": { "name": "document-index", "workerConcurrency": 4,
+          "partitionConcurrency": 2 },
+        "enqueue": { "priority": 5, "partitionPath": "customerId" } } }
+  ],
+  "edges": [
+    { "id": "e1", "from": { "node": "batch_arrived", "port": "out" }, "to": { "node": "index_items" }, "type": "Batch" }
+  ]
+}

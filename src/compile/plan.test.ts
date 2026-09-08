@@ -254,6 +254,32 @@ describe('what an approval says happens next', () => {
   });
 });
 
+describe('what a page after a block says is still to come', () => {
+  it('counts a queue among the work, because it does some', () => {
+    const plan = planWorkflow(
+      makeIR({
+        name: 'queued_work',
+        nodes: [
+          TRIGGER,
+          FIND_SLOT,
+          {
+            id: 'render_pages',
+            kind: 'queue',
+            title: 'Render the pages',
+            config: { itemsPath: 'pages', queue: { name: 'render_pages' } },
+          },
+        ],
+        edges: [
+          { from: 'review_started', to: 'find_slot', type: 'BookingReq' },
+          { from: 'find_slot', to: 'render_pages', type: 'SlotGrid' },
+        ],
+      }),
+    );
+
+    expect(plan.downstream.get('find_slot')).toEqual(['Render the pages']);
+  });
+});
+
 describe('what control flow this compiler will not follow', () => {
   it('refuses a loop with two ways out', () => {
     // The alternatives are duplicating the tail —

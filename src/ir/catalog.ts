@@ -1,17 +1,22 @@
 import { z } from 'zod';
 
-import { NodeBase, NodeIdSchema, PredicateSchema } from './types.js';
+import {
+  NodeBase,
+  NodeIdSchema,
+  PredicateSchema,
+  TypeNameSchema,
+} from './types.js';
 
 /**
  * The node catalog: the kinds a workflow can be
  * built from, the config each one carries, and
  * the labels the canvas palette draws them with.
  *
- * Ten kinds, deliberately. Queues, child
- * workflows, compensation and map blocks are not
- * here — nothing in the product needs them yet,
- * and a kind is far cheaper to add than to
- * remove once workflows on disk use it.
+ * Eleven kinds, deliberately. Child workflows,
+ * compensation and map blocks are not here —
+ * nothing in the product needs them yet, and a
+ * kind is far cheaper to add than to remove once
+ * workflows on disk use it.
  */
 export const NodeKindSchema = z.enum([
   'trigger',
@@ -24,6 +29,7 @@ export const NodeKindSchema = z.enum([
   'approval',
   'emailSend',
   'codeStep',
+  'queue',
 ]);
 
 /**
@@ -274,13 +280,68 @@ export const EmailSendConfigSchema = z.object({
   attach: AttachmentSchema,
 });
 
+/** An address in the app's system database, shared
+ *  by every workflow of the app and never an
+ *  identifier in generated code — so a hyphen costs
+ *  nothing. Not `_`-initial: DBOS keeps
+ *  `_dbos_internal_queue` for itself. */
+export const QueueNameSchema = z.string().regex(/^[a-z][a-z0-9_-]{0,40}$/);
+
+export const QueueRateLimitSchema = z.object({
+  limitPerPeriod: z.number().int().min(1),
+  periodSec: z.number().int().min(1),
+});
+
+/**
+ * What the queue is registered with.
+ *
+ * Strict, and the first strict schema here: zod
+ * strips an unknown key rather than refusing it,
+ * so a document written by hand or by an agent
+ * setting the SDK's deprecated `concurrency` would
+ * lose its limit with nothing said, and either
+ * policy model would quietly swallow the other's
+ * fields.
+ */
+export const QueuePolicySchema = z.strictObject({
+  name: QueueNameSchema,
+  globalConcurrency: z.number().int().min(1).optional(),
+  workerConcurrency: z.number().int().min(1).optional(),
+  rateLimit: QueueRateLimitSchema.optional(),
+  partitionConcurrency: z.number().int().min(1).optional(),
+  partitionWorkerConcurrency: z.number().int().min(1).optional(),
+  partitionRateLimit: QueueRateLimitSchema.optional(),
+  minPollingIntervalMs: z.number().int().min(1).optional(),
+  onConflict: z
+    .enum(['update_if_latest_version', 'always_update', 'never_update'])
+    .optional(),
+});
+
+/** What each item's enqueue is given. Both paths
+ *  are read off the item: a key every item shares
+ *  is not a key. */
+export const EnqueuePolicySchema = z.strictObject({
+  priority: z.number().int().min(1).max(2147483647).optional(),
+  delaySeconds: z.number().int().min(0).optional(),
+  deduplicationPath: z.string().optional(),
+  partitionPath: z.string().optional(),
+});
+
+export const QueueConfigSchema = z.strictObject({
+  itemsPath: z.string(),
+  itemType: TypeNameSchema.optional(),
+  queue: QueuePolicySchema,
+  enqueue: EnqueuePolicySchema.default({}),
+});
+
 /**
  * A node, discriminated on `kind`.
  *
  * Discriminated rather than a plain union so that
  * a typo in `kind` is reported once, against
- * `kind`, instead of as ten config mismatches the
- * author has to read past to find the real one.
+ * `kind`, instead of as eleven config mismatches
+ * the author has to read past to find the real
+ * one.
  */
 export const NodeSchema = z.discriminatedUnion('kind', [
   NodeBase.extend({
@@ -311,9 +372,16 @@ export const NodeSchema = z.discriminatedUnion('kind', [
     kind: z.literal('codeStep'),
     config: CodeStepConfigSchema,
   }),
+  NodeBase.omit({ forEach: true }).extend({
+    kind: z.literal('queue'),
+    config: QueueConfigSchema,
+  }),
 ]);
 
 export type NodeKind = z.infer<typeof NodeKindSchema>;
+export type QueuePolicy = z.infer<typeof QueuePolicySchema>;
+export type EnqueuePolicy = z.infer<typeof EnqueuePolicySchema>;
+export type QueueConfig = z.infer<typeof QueueConfigSchema>;
 export type BranchCase = z.infer<typeof BranchCaseSchema>;
 export type WaitSource = z.infer<typeof WaitSourceSchema>;
 export type Recipient = z.infer<typeof RecipientSchema>;
@@ -380,6 +448,7 @@ export const NODE_PALETTE: readonly NodePaletteEntry[] = [
   { kind: 'transaction', label: 'Transaction', group: 'work' },
   { kind: 'apiCall', label: 'API call', group: 'work' },
   { kind: 'codeStep', label: 'Code step', group: 'work' },
+  { kind: 'queue', label: 'Queue', group: 'work' },
   { kind: 'branch', label: 'Branch', group: 'control' },
   { kind: 'loop', label: 'Loop', group: 'control' },
   { kind: 'durableWait', label: 'Wait', group: 'control' },

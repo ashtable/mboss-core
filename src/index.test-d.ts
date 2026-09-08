@@ -25,8 +25,13 @@ import * as core from './index.js';
 import {
   CONTAINER_APP_DIR,
   DEFAULT_RETRY,
+  EnqueuePolicySchema,
   NODE_HEIGHT,
   PositionSchema,
+  QueueConfigSchema,
+  QueueNameSchema,
+  QueuePolicySchema,
+  QueueRateLimitSchema,
   SDK_OPERATIONS,
   blankSpec,
   carryPositions,
@@ -41,6 +46,8 @@ import {
   patternSpec,
   place,
   planWorkflow,
+  queueProblems,
+  queuedWorkflowName,
   recordedNameLiterals,
   renameNode,
   replayBoundaries,
@@ -53,7 +60,9 @@ import {
 } from './index.js';
 
 import type {
+  AuditProblem,
   EmissionPlan,
+  EnqueuePolicy,
   ExternalCall,
   HandlerFit,
   HandlerMisfit,
@@ -61,6 +70,9 @@ import type {
   NodeBox,
   Owner,
   Position,
+  QueueConfig,
+  QueueEntry,
+  QueuePolicy,
   RecordedRow,
   RecordedSegment,
   ReplayBoundary,
@@ -243,6 +255,50 @@ const written: string[] = recordedNameLiterals(
   "await DBOS.runStep(() => charge(), { name: 'charge_card' });",
 );
 
+// The queue surface, which no one subsystem owns.
+// The canvas parses a queue block's config with
+// these schemas, the compiler hands the boot an
+// entry for every queue a document declares, and
+// the ledger names a child after the block it came
+// from — so all of it is on the barrel.
+const queueName: string = QueueNameSchema.parse('document-index');
+// A rate limit has no exported type of its own. It
+// is only ever reached through the policy holding
+// it, so the schema is the whole of what a caller
+// needs.
+const policy: QueuePolicy = QueuePolicySchema.parse({
+  name: queueName,
+  partitionConcurrency: 1,
+  partitionRateLimit: QueueRateLimitSchema.parse({
+    limitPerPeriod: 30,
+    periodSec: 60,
+  }),
+});
+const enqueue: EnqueuePolicy = EnqueuePolicySchema.parse({
+  partitionPath: 'customerId',
+  priority: 5,
+});
+const queued: QueueConfig = QueueConfigSchema.parse({
+  itemsPath: 'items',
+  itemType: 'Item',
+  queue: policy,
+  enqueue,
+});
+
+// What the registry hands the boot, one entry per
+// queue: the policy the document carries, apart
+// from the name it is registered under.
+const { name: registeredAs, ...options } = queued.queue;
+const entry: QueueEntry = { name: registeredAs, options };
+
+// The name a queue block's children register
+// under, and the reading of a body that holds a
+// hand-edited enqueue to that same name.
+const childName: string = queuedWorkflowName('index_page', 'ingest_document');
+const problems: readonly AuditProblem[] = queueProblems(
+  "await DBOS.startWorkflow(indexItemsQueued, { queueName: 'q' })(item);",
+);
+
 // @ts-expect-error every kind is drawn in one box,
 // so nothing computes a height from a count of the
 // config rows a node would have shown
@@ -281,6 +337,9 @@ void [
   verdict,
   emission,
   written,
+  entry,
+  childName,
+  problems,
   baseHeight,
   configRowHeight,
 ];

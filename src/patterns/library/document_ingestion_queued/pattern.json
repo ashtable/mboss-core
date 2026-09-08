@@ -1,0 +1,6 @@
+{
+  "summary": "Index every page of an upload as its own run, held by a queue.",
+  "group": "ai",
+  "tags": ["rag", "queues", "uploads", "rate-limits"],
+  "glyphs": ["trigger", "step", "codeStep", "queue"]
+}

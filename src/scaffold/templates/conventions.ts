@@ -8,15 +8,16 @@
  * true for the life of the project rather than
  * true of one generation of it.
  *
- * Six of its sections are decisions made
+ * Seven of its sections are decisions made
  * elsewhere in mBoss that a handler author cannot
  * discover from the canvas and will otherwise get
  * wrong: how a transaction handler has to write,
  * what a per-item output really carries, what a
- * branch's handler is allowed to return, what two
- * ways out of a fork may share, what the ingress
- * actually validates, and which loop settings have
- * no compiled effect yet.
+ * queue block's handler is handed and what comes
+ * back from it, what a branch's handler is allowed
+ * to return, what two ways out of a fork may
+ * share, what the ingress actually validates, and
+ * which loop settings have no compiled effect yet.
  */
 export function conventions(name: string): string {
   return `# Code-behind conventions for ${name}
@@ -77,6 +78,13 @@ receives is an array of those. The block catalog cannot yet say "a list of
 Receipt", so the two disagree on purpose. Where it matters, the mismatch
 shows up as a type error at build time inside \`src/workflows/\` — in
 generated code, about a real problem in the drawing.
+
+## A queue block runs your handler once per item
+
+A queue block's handler takes one item of the collection and returns one
+result; the block's item type is its parameter type. mBoss enqueues one run
+per item and collects the results in the order the items were listed, so the
+block after a queue either declares no \`in\` or declares the array.
 
 ## A branch with a handler returns a decision
 

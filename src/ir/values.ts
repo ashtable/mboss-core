@@ -38,6 +38,7 @@ const VALUE_KINDS: ReadonlySet<NodeKind> = new Set<NodeKind>([
   'codeStep',
   'apiCall',
   'transaction',
+  'queue',
 ]);
 
 /**

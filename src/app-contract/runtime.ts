@@ -45,6 +45,7 @@ export const RUNTIME = {
       'NodeEmail',
       'NodeEmailAttach',
       'PayloadCheck',
+      'QueueEntry',
       'ScheduleEntry',
       'TriggerDescriptor',
       'WaitDescriptor',
@@ -62,6 +63,18 @@ export const RUNTIME = {
     specifier: '../app/mailer.js',
     type: false,
     exports: ['isTransientSendFailure'],
+  },
+  /**
+   * The registration is not here. Generated code
+   * never registers a queue — the boot does, once,
+   * from the registry — and a table entry for a
+   * name the emitters cannot reach would be a
+   * claim nothing checks.
+   */
+  queues: {
+    specifier: '../app/queues.js',
+    type: false,
+    exports: ['queueKey'],
   },
   waits: {
     specifier: '../app/waits.js',

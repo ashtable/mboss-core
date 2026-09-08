@@ -30,7 +30,7 @@ export type Emitted =
   | { kind: 'text'; value: string }
   | { kind: 'object'; entries: readonly EmittedEntry[] }
   | { kind: 'list'; items: readonly Emitted[] }
-  | { kind: 'call'; callee: string; argument: Emitted };
+  | { kind: 'call'; callee: string; args: readonly Emitted[] };
 
 export function source(text: string): Emitted {
   return { kind: 'source', text };
@@ -58,8 +58,8 @@ export function list(items: readonly Emitted[]): Emitted {
   return { kind: 'list', items };
 }
 
-export function call(callee: string, argument: Emitted): Emitted {
-  return { kind: 'call', callee, argument };
+export function call(callee: string, ...args: readonly Emitted[]): Emitted {
+  return { kind: 'call', callee, args };
 }
 
 /** The value on one line, however long that is. */
@@ -87,7 +87,7 @@ export function inlineValue(value: Emitted): string {
       return `[${value.items.map(inlineValue).join(', ')}]`;
 
     case 'call':
-      return `${value.callee}(${inlineValue(value.argument)})`;
+      return `${value.callee}(${value.args.map(inlineValue).join(', ')})`;
   }
 }
 
@@ -140,14 +140,23 @@ export function writeValue(
       writer.close(`]${suffix}`);
       return;
 
-    case 'call':
-      writeValue(
-        writer,
-        `${prefix}${value.callee}(`,
-        value.argument,
-        `)${suffix}`,
-      );
+    case 'call': {
+      // One argument breaks open where it stands,
+      // the way an options object hugs the call it
+      // belongs to; more than one goes a line
+      // each, because there is nothing to hug.
+      const only = value.args.length === 1 ? value.args[0] : undefined;
+
+      if (only !== undefined) {
+        writeValue(writer, `${prefix}${value.callee}(`, only, `)${suffix}`);
+        return;
+      }
+
+      writer.open(`${prefix}${value.callee}(`);
+      for (const argument of value.args) writeValue(writer, '', argument, ',');
+      writer.close(`)${suffix}`);
       return;
+    }
   }
 }
 

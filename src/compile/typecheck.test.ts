@@ -255,6 +255,7 @@ describe('the goldens, inside a real scaffolded project', () => {
         name,
         title: name,
         scheduled: name === 'schedule_trigger',
+        queues: [],
       });
     }
 

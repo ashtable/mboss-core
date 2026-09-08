@@ -54,6 +54,7 @@ describe('scanLib', () => {
       'confirmSlot',
       'fileRefusal',
       'findSlot',
+      'indexItem',
       'parseRequest',
       'payClaim',
       'readReply',
@@ -144,14 +145,17 @@ describe('scanLib', () => {
 
   it('lists exported interfaces and type aliases alike', () => {
     expect(manifest.types).toEqual([
+      'Batch',
       'Booking',
       'BookingReq',
       'ChatPrompt',
       'ChatReply',
       'ExpenseClaim',
+      'Indexed',
       'IntakeAnswers',
       'IntakeRecord',
       'IntakeRequest',
+      'Item',
       'Payment',
       'Refusal',
       'Routing',

@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   WorkflowIRSchema,
   buildGraph,
+  type EnqueuePolicy,
   type Predicate,
+  type QueuePolicy,
   type WorkflowIR,
 } from '../ir/index.js';
 import { LibManifestSchema, type LibManifest } from '../manifest/index.js';
@@ -31,6 +33,8 @@ import {
   v14DecisionBranches,
   v15GuardedProducers,
   v16TransactionExternalCalls,
+  v17QueuePartitionShape,
+  v18QueueLimits,
   type Rule,
   type RuleContext,
 } from './rules.js';
@@ -55,6 +59,12 @@ const EVENT_TRIGGER: NodeSpec = {
     topic: 'booking.requested',
     requesterEmailPath: 'customer.email',
   },
+};
+
+const QUEUE: NodeSpec = {
+  id: 'render_pages',
+  kind: 'queue',
+  config: { itemsPath: 'pages', queue: { name: 'render_pages' } },
 };
 
 const YES_NO_BRANCH: NodeSpec = {
@@ -481,6 +491,34 @@ describe('V07 handlers', () => {
     const ir = makeIR({ nodes: [YES_NO_BRANCH] });
 
     expect(check(v07Handlers, ir, manifestWith({}))).toEqual([]);
+  });
+
+  it('warns about a queue with no handler to run per item', () => {
+    // What a queue queues is a call to a handler,
+    // so a queue without one queues nothing.
+    const ir = makeIR({ nodes: [QUEUE] });
+    const found = check(v07Handlers, ir);
+
+    expect(codes(found)).toEqual(['V07']);
+    expect(found[0]?.nodeId).toBe('render_pages');
+  });
+
+  it('says nothing about a queue whose handler the code-behind has', () => {
+    const ir = makeIR({
+      nodes: [{ ...QUEUE, handler: { export: 'renderPage' } }],
+    });
+    const manifest = manifestWith({
+      functions: [
+        {
+          export: 'renderPage',
+          file: 'lib/renderPage.ts',
+          params: [{ name: 'page', type: 'Page' }],
+          returnType: 'Rendered',
+        },
+      ],
+    });
+
+    expect(check(v07Handlers, ir, manifest)).toEqual([]);
   });
 });
 
@@ -1530,13 +1568,304 @@ describe('V14 decision branches', () => {
   });
 });
 
+/**
+ * A queue node carrying only the limits and paths
+ * a case is about. Its queue is named after the
+ * block, which is what the canvas writes.
+ */
+function queueing(
+  id: string,
+  queue: Partial<QueuePolicy> = {},
+  enqueue: EnqueuePolicy = {},
+): NodeSpec {
+  return {
+    id,
+    kind: 'queue',
+    config: { itemsPath: 'pages', queue: { name: id, ...queue }, enqueue },
+  };
+}
+
+describe('V17 queue partition shape', () => {
+  it('reports a partitioned queue that never says which partition', () => {
+    const ir = makeIR({
+      nodes: [queueing('index_pages', { partitionConcurrency: 2 })],
+    });
+    const found = check(v17QueuePartitionShape, ir);
+
+    expect(codes(found)).toEqual(['V17']);
+    expect(found[0]?.severity).toBe('error');
+    expect(found[0]?.nodeId).toBe('index_pages');
+    expect(found[0]?.message).toBe(
+      '`index_pages` limits its queue per partition, but does not say ' +
+        'which partition an item belongs to. Set the partition path.',
+    );
+  });
+
+  it('counts any of the three per-partition limits as partitioning', () => {
+    // The same three the SDK counts, so a queue
+    // held back by any one of them needs the key.
+    const limits: Partial<QueuePolicy>[] = [
+      { partitionConcurrency: 2 },
+      { partitionWorkerConcurrency: 2 },
+      { partitionRateLimit: { limitPerPeriod: 10, periodSec: 60 } },
+    ];
+
+    for (const queue of limits) {
+      const ir = makeIR({ nodes: [queueing('index_pages', queue)] });
+
+      expect(codes(check(v17QueuePartitionShape, ir))).toEqual(['V17']);
+    }
+  });
+
+  it('reports deduplication on a partitioned queue', () => {
+    const ir = makeIR({
+      nodes: [
+        queueing(
+          'index_pages',
+          { partitionConcurrency: 2 },
+          { partitionPath: 'tenant', deduplicationPath: 'page.id' },
+        ),
+      ],
+    });
+    const found = check(v17QueuePartitionShape, ir);
+
+    expect(codes(found)).toEqual(['V17']);
+    expect(found[0]?.nodeId).toBe('index_pages');
+    expect(found[0]?.message).toBe(
+      '`index_pages` deduplicates items on a partitioned queue, which ' +
+        'DBOS does not support. Drop the deduplication path or the ' +
+        'partition limits.',
+    );
+  });
+
+  it('reports a partition key on a queue with no per-partition limit', () => {
+    const ir = makeIR({
+      nodes: [queueing('index_pages', {}, { partitionPath: 'tenant' })],
+    });
+    const found = check(v17QueuePartitionShape, ir);
+
+    expect(codes(found)).toEqual(['V17']);
+    expect(found[0]?.nodeId).toBe('index_pages');
+    expect(found[0]?.message).toBe(
+      '`index_pages` names a partition for each item, but its queue has ' +
+        'no per-partition limit, so the key would be ignored.',
+    );
+  });
+
+  it('says nothing about a partitioned queue that names the partition', () => {
+    const ir = makeIR({
+      nodes: [
+        queueing(
+          'index_pages',
+          { partitionConcurrency: 2 },
+          { partitionPath: 'tenant' },
+        ),
+      ],
+    });
+
+    expect(check(v17QueuePartitionShape, ir)).toEqual([]);
+  });
+
+  it('says nothing about a queue that deduplicates and does not partition', () => {
+    const ir = makeIR({
+      nodes: [queueing('index_pages', {}, { deduplicationPath: 'page.id' })],
+    });
+
+    expect(check(v17QueuePartitionShape, ir)).toEqual([]);
+  });
+});
+
+describe('V18 queue limits', () => {
+  it('reports a worker concurrency above the global one', () => {
+    const ir = makeIR({
+      nodes: [
+        queueing('index_pages', {
+          globalConcurrency: 4,
+          workerConcurrency: 8,
+        }),
+      ],
+    });
+    const found = check(v18QueueLimits, ir);
+
+    expect(codes(found)).toEqual(['V18']);
+    expect(found[0]?.severity).toBe('error');
+    expect(found[0]?.nodeId).toBe('index_pages');
+    expect(found[0]?.message).toBe(
+      '`index_pages` sets worker concurrency to 8 and global ' +
+        'concurrency to 4. Global concurrency must be at least worker ' +
+        'concurrency, or the app refuses to start.',
+    );
+  });
+
+  it('reports a partition concurrency above the global one', () => {
+    // The SDK checks this pair separately from the
+    // three ceilings on the partition worker, and
+    // refuses to register the queue over it.
+    const ir = makeIR({
+      nodes: [
+        queueing('index_pages', {
+          globalConcurrency: 4,
+          partitionConcurrency: 8,
+        }),
+      ],
+    });
+    const found = check(v18QueueLimits, ir);
+
+    expect(codes(found)).toEqual(['V18']);
+    expect(found[0]?.message).toBe(
+      '`index_pages` sets partition concurrency to 8 and global ' +
+        'concurrency to 4. Global concurrency must be at least partition ' +
+        'concurrency, or the app refuses to start.',
+    );
+  });
+
+  it('says nothing when the two are equal', () => {
+    const ir = makeIR({
+      nodes: [
+        queueing('index_pages', {
+          globalConcurrency: 4,
+          partitionConcurrency: 4,
+        }),
+      ],
+    });
+
+    expect(check(v18QueueLimits, ir)).toEqual([]);
+  });
+
+  it('reports a partition worker above the partition concurrency', () => {
+    const ir = makeIR({
+      nodes: [
+        queueing('index_pages', {
+          globalConcurrency: 16,
+          workerConcurrency: 6,
+          partitionConcurrency: 4,
+          partitionWorkerConcurrency: 8,
+        }),
+      ],
+    });
+    const found = check(v18QueueLimits, ir);
+
+    // The nearest ceiling, and only it: the
+    // worker concurrency is broken too, and
+    // saying so twice is one mistake counted
+    // again.
+    expect(codes(found)).toEqual(['V18']);
+    expect(found[0]?.message).toBe(
+      '`index_pages` sets partition worker concurrency to 8 and ' +
+        'partition concurrency to 4. Partition concurrency must be at ' +
+        'least partition worker concurrency, or the app refuses to start.',
+    );
+  });
+
+  it('reports a partition worker above the worker concurrency', () => {
+    const ir = makeIR({
+      nodes: [
+        queueing('index_pages', {
+          globalConcurrency: 16,
+          workerConcurrency: 4,
+          partitionWorkerConcurrency: 8,
+        }),
+      ],
+    });
+    const found = check(v18QueueLimits, ir);
+
+    expect(codes(found)).toEqual(['V18']);
+    expect(found[0]?.message).toBe(
+      '`index_pages` sets partition worker concurrency to 8 and worker ' +
+        'concurrency to 4. Worker concurrency must be at least partition ' +
+        'worker concurrency, or the app refuses to start.',
+    );
+  });
+
+  it('reports a partition worker above the global concurrency', () => {
+    const ir = makeIR({
+      nodes: [
+        queueing(
+          'index_pages',
+          { globalConcurrency: 4, partitionWorkerConcurrency: 8 },
+          { partitionPath: 'tenant' },
+        ),
+      ],
+    });
+    const found = check(v18QueueLimits, ir);
+
+    expect(codes(found)).toEqual(['V18']);
+    expect(found[0]?.message).toBe(
+      '`index_pages` sets partition worker concurrency to 8 and global ' +
+        'concurrency to 4. Global concurrency must be at least partition ' +
+        'worker concurrency, or the app refuses to start.',
+    );
+  });
+
+  it('reports two blocks registering one name differently, on the later', () => {
+    const ir = makeIR({
+      nodes: [
+        queueing('index_pages', { name: 'render', globalConcurrency: 4 }),
+        queueing('index_covers', { name: 'render', globalConcurrency: 8 }),
+      ],
+    });
+    const found = check(v18QueueLimits, ir);
+
+    expect(codes(found)).toEqual(['V18']);
+    expect(found[0]?.nodeId).toBe('index_covers');
+    expect(found[0]?.message).toBe(
+      '`index_covers` and `index_pages` both register `render`, with ' +
+        'different limits. One queue has one policy.',
+    );
+  });
+
+  it('says nothing when two blocks register one name the same way', () => {
+    // Written in a different order in each block,
+    // because the order a policy is spelled in is
+    // not part of the policy.
+    const ir = makeIR({
+      nodes: [
+        queueing('index_pages', {
+          name: 'render',
+          globalConcurrency: 4,
+          rateLimit: { limitPerPeriod: 10, periodSec: 60 },
+        }),
+        queueing('index_covers', {
+          name: 'render',
+          rateLimit: { periodSec: 60, limitPerPeriod: 10 },
+          globalConcurrency: 4,
+        }),
+      ],
+    });
+
+    expect(check(v18QueueLimits, ir)).toEqual([]);
+  });
+
+  it('says nothing about a queue whose limits agree', () => {
+    const ir = makeIR({
+      nodes: [
+        queueing(
+          'index_pages',
+          {
+            globalConcurrency: 16,
+            workerConcurrency: 8,
+            partitionConcurrency: 8,
+            partitionWorkerConcurrency: 4,
+          },
+          { partitionPath: 'tenant' },
+        ),
+      ],
+    });
+
+    expect(check(v18QueueLimits, ir)).toEqual([]);
+    expect(check(v17QueuePartitionShape, ir)).toEqual([]);
+  });
+});
+
 describe('the rule list', () => {
-  it('ends with the four rules that read what the scan recorded, in order', () => {
-    expect(RULES.slice(-4)).toEqual([
+  it('ends with the four rules that read the scan, then the two queue rules', () => {
+    expect(RULES.slice(-6)).toEqual([
       v12SerializableTypes,
       v13HandlerSignatures,
       v14DecisionBranches,
       v16TransactionExternalCalls,
+      v17QueuePartitionShape,
+      v18QueueLimits,
     ]);
   });
 

@@ -12,7 +12,13 @@ import {
   registrySpecifier,
   workflowFilePath,
 } from '../app-contract/index.js';
-import { WorkflowIRSchema, type WorkflowIR } from '../ir/index.js';
+import {
+  buildGraph,
+  reachableFrom,
+  WorkflowIRSchema,
+  type QueuePolicy,
+  type WorkflowIR,
+} from '../ir/index.js';
 import { loadOrScan, type LibManifest } from '../manifest/index.js';
 import {
   canCompile,
@@ -87,6 +93,23 @@ export function compileWorkflow(request: CompileRequest): CompileResult {
   }
 }
 
+/**
+ * One queue a workflow declares, as the registry
+ * hands it to the boot.
+ *
+ * The compiler's own bookkeeping, read off the IR
+ * rather than imported from the scaffold: the two
+ * write into the same project and agree through
+ * `app-contract/`, which is where the runtime's
+ * copy of this shape is named. A type-level test
+ * holds the two equal, so a field added to one
+ * side alone fails the build here.
+ */
+export type QueueEntry = {
+  name: string;
+  options: Omit<QueuePolicy, 'name'>;
+};
+
 /** One workflow, as the registry names it. */
 export type RegistryEntry = {
   name: string;
@@ -95,6 +118,9 @@ export type RegistryEntry = {
    *  once so the ingress can name them, once so
    *  the boot can apply their schedule. */
   scheduled: boolean;
+  /** Every queue this workflow declares, so the
+   *  registry knows whether to spread its list. */
+  queues: readonly QueueEntry[];
 };
 
 /**
@@ -120,6 +146,7 @@ export function compileRegistry(entries: readonly RegistryEntry[]): string {
     '// .mboss/workflows/.',
     '',
     importBlock([
+      runtimeImport('contract', 'QueueEntry'),
       runtimeImport('contract', 'ScheduleEntry'),
       runtimeImport('contract', 'WorkflowEntry'),
     ]).trimEnd(),
@@ -170,6 +197,24 @@ export function compileRegistry(entries: readonly RegistryEntry[]): string {
     lines.push('];');
   }
 
+  lines.push('');
+
+  const queued = ordered.filter((entry) => entry.queues.length > 0);
+
+  if (queued.length === 0) {
+    lines.push('export const queues: QueueEntry[] = [];');
+  } else {
+    lines.push('export const queues: QueueEntry[] = [');
+    for (const entry of queued) {
+      // A spread, not the entries themselves. The
+      // workflow module already declares them, and
+      // a limit restated here is a second place
+      // for it to be wrong.
+      lines.push(`  ...${camelCase(entry.name)}.queues,`);
+    }
+    lines.push('];');
+  }
+
   return `${lines.join('\n')}\n`;
 }
 
@@ -208,6 +253,7 @@ export async function compileProject(
     const failures: { name: string; result: CompileResult }[] = [];
     const sources = new Map<string, string>();
     const entries: RegistryEntry[] = [];
+    const registered = new Map<string, Registration>();
 
     for (const ir of documents) {
       const result = compileWorkflow({ ir, manifest, timezone: opts.timezone });
@@ -217,11 +263,24 @@ export async function compileProject(
         continue;
       }
 
+      const declared = declaredQueues(ir);
+      const clash = firstClash(registered, declared);
+
+      if (clash !== undefined) {
+        failures.push({ name: ir.name, result: clash });
+        continue;
+      }
+
+      for (const queue of declared) {
+        registered.set(queue.entry.name, { workflow: ir.name, ...queue });
+      }
+
       sources.set(result.path, result.source);
       entries.push({
         name: ir.name,
         title: ir.title ?? ir.name,
         scheduled: hasSchedule(ir),
+        queues: declared.map((queue) => queue.entry),
       });
     }
 
@@ -238,6 +297,90 @@ export async function compileProject(
 
     return { ok: true, written, removed };
   });
+}
+
+/** One queue, and the block that declared it. */
+type DeclaredQueue = { nodeId: string; entry: QueueEntry };
+
+/** The same, once a document has claimed it. */
+type Registration = DeclaredQueue & { workflow: string };
+
+/**
+ * Every reachable queue a workflow declares, one
+ * entry per distinct name. An island is a legal
+ * draft and the emitted module leaves it out too.
+ *
+ * Two blocks may fan out to the same queue, and
+ * the queue is still registered once. They cannot
+ * disagree about how: validation refuses a second
+ * block that names one queue with a different
+ * policy, so the first one seen is the policy.
+ */
+function declaredQueues(ir: WorkflowIR): DeclaredQueue[] {
+  const found = new Map<string, DeclaredQueue>();
+  const trigger = ir.nodes.find((node) => node.kind === 'trigger');
+  const reachable =
+    trigger === undefined
+      ? new Set<string>()
+      : reachableFrom(buildGraph(ir), trigger.id);
+
+  for (const node of ir.nodes) {
+    if (node.kind !== 'queue' || !reachable.has(node.id)) continue;
+
+    const { name, ...options } = node.config.queue;
+    if (!found.has(name)) {
+      found.set(name, { nodeId: node.id, entry: { name, options } });
+    }
+  }
+
+  return [...found.values()];
+}
+
+/**
+ * The first queue this document names that
+ * another document already named differently.
+ *
+ * One name is one row in the app's system
+ * database however many documents ask for it, so
+ * two policies for it are two answers to a
+ * question with one. Validation cannot see this —
+ * it is handed a document at a time — and the app
+ * would find out at boot, where the message is
+ * about a queue rather than about the workflows
+ * that disagree.
+ *
+ * Compared as JSON, as the rule inside one
+ * document compares it: both sides have been
+ * through the schema, which writes the fields in
+ * the order it declares them.
+ */
+function firstClash(
+  registered: ReadonlyMap<string, Registration>,
+  declared: readonly DeclaredQueue[],
+): Extract<CompileResult, { ok: false; reason: 'UNSUPPORTED' }> | undefined {
+  for (const queue of declared) {
+    const first = registered.get(queue.entry.name);
+
+    if (first === undefined) continue;
+    if (
+      JSON.stringify(first.entry.options) ===
+      JSON.stringify(queue.entry.options)
+    ) {
+      continue;
+    }
+
+    return {
+      ok: false,
+      reason: 'UNSUPPORTED',
+      nodeId: queue.nodeId,
+      message:
+        `\`${queue.nodeId}\` registers \`${queue.entry.name}\` with ` +
+        `different limits from \`${first.workflow}\`'s ` +
+        `\`${first.nodeId}\`. One queue has one policy.`,
+    };
+  }
+
+  return undefined;
 }
 
 /** Whether a workflow's trigger fires on a clock. */

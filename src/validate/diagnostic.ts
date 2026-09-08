@@ -37,6 +37,8 @@ export const DiagnosticCodeSchema = z.enum([
   'V14',
   'V15',
   'V16',
+  'V17',
+  'V18',
 ]);
 
 /**
@@ -98,6 +100,8 @@ const RULE_SEVERITY: Record<DiagnosticCode, DiagnosticSeverity> = {
   V14: 'error',
   V15: 'error',
   V16: 'error',
+  V17: 'error',
+  V18: 'error',
 };
 
 /**

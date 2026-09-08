@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { WorkflowIRSchema, type WorkflowIR } from '../ir/index.js';
+import { patternNamed } from '../patterns/index.js';
 import { readFixture } from '../test-support/fixtures.js';
 import {
   FOR_EACH,
@@ -13,7 +14,7 @@ import {
 import { makeIR, type NodeSpec } from '../test-support/ir.js';
 
 import { recordedNameLiterals } from './audit.js';
-import { nameLiteralShape } from './names.js';
+import { nameLiteralShape, queuedWorkflowName } from './names.js';
 import {
   matchTrace,
   replayBoundaries,
@@ -426,6 +427,57 @@ describe('replayBoundaries', () => {
     expect(offered.map((boundary) => boundary.functionId)).toEqual([1]);
     expect(unoffered).toEqual([{ functionId: 2, because: 'parked-here' }]);
   });
+
+  it('offers each item a queue block started, and no result row', () => {
+    // A fan-out across runs records two kinds of
+    // row: one per item it enqueued, which the
+    // block owns, and one per handle it waited on,
+    // which is the SDK's. Beginning again at an
+    // enqueue is a point a person can act on;
+    // beginning again at somebody else's result is
+    // not.
+    const ir = makeIR({
+      name: 'document_ingestion_queued',
+      nodes: [
+        {
+          id: 'index_pages',
+          kind: 'queue',
+          title: 'Index the pages',
+          config: { itemsPath: 'pages', queue: { name: 'document-index' } },
+        },
+      ],
+    });
+    const queued = queuedWorkflowName(
+      'index_pages',
+      'document_ingestion_queued',
+    );
+
+    const { offered, unoffered } = replayBoundaries(ir, [
+      row(1, queued),
+      row(2, queued),
+      row(3, 'DBOS.getResult'),
+      row(4, 'DBOS.getResult'),
+    ]);
+
+    expect(offered).toEqual([
+      {
+        functionId: 1,
+        nodeId: 'index_pages',
+        label: 'Index the pages · queued',
+        preferred: true,
+      },
+      {
+        functionId: 2,
+        nodeId: 'index_pages',
+        label: 'Index the pages · queued',
+        preferred: false,
+      },
+    ]);
+    expect(unoffered).toEqual([
+      { functionId: 3, because: 'sdk-owned' },
+      { functionId: 4, because: 'sdk-owned' },
+    ]);
+  });
 });
 
 /** A run that recorded these names, from id 0. */
@@ -564,6 +616,43 @@ const FAN_OUT = makeIR({
 });
 
 /**
+ * A queue block with work on either side of it.
+ *
+ * The other fan-out: instead of one row per item
+ * it starts a run per item and waits on every
+ * handle, so what it records is as many child
+ * starts as there were items and then as many
+ * results.
+ */
+const QUEUE_FAN_OUT = makeIR({
+  name: 'document_ingestion_queued',
+  nodes: [
+    {
+      id: 'document_arrived',
+      kind: 'trigger',
+      title: 'Document arrived',
+      config: { mode: 'event', topic: 'document.arrived' },
+    },
+    { id: 'parse_pages', title: 'Parse the pages' },
+    {
+      id: 'index_pages',
+      kind: 'queue',
+      title: 'Index the pages',
+      config: { itemsPath: 'pages', queue: { name: 'document-index' } },
+    },
+    { id: 'record_index', title: 'Record the index' },
+  ],
+  edges: [
+    { from: 'document_arrived', to: 'parse_pages' },
+    { from: 'parse_pages', to: 'index_pages' },
+    { from: 'index_pages', to: 'record_index' },
+  ],
+});
+
+/** What each item of that block is started as. */
+const QUEUED = queuedWorkflowName('index_pages', 'document_ingestion_queued');
+
+/**
  * One hand-written run per shape the emitter can
  * write.
  *
@@ -594,6 +683,25 @@ const RUNS: readonly (readonly [string, WorkflowIR, readonly string[]])[] = [
     ['confirm_each[0]', 'confirm_each[1]', 'confirm_each[2]'],
   ],
   ['a fan-out over none', FAN_OUT, ['wrap_up']],
+  [
+    'a queue block that started three runs',
+    QUEUE_FAN_OUT,
+    [
+      'parse_pages',
+      QUEUED,
+      QUEUED,
+      QUEUED,
+      'DBOS.getResult',
+      'DBOS.getResult',
+      'DBOS.getResult',
+      'record_index',
+    ],
+  ],
+  [
+    'a queue block over no items',
+    QUEUE_FAN_OUT,
+    ['parse_pages', 'record_index'],
+  ],
   [
     'a wait on the clock',
     irFixture('timer_wait'),
@@ -897,6 +1005,57 @@ describe('matchTrace', () => {
     });
   });
 
+  it('rejects a queue block that waited on more than it started', () => {
+    // Counting is the whole of what the two loops
+    // say: a run waits on exactly as many handles
+    // as it started runs, so a third result is a
+    // row no document could have written.
+    expect(
+      matches(QUEUE_FAN_OUT, [
+        'parse_pages',
+        QUEUED,
+        QUEUED,
+        'DBOS.getResult',
+        'DBOS.getResult',
+        'DBOS.getResult',
+        'record_index',
+      ]),
+    ).toEqual({
+      ok: false,
+      at: 5,
+      recorded: 'DBOS.getResult',
+      expected: ['record_index'],
+    });
+  });
+
+  it('rejects a result recorded before anything was started', () => {
+    // Every enqueue is written before the first
+    // handle is waited on, so a result standing
+    // where a start belongs is not a run of this
+    // document however many rows follow it.
+    expect(matches(QUEUE_FAN_OUT, ['parse_pages', 'DBOS.getResult'])).toEqual({
+      ok: false,
+      at: 1,
+      recorded: 'DBOS.getResult',
+      expected: [QUEUED, 'record_index'],
+    });
+  });
+
+  it('rejects a child that belongs to another workflow', () => {
+    // The workflow's own name is part of what its
+    // children register under, which is what stops
+    // a run of one document reading as a run of
+    // another that holds a block of the same id.
+    expect(
+      matches(QUEUE_FAN_OUT, ['parse_pages', 'index_pages.queued.other_flow']),
+    ).toEqual({
+      ok: false,
+      at: 1,
+      recorded: 'index_pages.queued.other_flow',
+      expected: [QUEUED, 'record_index'],
+    });
+  });
+
   it('rejects a run with a hole in it', () => {
     // A hole is a row the run has not written yet,
     // which means it is parked there — and nothing
@@ -922,6 +1081,57 @@ describe('matchTrace', () => {
   });
 });
 
+describe('traceShapes', () => {
+  it('names every kind of row a queue block writes', () => {
+    // A queue block is the one kind whose rows are
+    // not all its own: the starts belong to it,
+    // the results belong to the SDK, and the item
+    // step belongs to a run of the child — a
+    // ledger of its own, out of the same file. The
+    // sweep below compares this list against what
+    // the emitted file writes, so a shape missing
+    // here is a row nothing would account for.
+    expect(traceShapes(traceGrammar(QUEUE_FAN_OUT))).toEqual([
+      'DBOS.getResult',
+      'index_pages',
+      'index_pages.queued.#',
+      'parse_pages',
+      'record_index',
+    ]);
+  });
+});
+
+/** The library's own queue block, and the one
+ *  blessed document anywhere that deduplicates. */
+const QUEUED_PATTERN = 'document_ingestion_queued';
+
+/** A pattern's document, by the name of the
+ *  directory the library holds it in. */
+function patternDocument(name: string): WorkflowIR {
+  const pattern = patternNamed(name);
+  if (pattern === undefined) throw new Error(`no such pattern: ${name}`);
+
+  return pattern.document;
+}
+
+/**
+ * Every blessed file this sweep reads, under the
+ * golden directory that holds it.
+ *
+ * The compiler's own goldens are one directory and
+ * the ninth pattern's is another: the library is
+ * the one copy of a document that is a pattern, so
+ * its blessed output lives beside it rather than
+ * beside the fixtures. It is swept here all the
+ * same, because it is the only blessed file whose
+ * queue block deduplicates and the grammar has to
+ * account for the rows that shape writes.
+ */
+const SWEPT: readonly (readonly [string, string, WorkflowIR])[] = [
+  ...GOLDENS.map(([name, ir]) => ['compile', name, ir] as const),
+  ['patterns', QUEUED_PATTERN, patternDocument(QUEUED_PATTERN)] as const,
+];
+
 /**
  * What a document says it can record, held against
  * what the file compiled from it actually records.
@@ -944,9 +1154,9 @@ describe('matchTrace', () => {
  * made to agree.
  */
 describe('the shapes a document can record', () => {
-  for (const [name, ir] of GOLDENS) {
+  for (const [dir, name, ir] of SWEPT) {
     it(`are the shapes ${name} records`, () => {
-      const source = readFixture(`golden/compile/${name}.workflow.ts`);
+      const source = readFixture(`golden/${dir}/${name}.workflow.ts`);
       const written = recordedNameLiterals(source).map(nameLiteralShape);
 
       expect(traceShapes(traceGrammar(ir))).toEqual(

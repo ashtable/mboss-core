@@ -1,5 +1,7 @@
 import { ts } from 'ts-morph';
 
+import { ownerOf, queuedWorkflowName } from './names.js';
+
 /**
  * What has to be true of a generated workflow
  * file, checked by reading the file back.
@@ -307,16 +309,48 @@ export function stepProblems(source: string): AuditProblem[] {
  */
 export function recordedNameLiterals(source: string): string[] {
   const file = parse(source);
+  const registered = registeredNames(file);
   const found: string[] = [];
 
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node)) found.push(...rowsRecordedBy(file, node));
+    if (ts.isCallExpression(node)) {
+      found.push(...rowsRecordedBy(file, node, registered));
+    }
     ts.forEachChild(node, visit);
   };
 
   visit(file);
 
   return found;
+}
+
+/**
+ * What each registration in the file binds, as the
+ * name it registers under.
+ *
+ * Read once for the whole file because a run is
+ * started off a binding: the call site names the
+ * child as an identifier, and its registration is
+ * the only thing that says what row starting it
+ * writes.
+ */
+function registeredNames(file: ts.SourceFile): Map<string, string> {
+  const names = new Map<string, string>();
+
+  for (const call of callsTo(file, 'DBOS.registerWorkflow')) {
+    const declaration = call.parent;
+    if (!ts.isVariableDeclaration(declaration)) continue;
+
+    const [, config] = call.arguments;
+    if (config === undefined || !ts.isObjectLiteralExpression(config)) continue;
+
+    const name = propertyText(file, config, 'name');
+    if (name === undefined) continue;
+
+    names.set(declaration.name.getText(file), name);
+  }
+
+  return names;
 }
 
 /**
@@ -327,16 +361,21 @@ export function recordedNameLiterals(source: string): string[] {
  * both — its own row and the durable sleep that
  * times it out — which is why a file with no
  * `DBOS.sleep(` anywhere in it still records a
- * sleep. Starting a run writes the child's own
- * registered name, and the call site spells that
- * child as a binding rather than as the name it
- * registered under, so the only row a reader of
- * the text can name is the result the handle is
- * awaited for.
+ * sleep.
+ *
+ * Starting a run writes two rows: the child's own
+ * registered name, and the result the handle is
+ * later awaited for. The call site spells the
+ * child as a binding, so the first of those is
+ * only nameable when the same file registers it —
+ * which a compiled file always does, since the
+ * only runs it starts are the children of its own
+ * queue blocks.
  */
 function rowsRecordedBy(
   file: ts.SourceFile,
   call: ts.CallExpression,
+  registered: ReadonlyMap<string, string>,
 ): string[] {
   const callee = text(file, call.expression);
 
@@ -359,7 +398,13 @@ function rowsRecordedBy(
   // off the workflow itself, and both spellings
   // record the same pair of rows.
   if (calleeName(call.expression) === 'startWorkflow') {
-    return ['DBOS.getResult'];
+    const [target] = call.arguments;
+    const child =
+      target !== undefined && ts.isIdentifier(target)
+        ? registered.get(target.text)
+        : undefined;
+
+    return child === undefined ? ['DBOS.getResult'] : [child, 'DBOS.getResult'];
   }
 
   return [];
@@ -409,15 +454,22 @@ export function headerProblems(
 /**
  * The registration idiom, checked by parsing.
  *
- * A free function, registered once, at module
- * scope, under the snake_case name the ingress
- * route knows — and the undecorated function kept
- * to itself. Every one of those is a silent
- * failure if it slips: a class method breaks
- * idempotency for anything enqueuing by name, a
- * registration inside a function never runs, and a
- * second exported spelling is the one half the app
- * ends up calling.
+ * A free function, registered at module scope,
+ * under the snake_case name the ingress route
+ * knows — and the undecorated function kept to
+ * itself. Every one of those is a silent failure
+ * if it slips: a class method breaks idempotency
+ * for anything enqueuing by name, a registration
+ * inside a function never runs, and a second
+ * exported spelling is the one half the app ends
+ * up calling.
+ *
+ * Exactly one registration is the workflow's. A
+ * file may hold others, and they are the children
+ * its queue blocks enqueue: unexported, under the
+ * name the queued grammar gives them, so that
+ * nothing outside the file can start one off the
+ * queue it belongs on.
  */
 export function registrationProblems(
   source: string,
@@ -431,14 +483,22 @@ export function registrationProblems(
     return [{ line: 1, why: 'the file registers no workflow' }];
   }
 
-  if (calls.length > 1) {
-    found.push({
-      line: lineOf(file, calls[1] as ts.Node),
-      why: 'the file registers more than one workflow',
-    });
+  // The workflow is found by the name it
+  // registers under rather than by being first: a
+  // queue block's children are written above it.
+  // Falling back to the first is what leaves the
+  // messages below to say what is wrong with a
+  // file that registers under no name at all.
+  const call =
+    calls.find((other) => registeredAs(file, other) === workflowName) ??
+    (calls[0] as ts.CallExpression);
+
+  for (const other of calls) {
+    if (other === call) continue;
+
+    found.push(...queuedChildProblems(file, other, workflowName));
   }
 
-  const call = calls[0] as ts.CallExpression;
   const line = lineOf(file, call);
   const [target, config] = call.arguments;
   const options =
@@ -481,6 +541,234 @@ export function registrationProblems(
   }
 
   return found.sort((a, b) => a.line - b.line);
+}
+
+/**
+ * What a registration other than the workflow's
+ * own has to be: a queue block's child, bound to
+ * an unexported module-scope `const`, under the
+ * name this workflow's children take, with its
+ * undecorated function kept to itself.
+ *
+ * Anything else is a second workflow in a file
+ * that may hold exactly one, and says so with the
+ * message it always did.
+ */
+function queuedChildProblems(
+  file: ts.SourceFile,
+  call: ts.CallExpression,
+  workflowName: string,
+): AuditProblem[] {
+  const line = lineOf(file, call);
+  const statement = exportedDeclarationOf(call);
+  const name = registeredAs(file, call);
+
+  if (
+    statement === undefined ||
+    isExported(statement) ||
+    name === undefined ||
+    !isQueuedChildOf(name, workflowName)
+  ) {
+    return [{ line, why: 'the file registers more than one workflow' }];
+  }
+
+  const [target] = call.arguments;
+  const targetName =
+    target !== undefined && ts.isIdentifier(target) ? target.text : undefined;
+
+  if (targetName === undefined || !exportsName(file, targetName)) return [];
+
+  return [
+    {
+      line,
+      why: `${targetName} is exported as well as the registered workflow`,
+    },
+  ];
+}
+
+/**
+ * Whether a name is the one this workflow's queue
+ * blocks register their children under.
+ *
+ * Compared against the function that renders it,
+ * so a change to the grammar breaks the rule in
+ * step rather than leaving it quietly accepting
+ * the shape that used to be written.
+ */
+function isQueuedChildOf(name: string, workflowName: string): boolean {
+  const owner = ownerOf(name);
+
+  return (
+    owner.kind === 'node' &&
+    name === queuedWorkflowName(owner.nodeId, workflowName)
+  );
+}
+
+/**
+ * The same question asked without a workflow in
+ * hand, which is how the enqueue side has to ask
+ * it: a file names its own workflow once, and a
+ * rule reading only the starts never sees it.
+ */
+function isQueuedName(name: string): boolean {
+  const owner = ownerOf(name);
+
+  return (
+    owner.kind === 'node' &&
+    owner.segments.length === 1 &&
+    owner.segments[0]?.kind === 'queued'
+  );
+}
+
+/**
+ * What has to be true of the enqueue side of a
+ * queue block.
+ *
+ * Both halves fail quietly. A start with no queue
+ * name runs its child at once, outside every limit
+ * the queue was configured with, and the run
+ * succeeds. A result awaited from inside a step is
+ * an invalid transition the SDK only refuses on
+ * the day somebody's run reaches that step.
+ *
+ * That every start is a queue block's is a rule
+ * about compiled files, which is all this reads:
+ * the only runs one starts are the children of its
+ * own queue blocks, and a start off anything else
+ * records rows no block can be found from.
+ */
+export function queueProblems(source: string): AuditProblem[] {
+  const file = parse(source);
+  const children = queuedBindings(file);
+  const found: AuditProblem[] = [];
+
+  const visit = (node: ts.Node, inStep: boolean): void => {
+    const call = ts.isCallExpression(node) ? node : undefined;
+    const name = call ? calleeName(call.expression) : undefined;
+
+    if (call !== undefined && name === 'startWorkflow') {
+      found.push(...enqueueProblems(file, call, children));
+    }
+
+    if (inStep && name === 'getResult') {
+      found.push({
+        line: lineOf(file, node),
+        why: 'getResult() waits on a run and cannot be awaited inside a step',
+      });
+    }
+
+    if (
+      call !== undefined &&
+      STEP_CALLS.includes(text(file, call.expression))
+    ) {
+      call.arguments.forEach((argument, index) => {
+        visit(argument, index === 0 ? true : inStep);
+      });
+      visit(call.expression, inStep);
+      return;
+    }
+
+    ts.forEachChild(node, (child) => {
+      visit(child, inStep);
+    });
+  };
+
+  visit(file, false);
+
+  return found.sort((a, b) => a.line - b.line);
+}
+
+/**
+ * The two things one enqueue has to say: which
+ * queue holds the run, and which of the file's
+ * queued children it starts.
+ */
+function enqueueProblems(
+  file: ts.SourceFile,
+  call: ts.CallExpression,
+  children: ReadonlySet<string>,
+): AuditProblem[] {
+  const line = lineOf(file, call);
+  const [target, params] = call.arguments;
+  const options =
+    params !== undefined && ts.isObjectLiteralExpression(params)
+      ? params
+      : undefined;
+  const found: AuditProblem[] = [];
+
+  if (
+    options === undefined ||
+    propertyText(file, options, 'queueName') === undefined
+  ) {
+    found.push({
+      line,
+      why: 'the run is started with no queueName, so no queue holds it',
+    });
+  }
+
+  // Named by what was written rather than by a
+  // binding, because starting a run off something
+  // that is not one is a way this goes wrong.
+  const started = target === undefined ? undefined : text(file, target);
+
+  if (started === undefined || !children.has(started)) {
+    found.push({
+      line,
+      why: `${started ?? 'the run'} is not registered as a queue block's child`,
+    });
+  }
+
+  return found;
+}
+
+/**
+ * Every binding this file registers a queue
+ * block's child under.
+ */
+function queuedBindings(file: ts.SourceFile): ReadonlySet<string> {
+  const bindings = new Set<string>();
+
+  for (const call of callsTo(file, 'DBOS.registerWorkflow')) {
+    const declaration = call.parent;
+    if (!ts.isVariableDeclaration(declaration)) continue;
+
+    const name = registeredAs(file, call);
+    if (name === undefined || !isQueuedName(name)) continue;
+
+    bindings.add(declaration.name.getText(file));
+  }
+
+  return bindings;
+}
+
+/**
+ * The name a registration declares, as the string
+ * it registers under rather than as source text.
+ *
+ * `registeredNames` reads the same property and
+ * keeps the text, because what it feeds compares
+ * against literals the emitter wrote. The rules
+ * here compare against a name, so they want the
+ * name.
+ */
+function registeredAs(
+  file: ts.SourceFile,
+  call: ts.CallExpression,
+): string | undefined {
+  const [, config] = call.arguments;
+  if (config === undefined || !ts.isObjectLiteralExpression(config)) {
+    return undefined;
+  }
+
+  for (const property of config.properties) {
+    if (!ts.isPropertyAssignment(property)) continue;
+    if (property.name.getText(file) !== 'name') continue;
+    if (!ts.isStringLiteral(property.initializer)) continue;
+
+    return property.initializer.text;
+  }
+
+  return undefined;
 }
 
 function parse(source: string): ts.SourceFile {

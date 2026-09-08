@@ -210,7 +210,12 @@ describe('compileRegistry', () => {
 
   it('imports each workflow as a namespace and lists it once', () => {
     const source = compileRegistry([
-      { name: 'groom_booking', title: 'Groom booking', scheduled: false },
+      {
+        name: 'groom_booking',
+        title: 'Groom booking',
+        scheduled: false,
+        queues: [],
+      },
     ]);
 
     expect(source).toContain(
@@ -232,7 +237,12 @@ describe('compileRegistry', () => {
     // apply its schedule. `WorkflowEntry` carries
     // no schedule field: one authority per fact.
     const source = compileRegistry([
-      { name: 'nightly_sweep', title: 'Nightly sweep', scheduled: true },
+      {
+        name: 'nightly_sweep',
+        title: 'Nightly sweep',
+        scheduled: true,
+        queues: [],
+      },
     ]);
 
     expect(source).toContain("    name: 'nightly_sweep',");
@@ -245,10 +255,53 @@ describe('compileRegistry', () => {
     );
   });
 
+  it('declares an empty queue list when no workflow declares one', () => {
+    const source = compileRegistry([
+      {
+        name: 'groom_booking',
+        title: 'Groom booking',
+        scheduled: false,
+        queues: [],
+      },
+    ]);
+
+    expect(source).toContain('export const queues: QueueEntry[] = [];');
+  });
+
+  it('spreads the queues of every workflow that declares one', () => {
+    // A spread rather than the entries themselves:
+    // the workflow module already declares them,
+    // and restating a limit here is a second place
+    // for it to be wrong.
+    const source = compileRegistry([
+      {
+        name: 'index_pages',
+        title: 'Index pages',
+        scheduled: false,
+        queues: [{ name: 'index_pages_fan_out', options: {} }],
+      },
+      {
+        name: 'send_digests',
+        title: 'Send digests',
+        scheduled: false,
+        queues: [{ name: 'send_digests_fan_out', options: {} }],
+      },
+    ]);
+
+    expect(source).toContain(
+      [
+        'export const queues: QueueEntry[] = [',
+        '  ...indexPages.queues,',
+        '  ...sendDigests.queues,',
+        '];',
+      ].join('\n'),
+    );
+  });
+
   it('lists workflows in name order, whatever order it was given', () => {
     const source = compileRegistry([
-      { name: 'b_second', title: 'B', scheduled: false },
-      { name: 'a_first', title: 'A', scheduled: false },
+      { name: 'b_second', title: 'B', scheduled: false, queues: [] },
+      { name: 'a_first', title: 'A', scheduled: false, queues: [] },
     ]);
 
     // Checked present first: `indexOf` answers -1
@@ -452,6 +505,152 @@ describe('compileProject', () => {
     await expect(
       read(join(project.projectDir, 'src/workflows/index.ts'), 'utf8'),
     ).rejects.toThrow();
+  });
+
+  /**
+   * The same queue, named by two documents. Which
+   * limits it ends up with is not something either
+   * of them says.
+   */
+  function queueFlow(
+    name: string,
+    nodeId: string,
+    queue: Record<string, unknown>,
+  ): ReturnType<typeof makeIR> {
+    return makeIR({
+      name,
+      nodes: [
+        { ...TRIGGER, out: 'Batch', config: { mode: 'manual' } },
+        {
+          id: nodeId,
+          kind: 'queue',
+          title: 'Index each item',
+          handler: { export: 'indexItem' },
+          in: 'Batch',
+          out: 'Indexed',
+          config: {
+            itemsPath: 'items',
+            itemType: 'Item',
+            queue: { name: 'document-index', ...queue },
+          },
+        },
+      ],
+      edges: [{ from: 'booking_requested', to: nodeId, type: 'Batch' }],
+    });
+  }
+
+  async function put(
+    made: TestProject,
+    ir: ReturnType<typeof makeIR>,
+  ): Promise<void> {
+    await writeFile(
+      workflowFile(made.mbossDir, ir.name),
+      `${JSON.stringify(ir, null, 2)}\n`,
+      'utf8',
+    );
+  }
+
+  it('fails the later of two workflows that disagree about one queue', async () => {
+    // One name is one row in the app's system
+    // database. Two documents naming it with
+    // different limits do not get a queue each,
+    // and validation cannot see this: it is
+    // handed one document at a time.
+    project = await seed([]);
+    await put(
+      project,
+      queueFlow('a_flow', 'index_items', {
+        globalConcurrency: 8,
+      }),
+    );
+    await put(
+      project,
+      queueFlow('b_flow', 'index_pages', {
+        globalConcurrency: 2,
+      }),
+    );
+
+    const result = await compileProject(project.projectDir, {
+      timezone: TIMEZONE,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? [] : result.failures.map((f) => f.name)).toEqual([
+      'b_flow',
+    ]);
+
+    const failed = result.ok ? undefined : result.failures[0]?.result;
+    expect(failed).toMatchObject({
+      reason: 'UNSUPPORTED',
+      nodeId: 'index_pages',
+    });
+    expect(failed && 'message' in failed ? failed.message : '').toBe(
+      '`index_pages` registers `document-index` with different limits ' +
+        "from `a_flow`'s `index_items`. One queue has one policy.",
+    );
+
+    // Before anything is written: a project left
+    // half compiled is a project whose registry
+    // names files that are not there.
+    await expect(
+      read(join(project.projectDir, 'src/workflows/index.ts'), 'utf8'),
+    ).rejects.toThrow();
+  });
+
+  it('lets two workflows register one queue the same way', async () => {
+    project = await seed([]);
+    await put(
+      project,
+      queueFlow('a_flow', 'index_items', {
+        globalConcurrency: 8,
+      }),
+    );
+    await put(
+      project,
+      queueFlow('b_flow', 'index_pages', {
+        globalConcurrency: 8,
+      }),
+    );
+
+    const result = await compileProject(project.projectDir, {
+      timezone: TIMEZONE,
+    });
+
+    expect(result.ok ? [] : result.failures).toEqual([]);
+
+    // Both spread. Registering one queue twice
+    // with one policy is the same call twice.
+    const registry = await read(
+      join(project.projectDir, 'src/workflows/index.ts'),
+      'utf8',
+    );
+    expect(registry).toContain(
+      [
+        'export const queues: QueueEntry[] = [',
+        '  ...aFlow.queues,',
+        '  ...bFlow.queues,',
+        '];',
+      ].join('\n'),
+    );
+  });
+
+  it('leaves an island queue out of the registry', async () => {
+    project = await seed([]);
+    const flow = queueFlow('queue_island', 'index_items', {
+      globalConcurrency: 8,
+    });
+    await put(project, { ...flow, edges: [] });
+
+    const result = await compileProject(project.projectDir, {
+      timezone: TIMEZONE,
+    });
+
+    expect(result.ok ? [] : result.failures).toEqual([]);
+    const registry = await read(
+      join(project.projectDir, 'src/workflows/index.ts'),
+      'utf8',
+    );
+    expect(registry).toContain('export const queues: QueueEntry[] = [];');
   });
 
   it('writes an empty registry for a project with no workflows', async () => {

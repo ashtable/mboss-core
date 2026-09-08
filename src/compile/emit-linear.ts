@@ -5,6 +5,7 @@ import {
   sameGuard,
   type FormField,
   type Predicate,
+  type QueuePolicy,
   type Recipient,
   type Retry,
   type WaitSource,
@@ -24,6 +25,7 @@ import {
 } from './emit-control.js';
 import {
   call,
+  inlineValue,
   list,
   object,
   source,
@@ -47,6 +49,7 @@ import {
 import {
   LocalNames,
   camelCase,
+  queuedWorkflowName,
   stepNameLiteral,
   type StepSegment,
 } from './names.js';
@@ -131,6 +134,51 @@ const ARTIFACT_SECONDS = 7 * SECONDS_PER_DAY;
  *  and it has to measure its lines from there. */
 const BODY_INDENT = 2;
 
+/** One item of a queue block's list, as the
+ *  enqueue loop and the child both name it. */
+const ITEM = 'item';
+
+/** One run that block started, as the loop
+ *  waiting on them all names it. */
+const HANDLE = 'handle';
+
+/**
+ * What a queue is told to do with an item whose
+ * key a run already in flight holds.
+ *
+ * Returning that run rather than refusing is what
+ * makes deduplication a thing the author asked
+ * for: a refusal would fail the block, and the
+ * point of a key is that two items carrying one
+ * are one piece of work.
+ */
+const RETURN_EXISTING = 'return-existing';
+
+/**
+ * The workflow a queue block hands its items to,
+ * as the file that holds it names it.
+ *
+ * A child is a workflow rather than a step because
+ * a queue holds workflow executions: the queue's
+ * limits are what decide when one of them runs,
+ * and nothing can hold a step back.
+ */
+type QueuedChild = {
+  /** The undecorated function, kept to the file. */
+  fn: string;
+  /** What the registration binds, which is what
+   *  the enqueue starts. */
+  binding: string;
+  /** The name it registers under, which is the
+   *  name the parent records one row of per item
+   *  it enqueues. */
+  registered: string;
+  /** What one item is, as the parameter says. */
+  itemType: string;
+  /** What one item comes back as. */
+  valueType: string;
+};
+
 export type EmitRequest = {
   ir: WorkflowIR;
   manifest: LibManifest;
@@ -157,6 +205,10 @@ class Emitter {
 
   /** What the file calls each handler it imports. */
   readonly #bindings = new Map<string, string>();
+
+  /** The child each queue block enqueues, by the
+   *  block's id. */
+  readonly #children = new Map<string, QueuedChild>();
 
   /**
    * What each block's value is called, one frame
@@ -276,6 +328,7 @@ class Emitter {
     });
 
     const preamble = this.#preamble();
+    const queued = this.#emitQueuedWorkflows();
     this.#emitBounds();
     this.#emitPrelude();
     this.#emitRegion(this.#plan.region);
@@ -290,6 +343,7 @@ class Emitter {
       importBlock(this.#imports),
       '\n',
       preamble,
+      queued,
       open,
       body,
       body === '' ? '' : '}\n',
@@ -768,6 +822,10 @@ class Emitter {
         this.#emitEmail(node);
         break;
 
+      case 'queue':
+        this.#emitQueue(node);
+        break;
+
       default:
         throw new UnsupportedIR(
           `\`${node.id}\` is a kind this compiler does not emit yet.`,
@@ -839,7 +897,7 @@ class Emitter {
    * still in flight have checkpointed, so a retry
    * re-runs work that had already succeeded.
    */
-  #emitForEach(node: WorkflowNode): void {
+  #emitForEach(node: Exclude<WorkflowNode, { kind: 'queue' }>): void {
     const fanOut = node.forEach;
     if (fanOut === undefined) return;
 
@@ -861,8 +919,6 @@ class Emitter {
 
     const items = this.#locals.take('items');
     const settled = this.#locals.take('settled');
-    const failed = this.#locals.take('failed');
-    const local = this.#local(node);
     const itemType = this.#itemType(node);
     const size = fanOut.concurrency;
 
@@ -903,6 +959,23 @@ class Emitter {
     this.#body.close('}');
     this.#body.blank();
 
+    this.#emitSettledTail(node, settled);
+  }
+
+  /**
+   * What both fan-outs do once every item has
+   * settled: fail the run if any of them did, then
+   * bind the values of the ones that did not.
+   *
+   * The count is in the message because the block
+   * did part of its work — a reader who is told
+   * only that it failed would go looking for a
+   * run that did nothing.
+   */
+  #emitSettledTail(node: WorkflowNode, settled: string): void {
+    const failed = this.#locals.take('failed');
+    const local = this.#local(node);
+
     this.#body.line(
       `const ${failed} = ${settled}.filter((r) => r.status === 'rejected');`,
     );
@@ -919,6 +992,364 @@ class Emitter {
     this.#body.open(`const ${local} = ${settled}.flatMap((r) =>`);
     this.#body.line("r.status === 'fulfilled' ? [r.value] : [],");
     this.#body.close(');');
+  }
+
+  /**
+   * The other fan-out: a run of its own per item,
+   * handed to a queue that decides when each of
+   * them may go.
+   *
+   * The whole list is enqueued before any result
+   * is waited on, so the queue is holding every
+   * item at once and its limits are what let them
+   * through. Enqueuing one and waiting for it
+   * before offering the next would leave the queue
+   * with one row to choose from and every limit on
+   * it meaningless.
+   */
+  #emitQueue(node: WorkflowNode): void {
+    if (node.kind !== 'queue') return;
+
+    const root = this.#valueOf(node);
+    if (root === undefined) throw this.#unreachableValue(node);
+
+    const child = this.#queuedChild(node);
+    const items = this.#locals.take('items');
+    const handles = this.#locals.take('handles');
+    const settled = this.#locals.take('settled');
+
+    this.#want({
+      specifier: '@dbos-inc/dbos-sdk',
+      name: 'WorkflowHandle',
+      type: true,
+    });
+
+    this.#body.line(
+      `const ${items} = ${pathExpression(root, node.config.itemsPath)};`,
+    );
+    this.#body.line(
+      `const ${handles}: WorkflowHandle<${child.valueType}>[] = [];`,
+    );
+
+    if (node.config.enqueue.deduplicationPath !== undefined) {
+      this.#body.comment(
+        'An item whose key a run already in flight holds joins that ' +
+          'run instead of starting a second, so its place in the list ' +
+          'below holds the result of that run.',
+      );
+    }
+
+    this.#body.open(`for (const ${ITEM} of ${items}) {`);
+    this.#writeEnqueue(node, child, handles);
+    this.#body.close('}');
+    this.#body.blank();
+
+    this.#body.line(
+      `const ${settled}: PromiseSettledResult<${child.valueType}>[] = [];`,
+    );
+    this.#body.comment(
+      'One at a time rather than through allSettled: one poll loop ' +
+        'starts them all, waiting in the order they were enqueued ' +
+        'numbers the rows the same way on every run, and the queue ' +
+        'holds them back either way.',
+    );
+    this.#writeCollect(handles, settled);
+    this.#body.blank();
+
+    this.#emitSettledTail(node, settled);
+  }
+
+  /**
+   * One item, offered to the queue.
+   *
+   * On one line where prettier would keep it
+   * there, and broken open where it would not:
+   * `push` takes a call rather than an object, so
+   * nothing hugs onto it and the whole argument
+   * moves in a line of its own.
+   */
+  #writeEnqueue(
+    node: Extract<WorkflowNode, { kind: 'queue' }>,
+    child: QueuedChild,
+    handles: string,
+  ): void {
+    const params = this.#enqueueParams(node);
+    const start = `await DBOS.startWorkflow(${child.binding}, `;
+    const one = `${handles}.push(${start}${inlineValue(params)})(${ITEM}));`;
+
+    if (this.#body.fits(one)) {
+      this.#body.line(one);
+      return;
+    }
+
+    this.#body.open(`${handles}.push(`);
+    writeValue(this.#body, start, params, `)(${ITEM}),`);
+    this.#body.close(');');
+  }
+
+  /**
+   * What one enqueue says: which queue holds the
+   * run, and what the queue is to make of the item
+   * — the key it is ordered by, how far up the
+   * list it goes, how long it waits first.
+   *
+   * An empty `enqueueOptions` is left out
+   * altogether. It would say nothing and still
+   * have to be read.
+   */
+  #enqueueParams(node: Extract<WorkflowNode, { kind: 'queue' }>): Emitted {
+    const enqueue = node.config.enqueue;
+    const options: EmittedEntry[] = [];
+
+    if (enqueue.deduplicationPath !== undefined) {
+      options.push({
+        key: 'deduplicationID',
+        value: this.#queueKey(node, enqueue.deduplicationPath),
+      });
+    }
+    if (enqueue.partitionPath !== undefined) {
+      options.push({
+        key: 'queuePartitionKey',
+        value: this.#queueKey(node, enqueue.partitionPath),
+      });
+    }
+    if (enqueue.priority !== undefined) {
+      options.push({ key: 'priority', value: source(`${enqueue.priority}`) });
+    }
+    if (enqueue.delaySeconds !== undefined) {
+      options.push({
+        key: 'delaySeconds',
+        value: source(`${enqueue.delaySeconds}`),
+      });
+    }
+
+    return object([
+      { key: 'queueName', value: text(node.config.queue.name) },
+      ...(options.length === 0
+        ? []
+        : [{ key: 'enqueueOptions', value: object(options) }]),
+      // Beside the enqueue options rather than
+      // inside them, which is where the SDK takes
+      // it, and only where there is a key for two
+      // items to collide on.
+      ...(enqueue.deduplicationPath === undefined
+        ? []
+        : [{ key: 'duplicationPolicy', value: text(RETURN_EXISTING) }]),
+    ]);
+  }
+
+  /**
+   * The value one item is ordered by, read off the
+   * item at the path the block named.
+   *
+   * Through the runtime rather than inline,
+   * because a key that is missing or empty is a
+   * row the queue will never dispatch, and the
+   * check that says so belongs where every
+   * generated file can reach it.
+   */
+  #queueKey(
+    node: Extract<WorkflowNode, { kind: 'queue' }>,
+    path: string,
+  ): Emitted {
+    this.#want(runtimeImport('queues', 'queueKey'));
+
+    return call(
+      'queueKey',
+      text(node.id),
+      text(path),
+      source(pathExpression(ITEM, path)),
+    );
+  }
+
+  /** Every started run, waited on in the order
+   *  they were started. */
+  #writeCollect(handles: string, settled: string): void {
+    this.#body.open(`for (const ${HANDLE} of ${handles}) {`);
+    this.#body.open('try {');
+    writeValue(
+      this.#body,
+      `${settled}.push(`,
+      object([
+        { key: 'status', value: text('fulfilled') },
+        { key: 'value', value: source(`await ${HANDLE}.getResult()`) },
+      ]),
+      ');',
+    );
+    this.#body.next('} catch (reason) {');
+    writeValue(
+      this.#body,
+      `${settled}.push(`,
+      object([{ key: 'status', value: text('rejected') }, { key: 'reason' }]),
+      ');',
+    );
+    this.#body.close('}');
+    this.#body.close('}');
+  }
+
+  /**
+   * The workflow each queue block hands its items
+   * to, written above the workflow that enqueues
+   * them.
+   *
+   * Neither exported nor in the registry: the
+   * block it belongs to is the only thing that may
+   * start one, and a run started off the queue
+   * would run outside every limit the queue
+   * carries.
+   */
+  #emitQueuedWorkflows(): string {
+    const writer = new SourceWriter();
+
+    for (const node of this.#plan.chain) {
+      if (node.kind !== 'queue') continue;
+
+      const child = this.#queuedChild(node);
+
+      this.#writeChildSignature(writer, child);
+      expandedCall(
+        writer,
+        'return await DBOS.runStep',
+        `async () => ${this.#handlerCall(node, ITEM)}`,
+        [
+          // No round segment, whatever the block
+          // sits inside: each item is a run of its
+          // own and every one of their ledgers
+          // starts from nothing.
+          `name: ${stepNameLiteral(node.id, [])},`,
+          ...retryOptions(node.retry),
+        ],
+      );
+      writer.close('}');
+      writer.blank();
+
+      this.#writeChildRegistration(writer, child);
+      writer.blank();
+    }
+
+    const text = writer.toString();
+    return text === '' ? '' : `${text}\n`;
+  }
+
+  #writeChildSignature(writer: SourceWriter, child: QueuedChild): void {
+    const line =
+      `async function ${child.fn}(${ITEM}: ${child.itemType}): ` +
+      `Promise<${child.valueType}> {`;
+
+    if (writer.fits(line)) {
+      writer.open(line);
+      return;
+    }
+
+    writer.line(`async function ${child.fn}(`);
+    writer.line(`  ${ITEM}: ${child.itemType},`);
+    writer.open(`): Promise<${child.valueType}> {`);
+  }
+
+  #writeChildRegistration(writer: SourceWriter, child: QueuedChild): void {
+    const name = literal(child.registered);
+    const one =
+      `const ${child.binding} = DBOS.registerWorkflow(${child.fn}, ` +
+      `{ name: ${name} });`;
+
+    if (writer.fits(one)) {
+      writer.line(one);
+      return;
+    }
+
+    expandedCall(
+      writer,
+      `const ${child.binding} = DBOS.registerWorkflow`,
+      child.fn,
+      [`name: ${name},`],
+    );
+  }
+
+  /** What the file calls one block's child, taken
+   *  once and answered to twice: the enqueue names
+   *  it, and so does the registration above it. */
+  #queuedChild(node: Extract<WorkflowNode, { kind: 'queue' }>): QueuedChild {
+    const existing = this.#children.get(node.id);
+    if (existing !== undefined) return existing;
+
+    const binding = this.#locals.take(`${camelCase(node.id)}Queued`);
+    const child: QueuedChild = {
+      fn: this.#locals.take(`${binding}Fn`),
+      binding,
+      registered: queuedWorkflowName(node.id, this.#ir.name),
+      itemType: this.#queuedItemType(node),
+      valueType: this.#valueType(node),
+    };
+
+    this.#children.set(node.id, child);
+
+    return child;
+  }
+
+  /**
+   * What the child declares its one parameter to
+   * be.
+   *
+   * The block says what one item is; the list it
+   * was read out of says nothing a type can be
+   * taken from. Where the handler takes an item
+   * and the block never said what one is, the
+   * document is refused rather than compiled into
+   * a child that hands `unknown` to a function
+   * expecting something.
+   */
+  #queuedItemType(node: Extract<WorkflowNode, { kind: 'queue' }>): string {
+    const declared = node.config.itemType;
+
+    if (declared !== undefined) {
+      this.#want(libTypeImport(this.#manifest, declared));
+      return declared;
+    }
+
+    const handler = node.handler;
+    const takes = this.#functionFor(node)?.params[0]?.type;
+
+    if (handler !== undefined && takes !== undefined) {
+      throw new UnsupportedIR(
+        `\`${node.id}\` hands each item to \`${handler.export}\`, which ` +
+          `takes a \`${takes}\`, but the block does not say what one ` +
+          `item is. Set its item type.`,
+        node.id,
+      );
+    }
+
+    return 'unknown';
+  }
+
+  /**
+   * Every queue this workflow declares, one entry
+   * per distinct name.
+   *
+   * Two blocks may fan out to the same queue and
+   * it is still one queue. They cannot disagree
+   * about how: validation refuses a second block
+   * naming one queue with different limits, so the
+   * first one seen is the policy.
+   */
+  #queueEntries(): Emitted[] {
+    const found = new Map<string, Emitted>();
+
+    for (const node of this.#plan.chain) {
+      if (node.kind !== 'queue') continue;
+
+      const { name, ...options } = node.config.queue;
+      if (found.has(name)) continue;
+
+      found.set(
+        name,
+        object([
+          { key: 'name', value: text(name) },
+          { key: 'options', value: queueOptions(options) },
+        ]),
+      );
+    }
+
+    return [...found.values()];
   }
 
   /**
@@ -1827,6 +2258,23 @@ class Emitter {
       ';',
     );
 
+    // Only where there is one. A workflow with no
+    // queue block declares nothing, and the
+    // registry spreads the arrays of the workflows
+    // that do.
+    const queues = this.#queueEntries();
+
+    if (queues.length > 0) {
+      this.#want(runtimeImport('contract', 'QueueEntry'));
+      writer.blank();
+      writeValue(
+        writer,
+        'export const queues: QueueEntry[] = ',
+        list(queues),
+        ';',
+      );
+    }
+
     return writer.toString();
   }
 
@@ -2063,6 +2511,51 @@ const FORM_TOPIC = 'mboss.form';
 /** Which table a message arrives on. */
 function topicOf(waitOn: WaitSource): string {
   return waitOn.kind === 'event' ? waitOn.topic : FORM_TOPIC;
+}
+
+/**
+ * A queue's limits, as the boot registers them.
+ *
+ * Written in one fixed order rather than the
+ * order the document happens to hold them in: a
+ * generated file is compared against the last one
+ * byte for byte, and a key that moved because
+ * somebody re-saved a document is a diff nobody
+ * can read.
+ */
+function queueOptions(options: Omit<QueuePolicy, 'name'>): Emitted {
+  const entries: EmittedEntry[] = [];
+
+  const number = (key: keyof typeof options, value: number | undefined) => {
+    if (value !== undefined) entries.push({ key, value: source(`${value}`) });
+  };
+  const limit = (
+    key: keyof typeof options,
+    value: NonNullable<QueuePolicy['rateLimit']>,
+  ) => {
+    entries.push({
+      key,
+      value: object([
+        { key: 'limitPerPeriod', value: source(`${value.limitPerPeriod}`) },
+        { key: 'periodSec', value: source(`${value.periodSec}`) },
+      ]),
+    });
+  };
+
+  number('globalConcurrency', options.globalConcurrency);
+  number('workerConcurrency', options.workerConcurrency);
+  if (options.rateLimit !== undefined) limit('rateLimit', options.rateLimit);
+  number('partitionConcurrency', options.partitionConcurrency);
+  number('partitionWorkerConcurrency', options.partitionWorkerConcurrency);
+  if (options.partitionRateLimit !== undefined) {
+    limit('partitionRateLimit', options.partitionRateLimit);
+  }
+  number('minPollingIntervalMs', options.minPollingIntervalMs);
+  if (options.onConflict !== undefined) {
+    entries.push({ key: 'onConflict', value: text(options.onConflict) });
+  }
+
+  return object(entries);
 }
 
 /** Whether a step is allowed more than one go. */

@@ -58,3 +58,26 @@ export interface Booking {
   service: string;
   startsAt: string;
 }
+
+/** A batch of items handed to one indexing run. */
+export interface Batch {
+  batchId: string;
+  items: Item[];
+}
+
+/**
+ * One item of a batch. `customerId` is what the
+ * queue partitions on, so renaming it invalidates
+ * the IR fixture that reads it.
+ */
+export interface Item {
+  itemId: string;
+  customerId: string;
+  body: string;
+}
+
+/** What indexing one item produced. */
+export interface Indexed {
+  itemId: string;
+  terms: number;
+}

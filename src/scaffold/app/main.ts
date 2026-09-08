@@ -4,12 +4,13 @@
 import { DBOS } from '@dbos-inc/dbos-sdk';
 import { PrismaDataSource } from '@dbos-inc/prisma-datasource';
 
-import { schedules, workflows } from '../workflows/index.js';
+import { queues, schedules, workflows } from '../workflows/index.js';
 
 import { artifactStoreFromEnv } from './artifacts.js';
 import { buildApp } from './app.js';
 import { prismaClient } from './db.js';
 import { readEnv } from './env.js';
+import { registerQueues } from './queues.js';
 import { applyAndPruneSchedules } from './schedules.js';
 import { parseKeyRing } from './signed-links.js';
 import { findWaitCorrelation, parkOf } from './waits.js';
@@ -46,9 +47,15 @@ import { findWaitCorrelation, parkOf } from './waits.js';
  * launch, against an executor that is not ready,
  * which fails less legibly than the throw.
  *
- * No queue is registered. Fan-out in a generated
- * workflow is a chunked `Promise.allSettled`
- * inside the run, so there is no queue to declare.
+ * The queues are registered between launch and the
+ * schedules, and both sides of that are load
+ * bearing. Registering one waits for the launch
+ * that owns the connection it writes through, and
+ * a scheduled run may enqueue the moment its
+ * schedule is applied. A row enqueued before its
+ * queue exists waits rather than failing, so the
+ * wrong order here is a run that sits still with
+ * nothing said about why.
  */
 
 /**
@@ -85,6 +92,7 @@ async function main(): Promise<void> {
 
   await PrismaDataSource.initializeDBOSSchema(prismaClient());
   await DBOS.launch();
+  await registerQueues(queues);
   await applyAndPruneSchedules(schedules);
 
   const app = buildApp({

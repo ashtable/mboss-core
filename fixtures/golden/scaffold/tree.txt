@@ -47,6 +47,7 @@ src/app/multipart.ts
 src/app/pages/approval.ts
 src/app/pages/form.ts
 src/app/pages/shell.ts
+src/app/queues.ts
 src/app/routes/artifact.ts
 src/app/routes/events.ts
 src/app/routes/form.ts

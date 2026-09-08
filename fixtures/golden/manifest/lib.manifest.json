@@ -145,6 +145,19 @@
       "returnType": "boolean"
     },
     {
+      "doc": "Indexes one item of a batch. Takes a single item rather than the batch, which is what a queue block needs: each item is a run of its own and is handed the item it is for.",
+      "export": "indexItem",
+      "file": "lib/indexItem.ts",
+      "line": 11,
+      "params": [
+        {
+          "name": "item",
+          "type": "Item"
+        }
+      ],
+      "returnType": "Indexed"
+    },
+    {
       "export": "recordIntake",
       "file": "lib/intake.ts",
       "line": 34,
@@ -218,16 +231,19 @@
     }
   ],
   "nonSerializable": [],
-  "sourceHash": "3bfa8036f55a43b83ed3852eb79e6e2faa320ff642f7e406f8050c72a757b174",
+  "sourceHash": "09f043d5040ae45e45c372d94f91408ffc163cb8e62e3e3a89df581a5a29f5a9",
   "typeSources": {
+    "Batch": "lib/types.ts",
     "Booking": "lib/types.ts",
     "BookingReq": "lib/types.ts",
     "ChatPrompt": "lib/types.ts",
     "ChatReply": "lib/types.ts",
     "ExpenseClaim": "lib/expense.ts",
+    "Indexed": "lib/types.ts",
     "IntakeAnswers": "lib/intake.ts",
     "IntakeRecord": "lib/intake.ts",
     "IntakeRequest": "lib/intake.ts",
+    "Item": "lib/types.ts",
     "Payment": "lib/expense.ts",
     "Refusal": "lib/expense.ts",
     "Routing": "lib/expense.ts",
@@ -235,14 +251,17 @@
     "WebhookEvent": "lib/types.ts"
   },
   "types": [
+    "Batch",
     "Booking",
     "BookingReq",
     "ChatPrompt",
     "ChatReply",
     "ExpenseClaim",
+    "Indexed",
     "IntakeAnswers",
     "IntakeRecord",
     "IntakeRequest",
+    "Item",
     "Payment",
     "Refusal",
     "Routing",

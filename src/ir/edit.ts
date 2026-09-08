@@ -394,6 +394,13 @@ export function starterNode(
           attach: { type: 'none' },
         },
       };
+
+    case 'queue':
+      return {
+        ...base,
+        kind,
+        config: { itemsPath: '', queue: { name: id }, enqueue: {} },
+      };
   }
 }
 
