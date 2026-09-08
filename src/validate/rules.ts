@@ -7,6 +7,7 @@ import {
   sameGuard,
   type BranchCase,
   type NodeKind,
+  type QueuePolicy,
   type WorkflowGraph,
   type WorkflowIR,
   type WorkflowNode,
@@ -1176,6 +1177,235 @@ function externalCallMessage(
   );
 }
 
+type QueueNode = Extract<WorkflowNode, { kind: 'queue' }>;
+
+function queuesOf(ir: WorkflowIR): QueueNode[] {
+  return ir.nodes.filter((node): node is QueueNode => node.kind === 'queue');
+}
+
+/**
+ * Whether the queue holds itself back per
+ * partition, which is the same three fields the
+ * SDK reads to decide the question.
+ */
+function isPartitioned(queue: QueuePolicy): boolean {
+  return (
+    queue.partitionConcurrency !== undefined ||
+    queue.partitionWorkerConcurrency !== undefined ||
+    queue.partitionRateLimit !== undefined
+  );
+}
+
+/**
+ * A queue's partitioning holds together, or it
+ * quietly does nothing at all.
+ *
+ * For a database-backed queue the SDK's
+ * enqueue-time checks on the partition key never
+ * run — they are gated on an in-memory registry
+ * that `registerQueue` deliberately bypasses — and
+ * a null-keyed row on a partitioned queue is never
+ * dispatched by either poll path: it sits
+ * `ENQUEUED` forever with no error. This rule,
+ * pure over the document, is therefore the whole
+ * guardrail.
+ *
+ * Deduplicating on a partitioned queue is the one
+ * of the three the SDK does refuse, and it refuses
+ * it mid-run with the item in hand. Saying so here
+ * is what makes it a thing to fix rather than a
+ * run that fails.
+ */
+export function v17QueuePartitionShape(ctx: RuleContext): Diagnostic[] {
+  const found: Diagnostic[] = [];
+
+  for (const node of queuesOf(ctx.ir)) {
+    const { queue, enqueue } = node.config;
+    const partitioned = isPartitioned(queue);
+
+    if (partitioned && enqueue.partitionPath === undefined) {
+      found.push(
+        diagnostic(
+          'V17',
+          `\`${node.id}\` limits its queue per partition, but does ` +
+            `not say which partition an item belongs to. Set the ` +
+            `partition path.`,
+          { nodeId: node.id },
+        ),
+      );
+    }
+
+    if (partitioned && enqueue.deduplicationPath !== undefined) {
+      found.push(
+        diagnostic(
+          'V17',
+          `\`${node.id}\` deduplicates items on a partitioned queue, ` +
+            `which DBOS does not support. Drop the deduplication path ` +
+            `or the partition limits.`,
+          { nodeId: node.id },
+        ),
+      );
+    }
+
+    if (!partitioned && enqueue.partitionPath !== undefined) {
+      found.push(
+        diagnostic(
+          'V17',
+          `\`${node.id}\` names a partition for each item, but its ` +
+            `queue has no per-partition limit, so the key would be ` +
+            `ignored.`,
+          { nodeId: node.id },
+        ),
+      );
+    }
+  }
+
+  return found;
+}
+
+/**
+ * The four limits a queue can be held back by,
+ * named the way the Inspector names them. Never a
+ * bare "concurrency": three of the four would
+ * answer to it.
+ */
+type LimitField =
+  | 'globalConcurrency'
+  | 'workerConcurrency'
+  | 'partitionConcurrency'
+  | 'partitionWorkerConcurrency';
+
+const LIMIT_WORDS: Record<LimitField, string> = {
+  globalConcurrency: 'global concurrency',
+  workerConcurrency: 'worker concurrency',
+  partitionConcurrency: 'partition concurrency',
+  partitionWorkerConcurrency: 'partition worker concurrency',
+};
+
+/**
+ * Each limit and the limits it may not stand
+ * above, in the order the app checks them — so the
+ * one finding names the same ceiling the app would
+ * have thrown about.
+ */
+const CEILINGS: readonly (readonly [LimitField, readonly LimitField[]])[] = [
+  ['workerConcurrency', ['globalConcurrency']],
+  ['partitionConcurrency', ['globalConcurrency']],
+  [
+    'partitionWorkerConcurrency',
+    ['partitionConcurrency', 'workerConcurrency', 'globalConcurrency'],
+  ],
+];
+
+/**
+ * A queue's limits in an order the app will
+ * accept, and one policy per queue name.
+ *
+ * Each of these orderings is checked when the
+ * queue is registered and refused there, so the
+ * app throws on boot rather than starting with a
+ * limit it cannot honour — a document that gets
+ * one wrong costs a `docker compose up` to find
+ * out. One
+ * name is one queue in the app's system database,
+ * so two blocks naming it with different limits do
+ * not get a queue each: they get one queue, and
+ * which of the two policies it ends up with is not
+ * something the document says.
+ */
+export function v18QueueLimits(ctx: RuleContext): Diagnostic[] {
+  const found: Diagnostic[] = [];
+  const registeredBy = new Map<string, QueueNode>();
+
+  for (const node of queuesOf(ctx.ir)) {
+    const queue = node.config.queue;
+
+    for (const [field, ceilings] of CEILINGS) {
+      const value = queue[field];
+      if (value === undefined) continue;
+
+      for (const ceiling of ceilings) {
+        const bound = queue[ceiling];
+        if (bound === undefined || bound >= value) continue;
+
+        found.push(
+          diagnostic('V18', overLimit(node.id, field, value, ceiling, bound), {
+            nodeId: node.id,
+          }),
+        );
+
+        // The nearest ceiling and no other: a
+        // wider one broken by the same number is
+        // one mistake counted twice.
+        break;
+      }
+    }
+
+    const first = registeredBy.get(queue.name);
+
+    if (first === undefined) {
+      registeredBy.set(queue.name, node);
+      continue;
+    }
+
+    if (!samePolicy(first.config.queue, queue)) {
+      found.push(
+        diagnostic(
+          'V18',
+          `\`${node.id}\` and \`${first.id}\` both register ` +
+            `\`${queue.name}\`, with different limits. One queue has ` +
+            `one policy.`,
+          { nodeId: node.id },
+        ),
+      );
+    }
+  }
+
+  return found;
+}
+
+/**
+ * Whether two blocks register one queue the same
+ * way.
+ *
+ * Compared as JSON rather than field by field: the
+ * document has been through the schema, which
+ * writes every field in the order it declares
+ * them, so two spellings of one policy compare
+ * equal — and a limit added to the policy is
+ * compared without anybody having to remember to
+ * come back here.
+ */
+function samePolicy(a: QueuePolicy, b: QueuePolicy): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * What to tell an author about two limits in the
+ * wrong order.
+ *
+ * The ceiling opens the second sentence because it
+ * is the number the app compares against, and the
+ * one an author who wanted both is most likely to
+ * have meant to raise.
+ */
+function overLimit(
+  nodeId: string,
+  field: LimitField,
+  value: number,
+  ceiling: LimitField,
+  bound: number,
+): string {
+  const words = LIMIT_WORDS[ceiling];
+  const leading = `${words.slice(0, 1).toUpperCase()}${words.slice(1)}`;
+
+  return (
+    `\`${nodeId}\` sets ${LIMIT_WORDS[field]} to ${value} and ` +
+    `${words} to ${bound}. ${leading} must be at least ` +
+    `${LIMIT_WORDS[field]}, or the app refuses to start.`
+  );
+}
+
 /**
  * Every rule, in the order findings come back in,
  * so a document with several problems reports them
@@ -1183,11 +1413,14 @@ function externalCallMessage(
  *
  * Not code order: `v15GuardedProducers` runs
  * eleventh, so the four rules that read what the
- * scan recorded stay together at the end — those
- * are the ones that say nothing at all without a
- * manifest, and a document checked without one
- * should lose findings off the bottom of the list
- * rather than out of the middle.
+ * scan recorded stay together — those are the ones
+ * that say nothing at all without a manifest, and
+ * a document checked without one should lose them
+ * in one block rather than one at a time. The two
+ * queue rules read only the document and sit after
+ * that block because a new rule goes last: a
+ * document already being checked keeps the order
+ * its findings came back in.
  *
  * A rule written and not added here is a rule that
  * never runs. `rules.test.ts` holds the two
@@ -1210,4 +1443,6 @@ export const RULES: readonly Rule[] = [
   v13HandlerSignatures,
   v14DecisionBranches,
   v16TransactionExternalCalls,
+  v17QueuePartitionShape,
+  v18QueueLimits,
 ];
