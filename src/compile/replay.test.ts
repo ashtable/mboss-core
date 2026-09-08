@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { WorkflowIRSchema, type WorkflowIR } from '../ir/index.js';
+import { patternNamed } from '../patterns/index.js';
 import { readFixture } from '../test-support/fixtures.js';
 import {
   FOR_EACH,
@@ -1100,6 +1101,37 @@ describe('traceShapes', () => {
   });
 });
 
+/** The library's own queue block, and the one
+ *  blessed document anywhere that deduplicates. */
+const QUEUED_PATTERN = 'document_ingestion_queued';
+
+/** A pattern's document, by the name of the
+ *  directory the library holds it in. */
+function patternDocument(name: string): WorkflowIR {
+  const pattern = patternNamed(name);
+  if (pattern === undefined) throw new Error(`no such pattern: ${name}`);
+
+  return pattern.document;
+}
+
+/**
+ * Every blessed file this sweep reads, under the
+ * golden directory that holds it.
+ *
+ * The compiler's own goldens are one directory and
+ * the ninth pattern's is another: the library is
+ * the one copy of a document that is a pattern, so
+ * its blessed output lives beside it rather than
+ * beside the fixtures. It is swept here all the
+ * same, because it is the only blessed file whose
+ * queue block deduplicates and the grammar has to
+ * account for the rows that shape writes.
+ */
+const SWEPT: readonly (readonly [string, string, WorkflowIR])[] = [
+  ...GOLDENS.map(([name, ir]) => ['compile', name, ir] as const),
+  ['patterns', QUEUED_PATTERN, patternDocument(QUEUED_PATTERN)] as const,
+];
+
 /**
  * What a document says it can record, held against
  * what the file compiled from it actually records.
@@ -1122,9 +1154,9 @@ describe('traceShapes', () => {
  * made to agree.
  */
 describe('the shapes a document can record', () => {
-  for (const [name, ir] of GOLDENS) {
+  for (const [dir, name, ir] of SWEPT) {
     it(`are the shapes ${name} records`, () => {
-      const source = readFixture(`golden/compile/${name}.workflow.ts`);
+      const source = readFixture(`golden/${dir}/${name}.workflow.ts`);
       const written = recordedNameLiterals(source).map(nameLiteralShape);
 
       expect(traceShapes(traceGrammar(ir))).toEqual(

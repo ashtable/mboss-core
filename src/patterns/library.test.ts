@@ -8,6 +8,7 @@ import {
   determinismProblems,
   headerProblems,
   placementProblems,
+  queueProblems,
   registrationProblems,
   stepProblems,
 } from '../compile/index.js';
@@ -176,6 +177,7 @@ describe.each(PATTERNS.map((pattern) => [pattern.name, pattern] as const))(
       expect(stepProblems(source)).toEqual([]);
       expect(placementProblems(source)).toEqual([]);
       expect(determinismProblems(source)).toEqual([]);
+      expect(queueProblems(source)).toEqual([]);
     });
   },
 );
