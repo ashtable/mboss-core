@@ -305,6 +305,16 @@ describe('the conventions a handler author reads', () => {
     'either arm binds a value between the fork and the first block they ' +
     'both reach, and no arm rejoins later than that block.';
 
+  /**
+   * And the sentence about a queue block's
+   * handler, which both copies carry for the same
+   * reason: an agent that reads the skill's copy
+   * writes the handler a project's copy describes.
+   */
+  const QUEUE_HANDLER =
+    "A queue block's handler takes one item of the collection and returns " +
+    "one result; the block's item type is its parameter type.";
+
   it('states the rule about shared blocks word for word', () => {
     // Whitespace is collapsed before the
     // comparison. The file is hand-wrapped to the
@@ -317,6 +327,20 @@ describe('the conventions a handler author reads', () => {
     const written = contentsOf('.mboss/conventions.md').replace(/\s+/g, ' ');
 
     expect(written).toContain(SHARED_BLOCKS);
+  });
+
+  it("states what a queue block's handler takes, word for word", () => {
+    const written = contentsOf('.mboss/conventions.md').replace(/\s+/g, ' ');
+
+    expect(written).toContain(QUEUE_HANDLER);
+  });
+
+  it('says what the block after a queue receives', () => {
+    const written = contentsOf('.mboss/conventions.md').replace(/\s+/g, ' ');
+
+    expect(written).toContain(
+      'the block after a queue either declares no `in` or declares the array',
+    );
   });
 });
 

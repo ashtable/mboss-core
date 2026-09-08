@@ -210,7 +210,12 @@ describe('compileRegistry', () => {
 
   it('imports each workflow as a namespace and lists it once', () => {
     const source = compileRegistry([
-      { name: 'groom_booking', title: 'Groom booking', scheduled: false },
+      {
+        name: 'groom_booking',
+        title: 'Groom booking',
+        scheduled: false,
+        queues: [],
+      },
     ]);
 
     expect(source).toContain(
@@ -232,7 +237,12 @@ describe('compileRegistry', () => {
     // apply its schedule. `WorkflowEntry` carries
     // no schedule field: one authority per fact.
     const source = compileRegistry([
-      { name: 'nightly_sweep', title: 'Nightly sweep', scheduled: true },
+      {
+        name: 'nightly_sweep',
+        title: 'Nightly sweep',
+        scheduled: true,
+        queues: [],
+      },
     ]);
 
     expect(source).toContain("    name: 'nightly_sweep',");
@@ -245,10 +255,53 @@ describe('compileRegistry', () => {
     );
   });
 
+  it('declares an empty queue list when no workflow declares one', () => {
+    const source = compileRegistry([
+      {
+        name: 'groom_booking',
+        title: 'Groom booking',
+        scheduled: false,
+        queues: [],
+      },
+    ]);
+
+    expect(source).toContain('export const queues: QueueEntry[] = [];');
+  });
+
+  it('spreads the queues of every workflow that declares one', () => {
+    // A spread rather than the entries themselves:
+    // the workflow module already declares them,
+    // and restating a limit here is a second place
+    // for it to be wrong.
+    const source = compileRegistry([
+      {
+        name: 'index_pages',
+        title: 'Index pages',
+        scheduled: false,
+        queues: [{ name: 'index_pages_fan_out', options: {} }],
+      },
+      {
+        name: 'send_digests',
+        title: 'Send digests',
+        scheduled: false,
+        queues: [{ name: 'send_digests_fan_out', options: {} }],
+      },
+    ]);
+
+    expect(source).toContain(
+      [
+        'export const queues: QueueEntry[] = [',
+        '  ...indexPages.queues,',
+        '  ...sendDigests.queues,',
+        '];',
+      ].join('\n'),
+    );
+  });
+
   it('lists workflows in name order, whatever order it was given', () => {
     const source = compileRegistry([
-      { name: 'b_second', title: 'B', scheduled: false },
-      { name: 'a_first', title: 'A', scheduled: false },
+      { name: 'b_second', title: 'B', scheduled: false, queues: [] },
+      { name: 'a_first', title: 'A', scheduled: false, queues: [] },
     ]);
 
     // Checked present first: `indexOf` answers -1

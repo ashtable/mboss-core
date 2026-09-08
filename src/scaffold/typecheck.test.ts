@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { typecheckProject } from '../compile/typecheck.js';
-import { bootProblems } from '../test-support/boot-order.js';
+import { bootProblems, callsInOrder } from '../test-support/boot-order.js';
 import {
   makeTypecheckProject,
   removeTypecheckProject,
@@ -150,6 +150,18 @@ describe('the boot sequence', () => {
     // waiting is checked and not only the order.
     expect(existsSync(MAIN)).toBe(true);
     expect(bootProblems(readFileSync(MAIN, 'utf8'))).toEqual([]);
+  });
+
+  it('registers the queues the registry declares', () => {
+    // Every ordering rule about the registration
+    // is guarded on the call being there at all,
+    // so a main.ts that simply dropped it would
+    // report a clean boot.
+    const names = callsInOrder(readFileSync(MAIN, 'utf8')).map(
+      (call) => call.name,
+    );
+
+    expect(names).toContain('registerQueues');
   });
 
   it('files its runs under a name that is not the one people see', () => {

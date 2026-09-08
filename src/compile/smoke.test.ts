@@ -160,6 +160,7 @@ beforeAll(async () => {
         name,
         title: name,
         scheduled: name === SCHEDULED,
+        queues: [],
       })),
     ),
     'utf8',

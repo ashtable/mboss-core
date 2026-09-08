@@ -12,7 +12,11 @@ import {
   registrySpecifier,
   workflowFilePath,
 } from '../app-contract/index.js';
-import { WorkflowIRSchema, type WorkflowIR } from '../ir/index.js';
+import {
+  WorkflowIRSchema,
+  type QueuePolicy,
+  type WorkflowIR,
+} from '../ir/index.js';
 import { loadOrScan, type LibManifest } from '../manifest/index.js';
 import {
   canCompile,
@@ -87,6 +91,23 @@ export function compileWorkflow(request: CompileRequest): CompileResult {
   }
 }
 
+/**
+ * One queue a workflow declares, as the registry
+ * hands it to the boot.
+ *
+ * The compiler's own bookkeeping, read off the IR
+ * rather than imported from the scaffold: the two
+ * write into the same project and agree through
+ * `app-contract/`, which is where the runtime's
+ * copy of this shape is named. A type-level test
+ * holds the two equal, so a field added to one
+ * side alone fails the build here.
+ */
+export type QueueEntry = {
+  name: string;
+  options: Omit<QueuePolicy, 'name'>;
+};
+
 /** One workflow, as the registry names it. */
 export type RegistryEntry = {
   name: string;
@@ -95,6 +116,9 @@ export type RegistryEntry = {
    *  once so the ingress can name them, once so
    *  the boot can apply their schedule. */
   scheduled: boolean;
+  /** Every queue this workflow declares, so the
+   *  registry knows whether to spread its list. */
+  queues: readonly QueueEntry[];
 };
 
 /**
@@ -120,6 +144,7 @@ export function compileRegistry(entries: readonly RegistryEntry[]): string {
     '// .mboss/workflows/.',
     '',
     importBlock([
+      runtimeImport('contract', 'QueueEntry'),
       runtimeImport('contract', 'ScheduleEntry'),
       runtimeImport('contract', 'WorkflowEntry'),
     ]).trimEnd(),
@@ -166,6 +191,24 @@ export function compileRegistry(entries: readonly RegistryEntry[]): string {
     lines.push('export const schedules: ScheduleEntry[] = [');
     for (const entry of scheduled) {
       lines.push(`  ${camelCase(entry.name)}.schedule,`);
+    }
+    lines.push('];');
+  }
+
+  lines.push('');
+
+  const queued = ordered.filter((entry) => entry.queues.length > 0);
+
+  if (queued.length === 0) {
+    lines.push('export const queues: QueueEntry[] = [];');
+  } else {
+    lines.push('export const queues: QueueEntry[] = [');
+    for (const entry of queued) {
+      // A spread, not the entries themselves. The
+      // workflow module already declares them, and
+      // a limit restated here is a second place
+      // for it to be wrong.
+      lines.push(`  ...${camelCase(entry.name)}.queues,`);
     }
     lines.push('];');
   }
@@ -222,6 +265,7 @@ export async function compileProject(
         name: ir.name,
         title: ir.title ?? ir.name,
         scheduled: hasSchedule(ir),
+        queues: queuesOf(ir),
       });
     }
 
@@ -238,6 +282,29 @@ export async function compileProject(
 
     return { ok: true, written, removed };
   });
+}
+
+/**
+ * Every queue a workflow declares, one entry per
+ * distinct name.
+ *
+ * Two blocks may fan out to the same queue, and
+ * the queue is still registered once. They cannot
+ * disagree about how: validation refuses a second
+ * block that names one queue with a different
+ * policy, so the first one seen is the policy.
+ */
+function queuesOf(ir: WorkflowIR): QueueEntry[] {
+  const found = new Map<string, QueueEntry>();
+
+  for (const node of ir.nodes) {
+    if (node.kind !== 'queue') continue;
+
+    const { name, ...options } = node.config.queue;
+    if (!found.has(name)) found.set(name, { name, options });
+  }
+
+  return [...found.values()];
 }
 
 /** Whether a workflow's trigger fires on a clock. */

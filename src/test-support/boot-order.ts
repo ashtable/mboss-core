@@ -107,6 +107,16 @@ export function callsInOrder(source: string): BootCall[] {
  * the same two failures with the source still
  * reading in the right order, so it is checked
  * separately and named for what it is.
+ *
+ * The queue registration is fenced on three sides
+ * for the same reason. `DBOS.registerQueue` waits
+ * for the launch that owns the connection it
+ * writes through, so above launch it throws; and
+ * below either the schedules or the listener it
+ * runs after something that can already enqueue,
+ * which is a row sitting on a queue that has no
+ * configuration yet — a run that waits rather than
+ * one that fails.
  */
 export function bootProblems(source: string): string[] {
   const calls = callsInOrder(source);
@@ -114,6 +124,8 @@ export function bootProblems(source: string): string[] {
   const schema = names.indexOf('initializeDBOSSchema');
   const launch = names.indexOf('launch');
   const listen = names.indexOf('listen');
+  const queues = names.indexOf('registerQueues');
+  const schedules = names.indexOf('applyAndPruneSchedules');
   const problems: string[] = [];
 
   if (schema === -1) problems.push('never creates the datasource schema');
@@ -126,12 +138,24 @@ export function bootProblems(source: string): string[] {
   if (listen >= 0 && launch >= 0 && listen < launch) {
     problems.push('listens before DBOS.launch() resolves');
   }
+  if (queues >= 0 && launch >= 0 && queues < launch) {
+    problems.push('registers queues before DBOS.launch() resolves');
+  }
+  if (queues >= 0 && listen >= 0 && queues > listen) {
+    problems.push('registers queues after it listens');
+  }
+  if (queues >= 0 && schedules >= 0 && queues > schedules) {
+    problems.push('registers queues after the schedules are applied');
+  }
 
   if (schema >= 0 && calls[schema]?.awaited !== true) {
     problems.push('does not await the datasource schema creation');
   }
   if (launch >= 0 && calls[launch]?.awaited !== true) {
     problems.push('does not await DBOS.launch()');
+  }
+  if (queues >= 0 && calls[queues]?.awaited !== true) {
+    problems.push('does not await the queue registration');
   }
 
   return problems;

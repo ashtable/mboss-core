@@ -12,6 +12,7 @@ describe('the runtime table', () => {
       'db',
       'mail',
       'mailer',
+      'queues',
       'waits',
     ]);
   });
@@ -64,6 +65,7 @@ describe('the runtime table', () => {
       'appDb',
       'clearWaitCorrelation',
       'isTransientSendFailure',
+      'queueKey',
       'registerWaitCorrelation',
       'sendNodeEmail',
     ]);

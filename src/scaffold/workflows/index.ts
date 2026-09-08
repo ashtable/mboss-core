@@ -2,8 +2,14 @@
 // Regenerated from the workflow documents in
 // .mboss/workflows/.
 
-import type { ScheduleEntry, WorkflowEntry } from '../app/contract.js';
+import type {
+  QueueEntry,
+  ScheduleEntry,
+  WorkflowEntry,
+} from '../app/contract.js';
 
 export const workflows: WorkflowEntry[] = [];
 
 export const schedules: ScheduleEntry[] = [];
+
+export const queues: QueueEntry[] = [];
