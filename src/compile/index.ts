@@ -17,6 +17,7 @@ export {
   type CompileProjectResult,
   type CompileRequest,
   type CompileResult,
+  type QueueEntry,
   type RegistryEntry,
 } from './compile.js';
 export {
@@ -32,6 +33,7 @@ export {
 export {
   SDK_OPERATIONS,
   ownerOf,
+  queuedWorkflowName,
   type Owner,
   type RecordedSegment,
 } from './names.js';
