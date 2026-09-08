@@ -1081,15 +1081,18 @@ describe('matchTrace', () => {
 });
 
 describe('traceShapes', () => {
-  it('names both kinds of row a queue block writes', () => {
+  it('names every kind of row a queue block writes', () => {
     // A queue block is the one kind whose rows are
-    // not all its own: the starts belong to it and
-    // the results belong to the SDK. The sweep
-    // below compares this list against what the
-    // emitted file writes, so a shape missing here
-    // is a row nothing would account for.
+    // not all its own: the starts belong to it,
+    // the results belong to the SDK, and the item
+    // step belongs to a run of the child — a
+    // ledger of its own, out of the same file. The
+    // sweep below compares this list against what
+    // the emitted file writes, so a shape missing
+    // here is a row nothing would account for.
     expect(traceShapes(traceGrammar(QUEUE_FAN_OUT))).toEqual([
       'DBOS.getResult',
+      'index_pages',
       'index_pages.queued.#',
       'parse_pages',
       'record_index',

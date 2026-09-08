@@ -337,10 +337,19 @@ type Shape =
   /** `<prefix>[0]`, `[1]`, … for as many items as
    *  the list held, which no document says. */
   | { kind: 'items'; prefix: string }
-  /** The other fan-out: one run started per item
-   *  and then one result waited on per run, the
-   *  same count each and neither of them said. */
-  | { kind: 'queued'; name: string }
+  /**
+   * The other fan-out: one run started per item
+   * and then one result waited on per run, the
+   * same count each and neither of them said.
+   *
+   * `step` is the row one of those runs records in
+   * its own ledger rather than in this one. It is
+   * carried because the conformance check reads a
+   * compiled file whole, and the child is written
+   * into the same file as the block that starts
+   * it.
+   */
+  | { kind: 'queued'; name: string; step: string }
   /** The run ends here. A way out wired to
    *  nothing returns, so nothing below it ran. */
   | { kind: 'stop' }
@@ -434,6 +443,13 @@ export function traceGrammar(ir: WorkflowIR): TraceGrammar {
  * side of the conformance check that has to be
  * compared against what the emitted file actually
  * writes.
+ *
+ * A file, not a run: a queue block's children are
+ * written into the same file as the block, so what
+ * they record is here too even though it lands in
+ * a ledger of their own. Nothing else reads this,
+ * and a shape missing from it is a row the check
+ * would find nothing to account for.
  */
 export function traceShapes(grammar: TraceGrammar): string[] {
   const found = new Set<string>();
@@ -456,6 +472,7 @@ function collectShapes(shape: Shape, into: Set<string>): void {
     case 'queued':
       into.add(shapeOf(shape.name));
       into.add(RESULT);
+      into.add(shapeOf(shape.step));
       return;
 
     case 'stop':
@@ -610,13 +627,18 @@ function nodeShape(
       return oneRow(stepRow(node.id, rounds, []));
 
     case 'queue':
-      // The rounds around it are not in the name.
-      // What a queue block records is its
-      // children's registration, which is written
-      // once for the whole file — so a block
-      // inside a loop starts the same workflow
-      // every round.
-      return { kind: 'queued', name: queuedWorkflowName(node.id, workflow) };
+      // Neither name carries the rounds around
+      // the block. What a queue block records is
+      // its children's registration, written once
+      // for the whole file, so a block inside a
+      // loop starts the same workflow every round
+      // — and each of those runs has a ledger of
+      // its own, which starts from nothing.
+      return {
+        kind: 'queued',
+        name: queuedWorkflowName(node.id, workflow),
+        step: stepRow(node.id, [], []),
+      };
 
     case 'durableWait':
       return node.config.source.kind === 'timer'

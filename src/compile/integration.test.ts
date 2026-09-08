@@ -56,9 +56,11 @@ const TIMEZONE = 'America/Los_Angeles';
  * minted by the email before it, an approval that
  * desugars into a wait of its own, a branch running
  * code that decides two ways and another that
- * decides three, and the same decision closing a
- * loop under each of the two things an author can
- * ask for when the rounds run out.
+ * decides three, the same decision closing a loop
+ * under each of the two things an author can ask
+ * for when the rounds run out, and a queue block,
+ * which is the one kind that reaches for a runtime
+ * module the scaffold writes for it.
  */
 const WORKFLOWS = [
   'approval_flow',
@@ -66,6 +68,7 @@ const WORKFLOWS = [
   'decision_yes_no',
   'form_intake',
   'groom_booking',
+  'queue_partitioned',
   'slot_retry_abort',
   'slot_retry_continue',
 ] as const;

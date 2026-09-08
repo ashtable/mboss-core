@@ -507,6 +507,133 @@ describe('compileProject', () => {
     ).rejects.toThrow();
   });
 
+  /**
+   * The same queue, named by two documents. Which
+   * limits it ends up with is not something either
+   * of them says.
+   */
+  function queueFlow(
+    name: string,
+    nodeId: string,
+    queue: Record<string, unknown>,
+  ): ReturnType<typeof makeIR> {
+    return makeIR({
+      name,
+      nodes: [
+        { ...TRIGGER, out: 'Batch', config: { mode: 'manual' } },
+        {
+          id: nodeId,
+          kind: 'queue',
+          title: 'Index each item',
+          handler: { export: 'indexItem' },
+          in: 'Batch',
+          out: 'Indexed',
+          config: {
+            itemsPath: 'items',
+            itemType: 'Item',
+            queue: { name: 'document-index', ...queue },
+          },
+        },
+      ],
+      edges: [{ from: 'booking_requested', to: nodeId, type: 'Batch' }],
+    });
+  }
+
+  async function put(
+    made: TestProject,
+    ir: ReturnType<typeof makeIR>,
+  ): Promise<void> {
+    await writeFile(
+      workflowFile(made.mbossDir, ir.name),
+      `${JSON.stringify(ir, null, 2)}\n`,
+      'utf8',
+    );
+  }
+
+  it('fails the later of two workflows that disagree about one queue', async () => {
+    // One name is one row in the app's system
+    // database. Two documents naming it with
+    // different limits do not get a queue each,
+    // and validation cannot see this: it is
+    // handed one document at a time.
+    project = await seed([]);
+    await put(
+      project,
+      queueFlow('a_flow', 'index_items', {
+        globalConcurrency: 8,
+      }),
+    );
+    await put(
+      project,
+      queueFlow('b_flow', 'index_pages', {
+        globalConcurrency: 2,
+      }),
+    );
+
+    const result = await compileProject(project.projectDir, {
+      timezone: TIMEZONE,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? [] : result.failures.map((f) => f.name)).toEqual([
+      'b_flow',
+    ]);
+
+    const failed = result.ok ? undefined : result.failures[0]?.result;
+    expect(failed).toMatchObject({
+      reason: 'UNSUPPORTED',
+      nodeId: 'index_pages',
+    });
+    expect(failed && 'message' in failed ? failed.message : '').toBe(
+      '`index_pages` registers `document-index` with different limits ' +
+        "from `a_flow`'s `index_items`. One queue has one policy.",
+    );
+
+    // Before anything is written: a project left
+    // half compiled is a project whose registry
+    // names files that are not there.
+    await expect(
+      read(join(project.projectDir, 'src/workflows/index.ts'), 'utf8'),
+    ).rejects.toThrow();
+  });
+
+  it('lets two workflows register one queue the same way', async () => {
+    project = await seed([]);
+    await put(
+      project,
+      queueFlow('a_flow', 'index_items', {
+        globalConcurrency: 8,
+      }),
+    );
+    await put(
+      project,
+      queueFlow('b_flow', 'index_pages', {
+        globalConcurrency: 8,
+      }),
+    );
+
+    const result = await compileProject(project.projectDir, {
+      timezone: TIMEZONE,
+    });
+
+    expect(result.ok ? [] : result.failures).toEqual([]);
+
+    // Both spread. Registering one queue twice
+    // with one policy is the same call twice.
+    const registry = await read(
+      join(project.projectDir, 'src/workflows/index.ts'),
+      'utf8',
+    );
+    expect(registry).toContain(
+      [
+        'export const queues: QueueEntry[] = [',
+        '  ...aFlow.queues,',
+        '  ...bFlow.queues,',
+        '];',
+      ].join('\n'),
+    );
+  });
+
   it('writes an empty registry for a project with no workflows', async () => {
     project = await seed([]);
 

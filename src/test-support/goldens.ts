@@ -373,6 +373,7 @@ export const GOLDENS = [
   ['form_intake', irFixture('form_intake')],
   ['form_retry', irFixture('form_retry')],
   ['groom_booking', irFixture('groom_booking')],
+  ['queue_partitioned', irFixture('queue_partitioned')],
   ['review_loop', irFixture('review_loop')],
   ['slot_retry_abort', irFixture('slot_retry_abort')],
   ['slot_retry_continue', irFixture('slot_retry_continue')],

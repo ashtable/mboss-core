@@ -251,6 +251,7 @@ export async function compileProject(
     const failures: { name: string; result: CompileResult }[] = [];
     const sources = new Map<string, string>();
     const entries: RegistryEntry[] = [];
+    const registered = new Map<string, Registration>();
 
     for (const ir of documents) {
       const result = compileWorkflow({ ir, manifest, timezone: opts.timezone });
@@ -260,12 +261,24 @@ export async function compileProject(
         continue;
       }
 
+      const declared = declaredQueues(ir);
+      const clash = firstClash(registered, declared);
+
+      if (clash !== undefined) {
+        failures.push({ name: ir.name, result: clash });
+        continue;
+      }
+
+      for (const queue of declared) {
+        registered.set(queue.entry.name, { workflow: ir.name, ...queue });
+      }
+
       sources.set(result.path, result.source);
       entries.push({
         name: ir.name,
         title: ir.title ?? ir.name,
         scheduled: hasSchedule(ir),
-        queues: queuesOf(ir),
+        queues: declared.map((queue) => queue.entry),
       });
     }
 
@@ -284,6 +297,12 @@ export async function compileProject(
   });
 }
 
+/** One queue, and the block that declared it. */
+type DeclaredQueue = { nodeId: string; entry: QueueEntry };
+
+/** The same, once a document has claimed it. */
+type Registration = DeclaredQueue & { workflow: string };
+
 /**
  * Every queue a workflow declares, one entry per
  * distinct name.
@@ -294,17 +313,66 @@ export async function compileProject(
  * block that names one queue with a different
  * policy, so the first one seen is the policy.
  */
-function queuesOf(ir: WorkflowIR): QueueEntry[] {
-  const found = new Map<string, QueueEntry>();
+function declaredQueues(ir: WorkflowIR): DeclaredQueue[] {
+  const found = new Map<string, DeclaredQueue>();
 
   for (const node of ir.nodes) {
     if (node.kind !== 'queue') continue;
 
     const { name, ...options } = node.config.queue;
-    if (!found.has(name)) found.set(name, { name, options });
+    if (!found.has(name)) {
+      found.set(name, { nodeId: node.id, entry: { name, options } });
+    }
   }
 
   return [...found.values()];
+}
+
+/**
+ * The first queue this document names that
+ * another document already named differently.
+ *
+ * One name is one row in the app's system
+ * database however many documents ask for it, so
+ * two policies for it are two answers to a
+ * question with one. Validation cannot see this —
+ * it is handed a document at a time — and the app
+ * would find out at boot, where the message is
+ * about a queue rather than about the workflows
+ * that disagree.
+ *
+ * Compared as JSON, as the rule inside one
+ * document compares it: both sides have been
+ * through the schema, which writes the fields in
+ * the order it declares them.
+ */
+function firstClash(
+  registered: ReadonlyMap<string, Registration>,
+  declared: readonly DeclaredQueue[],
+): Extract<CompileResult, { ok: false; reason: 'UNSUPPORTED' }> | undefined {
+  for (const queue of declared) {
+    const first = registered.get(queue.entry.name);
+
+    if (first === undefined) continue;
+    if (
+      JSON.stringify(first.entry.options) ===
+      JSON.stringify(queue.entry.options)
+    ) {
+      continue;
+    }
+
+    return {
+      ok: false,
+      reason: 'UNSUPPORTED',
+      nodeId: queue.nodeId,
+      message:
+        `\`${queue.nodeId}\` registers \`${queue.entry.name}\` with ` +
+        `different limits from \`${first.workflow}\`'s ` +
+        `\`${first.nodeId}\`. One queue has one policy.`,
+    };
+  }
+
+  return undefined;
 }
 
 /** Whether a workflow's trigger fires on a clock. */

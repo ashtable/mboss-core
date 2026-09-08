@@ -20,7 +20,7 @@ import {
 } from '../test-support/typecheck.js';
 
 import { compileRegistry } from './compile.js';
-import { camelCase } from './names.js';
+import { camelCase, ownerOf, queuedWorkflowName } from './names.js';
 
 /**
  * Every generated workflow module, imported and
@@ -197,16 +197,33 @@ describe.each(NAMES)('%s, imported under a stubbed SDK', (name) => {
     const before = registered.length;
     const module = await load(name);
     const calls = registered.slice(before);
+    const own = calls.at(-1);
 
-    expect(calls.map((call) => call.config.name)).toEqual([name]);
+    expect(own?.config.name).toBe(name);
     // The exported binding is what registration
     // gave back. Two exported spellings of one
     // workflow is how half an app ends up calling
     // the unregistered one, so the undecorated
     // function is not exported at all.
-    expect(module[camelCase(name)]).toBe(calls[0]?.wrapped);
-    expect(module[camelCase(name)]).not.toBe(calls[0]?.raw);
+    expect(module[camelCase(name)]).toBe(own?.wrapped);
+    expect(module[camelCase(name)]).not.toBe(own?.raw);
     expect(module).not.toHaveProperty(`${camelCase(name)}Fn`);
+
+    // Its own is the last. Anything registered
+    // above it is a queue block's child, named
+    // after both the block and this workflow, and
+    // exported under neither name — an app that
+    // could start one by name could start it off
+    // the queue that exists to hold it back.
+    for (const call of calls.slice(0, -1)) {
+      const child = String(call.config.name);
+      const owner = ownerOf(child);
+
+      if (owner.kind !== 'node') throw new Error(`${child} names no block`);
+      expect(child).toBe(queuedWorkflowName(owner.nodeId, name));
+      expect(Object.values(module)).not.toContain(call.wrapped);
+      expect(Object.values(module)).not.toContain(call.raw);
+    }
   });
 
   it('exports the four things the registry reads', async () => {
