@@ -4,6 +4,7 @@ import { DEFAULT_RESENDS } from './emit-linear.js';
 import {
   nameShape,
   ownerOf,
+  queuedWorkflowName,
   recordedName,
   type RecordedSegment,
 } from './names.js';
@@ -109,6 +110,12 @@ function segmentLabel(segment: RecordedSegment): string {
 
     case 'resend':
       return `resend ${segment.count}`;
+
+    case 'queued':
+      // Not the child's name: the block it belongs
+      // to and the workflow it was started from
+      // are both in front of whoever reads this.
+      return 'queued';
   }
 }
 
@@ -330,6 +337,10 @@ type Shape =
   /** `<prefix>[0]`, `[1]`, … for as many items as
    *  the list held, which no document says. */
   | { kind: 'items'; prefix: string }
+  /** The other fan-out: one run started per item
+   *  and then one result waited on per run, the
+   *  same count each and neither of them said. */
+  | { kind: 'queued'; name: string }
   /** The run ends here. A way out wired to
    *  nothing returns, so nothing below it ran. */
   | { kind: 'stop' }
@@ -395,6 +406,10 @@ function perhaps(shape: Shape): Shape {
  */
 const PARK: Shape = sequence([oneRow('DBOS.recv'), oneRow('DBOS.sleep')]);
 
+/** What waiting on one started run records. The
+ *  SDK names the row, not the block. */
+const RESULT = 'DBOS.getResult';
+
 /**
  * What a run of `ir` can record.
  *
@@ -406,7 +421,7 @@ const PARK: Shape = sequence([oneRow('DBOS.recv'), oneRow('DBOS.sleep')]);
  * is offered for.
  */
 export function traceGrammar(ir: WorkflowIR): TraceGrammar {
-  return { root: regionShape(planWorkflow(ir).region, []) };
+  return { root: regionShape(ir.name, planWorkflow(ir).region, []) };
 }
 
 /**
@@ -436,6 +451,11 @@ function collectShapes(shape: Shape, into: Set<string>): void {
 
     case 'items':
       into.add(shapeOf(`${shape.prefix}[0]`));
+      return;
+
+    case 'queued':
+      into.add(shapeOf(shape.name));
+      into.add(RESULT);
       return;
 
     case 'stop':
@@ -469,17 +489,34 @@ function shapeOf(name: string): string {
   return owner.kind === 'node' ? nameShape(owner.nodeId, owner.segments) : name;
 }
 
-/** One stretch of blocks, in the order a run takes
- *  them. */
-function regionShape(region: PlanRegion, rounds: readonly number[]): Shape {
-  return sequence(region.map((item) => itemShape(item, rounds)));
+/**
+ * One stretch of blocks, in the order a run takes
+ * them.
+ *
+ * The workflow's own name is carried the whole way
+ * down because a queue block's rows are named
+ * after it: a child registers under the block it
+ * came from *and* the workflow that holds the
+ * block, and nothing below here would otherwise
+ * know the second half.
+ */
+function regionShape(
+  workflow: string,
+  region: PlanRegion,
+  rounds: readonly number[],
+): Shape {
+  return sequence(region.map((item) => itemShape(workflow, item, rounds)));
 }
 
-function itemShape(item: PlanItem, rounds: readonly number[]): Shape {
+function itemShape(
+  workflow: string,
+  item: PlanItem,
+  rounds: readonly number[],
+): Shape {
   switch (item.kind) {
     case 'blocks': {
       const body = sequence(
-        item.group.nodes.map((node) => nodeShape(node, rounds)),
+        item.group.nodes.map((node) => nodeShape(workflow, node, rounds)),
       );
 
       // A whole run of blocks behind one condition
@@ -496,14 +533,14 @@ function itemShape(item: PlanItem, rounds: readonly number[]): Shape {
         item.node.handler === undefined
           ? NO_ROWS
           : oneRow(stepRow(item.node.id, rounds, [])),
-        either(item.arms.map((arm) => armShape(arm, rounds))),
+        either(item.arms.map((arm) => armShape(workflow, arm, rounds))),
       ]);
 
     case 'approval':
       return sequence([
         oneRow(stepRow(item.node.id, rounds, [{ kind: 'ask' }])),
         waitShape(item.node.id, rounds, NO_ROWS),
-        either(item.arms.map((arm) => armShape(arm, rounds))),
+        either(item.arms.map((arm) => armShape(workflow, arm, rounds))),
       ]);
 
     case 'countedLoop':
@@ -512,7 +549,7 @@ function itemShape(item: PlanItem, rounds: readonly number[]): Shape {
         first: 1,
         last: item.rounds,
         every: true,
-        body: (round) => regionShape(item.body, [...rounds, round]),
+        body: (round) => regionShape(workflow, item.body, [...rounds, round]),
       };
 
     case 'repeat':
@@ -521,13 +558,17 @@ function itemShape(item: PlanItem, rounds: readonly number[]): Shape {
         first: 1,
         last: item.rounds,
         every: false,
-        body: (round) => regionShape(item.body, [...rounds, round]),
+        body: (round) => regionShape(workflow, item.body, [...rounds, round]),
       };
   }
 }
 
 /** One way out of a branch or an approval. */
-function armShape(arm: PlanArm, rounds: readonly number[]): Shape {
+function armShape(
+  workflow: string,
+  arm: PlanArm,
+  rounds: readonly number[],
+): Shape {
   const target = arm.target;
 
   switch (target.kind) {
@@ -546,12 +587,16 @@ function armShape(arm: PlanArm, rounds: readonly number[]): Shape {
 
     case 'region':
       return target.outcome === 'ranOut'
-        ? sequence([regionShape(target.region, rounds), STOP])
-        : regionShape(target.region, rounds);
+        ? sequence([regionShape(workflow, target.region, rounds), STOP])
+        : regionShape(workflow, target.region, rounds);
   }
 }
 
-function nodeShape(node: WorkflowNode, rounds: readonly number[]): Shape {
+function nodeShape(
+  workflow: string,
+  node: WorkflowNode,
+  rounds: readonly number[],
+): Shape {
   switch (node.kind) {
     case 'step':
     case 'codeStep':
@@ -563,6 +608,15 @@ function nodeShape(node: WorkflowNode, rounds: readonly number[]): Shape {
 
     case 'emailSend':
       return oneRow(stepRow(node.id, rounds, []));
+
+    case 'queue':
+      // The rounds around it are not in the name.
+      // What a queue block records is its
+      // children's registration, which is written
+      // once for the whole file — so a block
+      // inside a loop starts the same workflow
+      // every round.
+      return { kind: 'queued', name: queuedWorkflowName(node.id, workflow) };
 
     case 'durableWait':
       return node.config.source.kind === 'timer'
@@ -719,6 +773,9 @@ class Walk {
       case 'items':
         return this.#items(shape.prefix, from);
 
+      case 'queued':
+        return this.#queued(shape.name, from);
+
       case 'stop':
         return this.#spent(from);
 
@@ -809,6 +866,62 @@ class Walk {
 
         at += 1;
         reached.add(at);
+      }
+    }
+
+    return reached;
+  }
+
+  /**
+   * A run started per item, then a result waited
+   * on per run.
+   *
+   * The two counts are the same because the code
+   * enqueues the whole list before it waits on any
+   * of it, and that is the only thing the rows can
+   * be held to: how many items there were is not
+   * in the document, and neither row carries an
+   * index. So each number of items is tried in
+   * turn, and a place is reached if some number of
+   * them accounts for the rows exactly.
+   */
+  #queued(name: string, from: ReadonlySet<number>): Set<number> {
+    const reached = new Set<number>();
+
+    for (const start of from) {
+      if (start >= this.#end) {
+        reached.add(this.#end);
+        continue;
+      }
+
+      // Zero items is a list that was empty, which
+      // a document never says it will not be.
+      reached.add(start);
+
+      let at = start;
+
+      for (let started = 1; at < this.#end; started += 1) {
+        this.#want(at, name);
+        if (this.#names[at] !== name) break;
+
+        at += 1;
+        reached.add(at);
+
+        // Where the run would be had it stopped
+        // enqueuing here: every result it has
+        // waited on since, up to the one per run
+        // it started.
+        let waited = at;
+
+        for (let count = 0; count < started; count += 1) {
+          if (waited >= this.#end) break;
+
+          this.#want(waited, RESULT);
+          if (this.#names[waited] !== RESULT) break;
+
+          waited += 1;
+          reached.add(waited);
+        }
       }
     }
 

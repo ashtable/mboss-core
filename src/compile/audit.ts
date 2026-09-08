@@ -307,16 +307,48 @@ export function stepProblems(source: string): AuditProblem[] {
  */
 export function recordedNameLiterals(source: string): string[] {
   const file = parse(source);
+  const registered = registeredNames(file);
   const found: string[] = [];
 
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node)) found.push(...rowsRecordedBy(file, node));
+    if (ts.isCallExpression(node)) {
+      found.push(...rowsRecordedBy(file, node, registered));
+    }
     ts.forEachChild(node, visit);
   };
 
   visit(file);
 
   return found;
+}
+
+/**
+ * What each registration in the file binds, as the
+ * name it registers under.
+ *
+ * Read once for the whole file because a run is
+ * started off a binding: the call site names the
+ * child as an identifier, and its registration is
+ * the only thing that says what row starting it
+ * writes.
+ */
+function registeredNames(file: ts.SourceFile): Map<string, string> {
+  const names = new Map<string, string>();
+
+  for (const call of callsTo(file, 'DBOS.registerWorkflow')) {
+    const declaration = call.parent;
+    if (!ts.isVariableDeclaration(declaration)) continue;
+
+    const [, config] = call.arguments;
+    if (config === undefined || !ts.isObjectLiteralExpression(config)) continue;
+
+    const name = propertyText(file, config, 'name');
+    if (name === undefined) continue;
+
+    names.set(declaration.name.getText(file), name);
+  }
+
+  return names;
 }
 
 /**
@@ -327,16 +359,21 @@ export function recordedNameLiterals(source: string): string[] {
  * both — its own row and the durable sleep that
  * times it out — which is why a file with no
  * `DBOS.sleep(` anywhere in it still records a
- * sleep. Starting a run writes the child's own
- * registered name, and the call site spells that
- * child as a binding rather than as the name it
- * registered under, so the only row a reader of
- * the text can name is the result the handle is
- * awaited for.
+ * sleep.
+ *
+ * Starting a run writes two rows: the child's own
+ * registered name, and the result the handle is
+ * later awaited for. The call site spells the
+ * child as a binding, so the first of those is
+ * only nameable when the same file registers it —
+ * which a compiled file always does, since the
+ * only runs it starts are the children of its own
+ * queue blocks.
  */
 function rowsRecordedBy(
   file: ts.SourceFile,
   call: ts.CallExpression,
+  registered: ReadonlyMap<string, string>,
 ): string[] {
   const callee = text(file, call.expression);
 
@@ -359,7 +396,13 @@ function rowsRecordedBy(
   // off the workflow itself, and both spellings
   // record the same pair of rows.
   if (calleeName(call.expression) === 'startWorkflow') {
-    return ['DBOS.getResult'];
+    const [target] = call.arguments;
+    const child =
+      target !== undefined && ts.isIdentifier(target)
+        ? registered.get(target.text)
+        : undefined;
+
+    return child === undefined ? ['DBOS.getResult'] : [child, 'DBOS.getResult'];
   }
 
   return [];

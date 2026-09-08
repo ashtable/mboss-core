@@ -620,4 +620,31 @@ describe('recordedNameLiterals', () => {
 
     expect(recordedNameLiterals(source)).toEqual(['DBOS.getResult']);
   });
+
+  it('names the child a queue block starts, off the registration', () => {
+    // Starting a run records the child's own
+    // registered name in the parent, and the call
+    // site spells the child as a binding — so the
+    // registration in the same file is the only
+    // way back to the name. Without it the
+    // conformance check has nothing to hold the
+    // enqueue rows against.
+    const source = [
+      'const indexPagesQueued = DBOS.registerWorkflow(indexPagesQueuedFn, {',
+      "  name: 'index_pages.queued.document_ingestion_queued',",
+      '});',
+      '',
+      'async function fn(): Promise<void> {',
+      '  const handle = await DBOS.startWorkflow(indexPagesQueued, {',
+      "    queueName: 'document-index',",
+      '  })(item);',
+      '  const indexed = await handle.getResult();',
+      '}',
+    ].join('\n');
+
+    expect(recordedNameLiterals(source)).toEqual([
+      "'index_pages.queued.document_ingestion_queued'",
+      'DBOS.getResult',
+    ]);
+  });
 });
