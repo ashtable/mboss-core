@@ -6,21 +6,23 @@ import {
   diagnostic,
 } from './diagnostic.js';
 
-describe('the codes the queue rules report', () => {
-  it('names both of them, so a tool can match on either', () => {
+describe('the latest diagnostic codes', () => {
+  it('names them, so a tool can match on any of them', () => {
     expect(DiagnosticCodeSchema.options).toContain('V17');
     expect(DiagnosticCodeSchema.options).toContain('V18');
+    expect(DiagnosticCodeSchema.options).toContain('V19');
   });
 
-  it('reports both as errors', () => {
+  it('reports each as an error', () => {
     // Neither is work an author has not got to
     // yet. A partitioned queue with no key never
     // dispatches its items, and limits that
     // disagree stop the app starting at all, so
-    // both are things the document says that
+    // all three are things the document says that
     // cannot be true.
     expect(diagnostic('V17', 'partition').severity).toBe('error');
     expect(diagnostic('V18', 'limits').severity).toBe('error');
+    expect(diagnostic('V19', 'payload type').severity).toBe('error');
   });
 
   it('builds findings a reader of the wire can parse', () => {

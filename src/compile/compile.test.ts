@@ -139,11 +139,11 @@ describe('what the compiler cannot emit yet', () => {
       }),
     );
 
-    expect(result).toMatchObject({
-      ok: false,
-      reason: 'UNSUPPORTED',
-      nodeId: 'booking_requested',
-    });
+    expect(result).toMatchObject({ ok: false, reason: 'CANNOT_COMPILE' });
+    if (result.ok || !('diagnostics' in result)) throw new Error('compiled');
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'V19', nodeId: 'booking_requested' }),
+    );
   });
 });
 

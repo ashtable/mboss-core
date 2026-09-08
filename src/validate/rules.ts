@@ -152,6 +152,43 @@ export function v01TriggerShape(ctx: RuleContext): Diagnostic[] {
 }
 
 /**
+ * An event trigger that reads a path says what
+ * payload that path belongs to.
+ *
+ * The compiler uses the trigger's output type to
+ * read an idempotency key or requester address
+ * from the event. An untyped event with neither
+ * path is still an honest draft: its payload is
+ * unknown and nothing tries to inspect it.
+ */
+export function v19TriggerPayloadType(ctx: RuleContext): Diagnostic[] {
+  return triggersOf(ctx.ir).flatMap((trigger) => {
+    if (trigger.config.mode !== 'event' || trigger.out !== undefined) {
+      return [];
+    }
+
+    const paths = [
+      trigger.config.idempotencyKeyPath,
+      trigger.config.requesterEmailPath,
+    ].filter((path): path is string => path !== undefined);
+
+    if (paths.length === 0) return [];
+
+    const named = paths.map((path) => `\`${path}\``).join(' and ');
+
+    return [
+      diagnostic(
+        'V19',
+        `\`${trigger.id}\` reads ${named} from its event payload, but ` +
+          `declares no output type. Set its output type to the payload ` +
+          `type so ${paths.length === 1 ? 'that path' : 'those paths'} can be read.`,
+        { nodeId: trigger.id },
+      ),
+    ];
+  });
+}
+
+/**
  * The document says only things that exist: ids
  * that are not shared, edges between nodes that
  * are there, on ports those nodes actually have.
@@ -1416,11 +1453,11 @@ function overLimit(
  * scan recorded stay together — those are the ones
  * that say nothing at all without a manifest, and
  * a document checked without one should lose them
- * in one block rather than one at a time. The two
- * queue rules read only the document and sit after
- * that block because a new rule goes last: a
- * document already being checked keeps the order
- * its findings came back in.
+ * in one block rather than one at a time. The
+ * rules after that block read only the document
+ * and are appended as they arrive: a document
+ * already being checked keeps the order its
+ * findings came back in.
  *
  * A rule written and not added here is a rule that
  * never runs. `rules.test.ts` holds the two
@@ -1445,4 +1482,5 @@ export const RULES: readonly Rule[] = [
   v16TransactionExternalCalls,
   v17QueuePartitionShape,
   v18QueueLimits,
+  v19TriggerPayloadType,
 ];
