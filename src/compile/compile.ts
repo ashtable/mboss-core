@@ -13,6 +13,8 @@ import {
   workflowFilePath,
 } from '../app-contract/index.js';
 import {
+  buildGraph,
+  reachableFrom,
   WorkflowIRSchema,
   type QueuePolicy,
   type WorkflowIR,
@@ -304,8 +306,9 @@ type DeclaredQueue = { nodeId: string; entry: QueueEntry };
 type Registration = DeclaredQueue & { workflow: string };
 
 /**
- * Every queue a workflow declares, one entry per
- * distinct name.
+ * Every reachable queue a workflow declares, one
+ * entry per distinct name. An island is a legal
+ * draft and the emitted module leaves it out too.
  *
  * Two blocks may fan out to the same queue, and
  * the queue is still registered once. They cannot
@@ -315,9 +318,14 @@ type Registration = DeclaredQueue & { workflow: string };
  */
 function declaredQueues(ir: WorkflowIR): DeclaredQueue[] {
   const found = new Map<string, DeclaredQueue>();
+  const trigger = ir.nodes.find((node) => node.kind === 'trigger');
+  const reachable =
+    trigger === undefined
+      ? new Set<string>()
+      : reachableFrom(buildGraph(ir), trigger.id);
 
   for (const node of ir.nodes) {
-    if (node.kind !== 'queue') continue;
+    if (node.kind !== 'queue' || !reachable.has(node.id)) continue;
 
     const { name, ...options } = node.config.queue;
     if (!found.has(name)) {

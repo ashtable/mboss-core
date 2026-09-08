@@ -634,6 +634,25 @@ describe('compileProject', () => {
     );
   });
 
+  it('leaves an island queue out of the registry', async () => {
+    project = await seed([]);
+    const flow = queueFlow('queue_island', 'index_items', {
+      globalConcurrency: 8,
+    });
+    await put(project, { ...flow, edges: [] });
+
+    const result = await compileProject(project.projectDir, {
+      timezone: TIMEZONE,
+    });
+
+    expect(result.ok ? [] : result.failures).toEqual([]);
+    const registry = await read(
+      join(project.projectDir, 'src/workflows/index.ts'),
+      'utf8',
+    );
+    expect(registry).toContain('export const queues: QueueEntry[] = [];');
+  });
+
   it('writes an empty registry for a project with no workflows', async () => {
     project = await seed([]);
 
