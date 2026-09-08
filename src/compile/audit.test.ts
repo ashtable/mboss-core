@@ -1,11 +1,15 @@
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
-import { readFixture } from '../test-support/fixtures.js';
+import { fixturesRoot, readFixture } from '../test-support/fixtures.js';
 
 import {
   determinismProblems,
   headerProblems,
   placementProblems,
+  queueProblems,
   recordedNameLiterals,
   registrationProblems,
   stepProblems,
@@ -18,6 +22,19 @@ function why(problems: { why: string }[]): string[] {
 /** One blessed compiler output, as its source. */
 function golden(name: string): string {
   return readFixture(`golden/compile/${name}.workflow.ts`);
+}
+
+/**
+ * The blessed outputs in one directory, as the
+ * workflow names they were compiled for. A golden
+ * is named for its workflow, which is what the two
+ * rules that take a name need.
+ */
+function goldenNames(dir: string): string[] {
+  return readdirSync(join(fixturesRoot, 'golden', dir))
+    .filter((file) => file.endsWith('.workflow.ts'))
+    .map((file) => file.replace('.workflow.ts', ''))
+    .sort();
 }
 
 describe('determinismProblems', () => {
@@ -397,6 +414,244 @@ describe('registrationProblems', () => {
   });
 });
 
+describe('a queue block child registered beside its parent', () => {
+  // Two registrations in one file, which the rule
+  // used to refuse outright. The child is the one
+  // a queue enqueues, so it registers under a name
+  // of the block's own and stays unexported: only
+  // the parent is anybody else's to start.
+  const queued = [
+    'async function indexPagesQueuedFn(item: Page): Promise<Indexed> {',
+    '  return await index(item);',
+    '}',
+    '',
+    'const indexPagesQueued = DBOS.registerWorkflow(indexPagesQueuedFn, {',
+    "  name: 'index_pages.queued.document_ingestion',",
+    '});',
+    '',
+    'async function documentIngestionFn(): Promise<void> {}',
+    '',
+    'export const documentIngestion = DBOS.registerWorkflow(',
+    '  documentIngestionFn,',
+    '  {',
+    "    name: 'document_ingestion',",
+    '  },',
+    ');',
+    '',
+  ].join('\n');
+
+  it('passes, though the file holds two registrations', () => {
+    expect(registrationProblems(queued, 'document_ingestion')).toEqual([]);
+  });
+
+  it('reports a child that is exported as well', () => {
+    // An exported child is a second workflow the
+    // app can start by name, and starting one
+    // outside its queue is exactly what the queue
+    // exists to stop.
+    const wrong = queued.replace(
+      'const indexPagesQueued =',
+      'export const indexPagesQueued =',
+    );
+
+    expect(why(registrationProblems(wrong, 'document_ingestion'))).toEqual([
+      'the file registers more than one workflow',
+    ]);
+  });
+
+  it('reports a child under a name outside the grammar', () => {
+    const wrong = queued.replace(
+      "'index_pages.queued.document_ingestion'",
+      "'index_pages.child'",
+    );
+
+    expect(why(registrationProblems(wrong, 'document_ingestion'))).toEqual([
+      'the file registers more than one workflow',
+    ]);
+  });
+
+  it('reports a child registered under another workflow', () => {
+    // The name is what a reader of the ledger cuts
+    // apart to find the block a row belongs to. A
+    // child carrying somebody else's workflow name
+    // sends every one of its rows to the wrong
+    // document.
+    const wrong = queued.replace(
+      "'index_pages.queued.document_ingestion'",
+      "'index_pages.queued.invoice_run'",
+    );
+
+    expect(why(registrationProblems(wrong, 'document_ingestion'))).toEqual([
+      'the file registers more than one workflow',
+    ]);
+  });
+
+  it('reports the child function being exported', () => {
+    const wrong = queued.replace(
+      'async function indexPagesQueuedFn',
+      'export async function indexPagesQueuedFn',
+    );
+
+    expect(why(registrationProblems(wrong, 'document_ingestion'))).toEqual([
+      'indexPagesQueuedFn is exported as well as the registered workflow',
+    ]);
+  });
+
+  it('still reports the parent when it is the one out of place', () => {
+    // The parent is found by the name it registers
+    // under rather than by being first: the
+    // children are written above it.
+    const wrong = queued.replace('export const documentIngestion', 'const b');
+
+    expect(why(registrationProblems(wrong, 'document_ingestion'))).toEqual([
+      'the registered workflow is not exported',
+    ]);
+  });
+});
+
+describe('queueProblems', () => {
+  const enqueued = [
+    'const indexPagesQueued = DBOS.registerWorkflow(indexPagesQueuedFn, {',
+    "  name: 'index_pages.queued.document_ingestion',",
+    '});',
+    '',
+    'async function fn(): Promise<void> {',
+    '  const handles: WorkflowHandle<Indexed>[] = [];',
+    '  for (const item of items) {',
+    '    handles.push(',
+    '      await DBOS.startWorkflow(indexPagesQueued, {',
+    "        queueName: 'document-index',",
+    '      })(item),',
+    '    );',
+    '  }',
+    '',
+    '  const settled: PromiseSettledResult<Indexed>[] = [];',
+    '  for (const handle of handles) {',
+    '    try {',
+    '      const value = await handle.getResult();',
+    "      settled.push({ status: 'fulfilled', value });",
+    '    } catch (reason) {',
+    "      settled.push({ status: 'rejected', reason });",
+    '    }',
+    '  }',
+    '}',
+    '',
+  ].join('\n');
+
+  /** The enqueue itself, as the source above
+   *  spells it. */
+  const enqueue =
+    'await DBOS.startWorkflow(indexPagesQueued, {\n        ' +
+    "queueName: 'document-index',\n      })(item),";
+
+  it('passes the enqueue and the collection the compiler writes', () => {
+    expect(queueProblems(enqueued)).toEqual([]);
+  });
+
+  it('reports a run started off no queue', () => {
+    // Without a queue name the child starts at
+    // once, outside every limit the queue was
+    // configured with, and nothing says so.
+    const wrong = enqueued.replace(
+      enqueue,
+      'await DBOS.startWorkflow(indexPagesQueued)(item),',
+    );
+
+    expect(why(queueProblems(wrong))).toEqual([
+      'the run is started with no queueName, so no queue holds it',
+    ]);
+  });
+
+  it('reports a run started off something the file never registered', () => {
+    const wrong = enqueued.replace(
+      'DBOS.startWorkflow(indexPagesQueued, {',
+      'DBOS.startWorkflow(indexPage, {',
+    );
+
+    expect(why(queueProblems(wrong))).toEqual([
+      "indexPage is not registered as a queue block's child",
+    ]);
+  });
+
+  it('reports a run started off a workflow registered plainly', () => {
+    // A queue enqueues workflow executions. A
+    // registration under a plain name is a
+    // workflow of the app's own, and enqueuing one
+    // records rows no block can be found from.
+    const wrong = enqueued.replace(
+      "'index_pages.queued.document_ingestion'",
+      "'index_pages'",
+    );
+
+    expect(why(queueProblems(wrong))).toEqual([
+      "indexPagesQueued is not registered as a queue block's child",
+    ]);
+  });
+
+  it('reports a result awaited from inside a step', () => {
+    const wrong = [
+      'async function fn(): Promise<void> {',
+      '  await DBOS.runStep(async () => handle.getResult(), {',
+      "    name: 'a',",
+      '    retriesAllowed: false,',
+      '  });',
+      '}',
+    ].join('\n');
+
+    expect(why(queueProblems(wrong))).toEqual([
+      'getResult() waits on a run and cannot be awaited inside a step',
+    ]);
+  });
+
+  it('leaves the same wait alone in a workflow body', () => {
+    const source = [
+      'async function fn(): Promise<void> {',
+      '  const indexed = await handle.getResult();',
+      '}',
+    ].join('\n');
+
+    expect(queueProblems(source)).toEqual([]);
+  });
+
+  it('reports a child whose name carries more than the region', () => {
+    // The name is compared against what renders
+    // it, so a region tacked on the end is not a
+    // queued name however much it looks like one.
+    const wrong = enqueued.replace(
+      "'index_pages.queued.document_ingestion'",
+      "'index_pages.queued.document_ingestion.clear'",
+    );
+
+    expect(why(queueProblems(wrong))).toEqual([
+      "indexPagesQueued is not registered as a queue block's child",
+    ]);
+  });
+
+  it('names what was started, when it is not a binding', () => {
+    const wrong = enqueued.replace(
+      'DBOS.startWorkflow(indexPagesQueued, {',
+      'DBOS.startWorkflow(pick(), {',
+    );
+
+    expect(why(queueProblems(wrong))).toEqual([
+      "pick() is not registered as a queue block's child",
+    ]);
+  });
+
+  it('reports a start with nothing to start at all', () => {
+    const wrong = enqueued.replace(enqueue, 'DBOS.startWorkflow()(item),');
+
+    expect(why(queueProblems(wrong))).toEqual([
+      'the run is started with no queueName, so no queue holds it',
+      "the run is not registered as a queue block's child",
+    ]);
+  });
+
+  it('says nothing about a file that starts no run at all', () => {
+    expect(queueProblems('export const a = 1;\n')).toEqual([]);
+  });
+});
+
 describe('what belongs to the workflow and not to a step', () => {
   it('reports a wait parked from inside a step', () => {
     // An invalid transition, and the SDK only says
@@ -647,4 +902,31 @@ describe('recordedNameLiterals', () => {
       'DBOS.getResult',
     ]);
   });
+});
+
+/**
+ * The sweep that keeps the widened rules honest.
+ *
+ * Every rule set is written against a hand-made
+ * source, which is what makes each one readable;
+ * this is what says the six of them together
+ * accept the compiler's real output. A rule that
+ * grew a new clause and forgot an old shape reds
+ * here and nowhere else.
+ */
+describe('every blessed compiler output', () => {
+  for (const dir of ['compile', 'patterns']) {
+    for (const name of goldenNames(dir)) {
+      it(`${dir}/${name} reports nothing under any of the six`, () => {
+        const source = readFixture(`golden/${dir}/${name}.workflow.ts`);
+
+        expect(determinismProblems(source)).toEqual([]);
+        expect(placementProblems(source)).toEqual([]);
+        expect(stepProblems(source)).toEqual([]);
+        expect(headerProblems(source, name)).toEqual([]);
+        expect(registrationProblems(source, name)).toEqual([]);
+        expect(queueProblems(source)).toEqual([]);
+      });
+    }
+  }
 });

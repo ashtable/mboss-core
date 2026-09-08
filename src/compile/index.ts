@@ -23,6 +23,7 @@ export {
   determinismProblems,
   headerProblems,
   placementProblems,
+  queueProblems,
   recordedNameLiterals,
   registrationProblems,
   stepProblems,
