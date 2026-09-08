@@ -35,6 +35,7 @@ import {
   v16TransactionExternalCalls,
   v17QueuePartitionShape,
   v18QueueLimits,
+  v19TriggerPayloadType,
   type Rule,
   type RuleContext,
 } from './rules.js';
@@ -1857,15 +1858,68 @@ describe('V18 queue limits', () => {
   });
 });
 
+describe('V19 event trigger payload type', () => {
+  it('rejects an idempotency path on an untyped payload', () => {
+    const ir = makeIR({
+      nodes: [
+        {
+          id: 'started',
+          kind: 'trigger',
+          config: {
+            mode: 'event',
+            topic: 'airtable_etl',
+            idempotencyKeyPath: 'requestId',
+          },
+        },
+      ],
+    });
+    const found = check(v19TriggerPayloadType, ir);
+
+    expect(codes(found)).toEqual(['V19']);
+    expect(found[0]).toMatchObject({ severity: 'error', nodeId: 'started' });
+    expect(found[0]?.message).toContain('`requestId`');
+    expect(hasErrors(validateWorkflow(ir))).toBe(true);
+  });
+
+  it('names both paths when neither has a declared payload type', () => {
+    const ir = makeIR({ nodes: [EVENT_TRIGGER] });
+    const found = check(v19TriggerPayloadType, ir);
+
+    expect(codes(found)).toEqual(['V19']);
+    expect(found[0]?.message).toContain('`customer.email`');
+  });
+
+  it('accepts an untyped event when it reads no path', () => {
+    const ir = makeIR({
+      nodes: [
+        {
+          id: 'started',
+          kind: 'trigger',
+          config: { mode: 'event', topic: 'airtable_etl' },
+        },
+      ],
+    });
+
+    expect(check(v19TriggerPayloadType, ir)).toEqual([]);
+  });
+
+  it('accepts paths when the trigger declares its payload type', () => {
+    const ir = makeIR({ nodes: [{ ...EVENT_TRIGGER, out: 'WebhookEvent' }] });
+
+    expect(check(v19TriggerPayloadType, ir)).toEqual([]);
+  });
+});
+
 describe('the rule list', () => {
-  it('ends with the four rules that read the scan, then the two queue rules', () => {
-    expect(RULES.slice(-6)).toEqual([
+  it('keeps the scan rules together and appends newer document rules', () => {
+    expect(RULES.slice(-7)).toEqual([
       v12SerializableTypes,
       v13HandlerSignatures,
       v14DecisionBranches,
       v16TransactionExternalCalls,
       v17QueuePartitionShape,
       v18QueueLimits,
+      v19TriggerPayloadType,
     ]);
   });
 
