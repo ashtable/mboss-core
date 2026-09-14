@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { NodeKind } from './index.js';
 import {
   EnqueuePolicySchema,
   NODE_PALETTE,
@@ -300,5 +301,13 @@ describe('the palette', () => {
     expect(NODE_PALETTE.map((entry) => entry.kind).sort()).toEqual(
       [...NodeKindSchema.options].sort(),
     );
+  });
+
+  it('names a wait and an email by what they do', () => {
+    const labelOf = (kind: NodeKind): string | undefined =>
+      NODE_PALETTE.find((entry) => entry.kind === kind)?.label;
+
+    expect(labelOf('durableWait')).toBe('Durable wait');
+    expect(labelOf('emailSend')).toBe('Email send');
   });
 });

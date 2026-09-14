@@ -72,9 +72,9 @@ The schema field is `nodes` and the type is `WorkflowNode`, but every sentence w
 
 ### kind
 
-Which of the ten things a block is: trigger, step, transaction, apiCall, codeStep, branch, loop, durableWait, approval, emailSend. The kind decides what config the block carries, which ports it has, which drawer of the canvas palette it is offered from, and what the compiler emits for it.
+Which of the eleven things a block is: trigger, step, transaction, apiCall, codeStep, queue, branch, loop, durableWait, approval, emailSend. The kind decides what config the block carries, which ports it has, which drawer of the canvas palette it is offered from, and what the compiler emits for it.
 
-"Kind" is the block's nature; "type" in this codebase means a TypeScript type name from the code-behind that a block declares as its `in` or `out`. Ten is deliberate and closed — queues, child workflows, compensation and map blocks are not kinds — because a kind is far cheaper to add than to remove once workflows on disk use it. `NODE_PALETTE` is the only place a kind's human-facing name is written down: `durableWait` is "Wait", `codeStep` is "Code step", `apiCall` is "API call".
+"Kind" is the block's nature; "type" in this codebase means a TypeScript type name from the code-behind that a block declares as its `in` or `out`. Eleven is deliberate and closed — child workflows, compensation and map blocks are not kinds — because a kind is far cheaper to add than to remove once workflows on disk use it. `queue` is the exception that proves the cost: it was the eleventh, and adding it meant a config schema, ports, a compiler path and a palette entry all at once. `NODE_PALETTE` is the only place a kind's human-facing name is written down: `durableWait` is "Durable wait", `codeStep` is "Code step", `apiCall` is "API call".
 
 `src/ir/catalog.ts:10`
 
@@ -136,7 +136,7 @@ Deliberately not called a template — `scaffold/templates/` already means the f
 
 ## The blocks
 
-The ten kinds a block can be, in eight entries — a code step and an API call are a step wearing a different label, and a form has no block of its own.
+The eleven kinds a block can be, in eight entries — a code step, an API call and a queue are a step wearing a different label, and a form has no block of its own.
 
 ### trigger
 
@@ -182,7 +182,7 @@ This is one of the two ways to loop, and the compiler calls it a counted loop; t
 
 A block where the run stops until something arrives: a person submitting a form, an inbound event, or simply the clock. `onTimeout` is required, because a wait with no answer still has to do something and leaving that implicit is how runs hang forever.
 
-`durableWait` in the document, "Wait" in the palette. A form wait names the email that sends the form — never the form itself, which has no block of its own — while an event wait declares both halves of its correlation: the path read from the run's own value when it parks, and the path read from the inbound event. A form or event wait writes a correlation row before it parks and binds what arrived; a timer wait writes no row, binds nothing, and lets the value that was flowing carry straight past.
+`durableWait` in the document, "Durable wait" in the palette. A form wait names the email that sends the form — never the form itself, which has no block of its own — while an event wait declares both halves of its correlation: the path read from the run's own value when it parks, and the path read from the inbound event. A form or event wait writes a correlation row before it parks and binds what arrived; a timer wait writes no row, binds nothing, and lets the value that was flowing carry straight past.
 
 `src/ir/catalog.ts:177`
 
