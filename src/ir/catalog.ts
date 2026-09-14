@@ -451,7 +451,7 @@ export const NODE_PALETTE: readonly NodePaletteEntry[] = [
   { kind: 'queue', label: 'Queue', group: 'work' },
   { kind: 'branch', label: 'Branch', group: 'control' },
   { kind: 'loop', label: 'Loop', group: 'control' },
-  { kind: 'durableWait', label: 'Wait', group: 'control' },
+  { kind: 'durableWait', label: 'Durable wait', group: 'control' },
   { kind: 'approval', label: 'Approval', group: 'people' },
-  { kind: 'emailSend', label: 'Email', group: 'people' },
+  { kind: 'emailSend', label: 'Email send', group: 'people' },
 ];
