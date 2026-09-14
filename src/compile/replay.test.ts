@@ -19,6 +19,7 @@ import {
   matchTrace,
   replayBoundaries,
   traceGrammar,
+  traceOwners,
   traceShapes,
   type RecordedRow,
   type TraceMatch,
@@ -1078,6 +1079,207 @@ describe('matchTrace', () => {
     const rows = trace(['parse_request', 'find_slot', 'wandered_off']);
 
     expect(matchTrace(traceGrammar(STEP), rows, 2)).toEqual({ ok: true });
+  });
+});
+
+/**
+ * Two waits on the clock, one down each way out
+ * of a decision.
+ *
+ * A timer wait writes the SDK's own name and
+ * nothing else, so both of these write the
+ * identical row. Which one a run took is exactly
+ * what the recording does not say.
+ */
+const EITHER_WAIT = makeIR({
+  name: 'either_wait',
+  nodes: [
+    {
+      id: 'request_arrived',
+      kind: 'trigger',
+      title: 'Request arrived',
+      config: { mode: 'event', topic: 'request.arrived' },
+    },
+    {
+      id: 'slot_open',
+      kind: 'branch',
+      title: 'Is the slot open?',
+      handler: { export: 'slotOpen' },
+      config: {
+        cases: [{ port: 'yes', when: { path: 'open', op: 'exists' } }],
+        elsePort: 'no',
+      },
+    },
+    {
+      id: 'settle_now',
+      kind: 'durableWait',
+      title: 'Let it settle',
+      config: { source: { kind: 'timer', seconds: 60 }, onTimeout: 'abort' },
+    },
+    {
+      id: 'sleep_on_it',
+      kind: 'durableWait',
+      title: 'Sleep on it',
+      config: { source: { kind: 'timer', seconds: 3600 }, onTimeout: 'abort' },
+    },
+  ],
+  edges: [
+    { from: 'request_arrived', to: 'slot_open' },
+    { from: 'slot_open', port: 'yes', to: 'settle_now' },
+    { from: 'slot_open', port: 'no', to: 'sleep_on_it' },
+  ],
+});
+
+describe('traceOwners', () => {
+  it('gives a wait on the clock the row the SDK named', () => {
+    // The SDK writes `DBOS.sleep` with no block id
+    // in it, so nothing about the name says which
+    // wait wrote it. Only where it fell can.
+    const ir = makeIR({
+      nodes: [
+        {
+          id: 'request_arrived',
+          kind: 'trigger',
+          title: 'Request arrived',
+          config: { mode: 'event', topic: 'request.arrived' },
+        },
+        { id: 'parse_request', title: 'Parse the request' },
+        {
+          id: 'settle_now',
+          kind: 'durableWait',
+          title: 'Let it settle',
+          config: {
+            source: { kind: 'timer', seconds: 60 },
+            onTimeout: 'abort',
+          },
+        },
+        { id: 'book_appointment', title: 'Book the appointment' },
+      ],
+      edges: [
+        { from: 'request_arrived', to: 'parse_request' },
+        { from: 'parse_request', to: 'settle_now' },
+        { from: 'settle_now', to: 'book_appointment' },
+      ],
+    });
+    const rows = trace(['parse_request', 'DBOS.sleep', 'book_appointment']);
+
+    expect(traceOwners(traceGrammar(ir), rows)).toEqual(
+      new Map([
+        [0, 'parse_request'],
+        [1, 'settle_now'],
+        [2, 'book_appointment'],
+      ]),
+    );
+  });
+
+  it('gives a wait on a form the park it sat in', () => {
+    // `recv` and the sleep that times it out are
+    // the SDK's rows, written between two of the
+    // wait's own.
+    const rows = trace([
+      'ask_details',
+      'await_details.register',
+      'DBOS.recv',
+      'DBOS.sleep',
+      'await_details.clear',
+      'record_intake',
+    ]);
+
+    expect(traceOwners(traceGrammar(irFixture('form_intake')), rows)).toEqual(
+      new Map([
+        [0, 'ask_details'],
+        [1, 'await_details'],
+        [2, 'await_details'],
+        [3, 'await_details'],
+        [4, 'await_details'],
+        [5, 'record_intake'],
+      ]),
+    );
+  });
+
+  it('gives an approval the park it sat in, the same way', () => {
+    // An approval is an email and a wait drawn as
+    // one block, and it parks on exactly the rows
+    // a form wait parks on.
+    const rows = trace([
+      'manager_ok.ask',
+      'manager_ok.register',
+      'DBOS.recv',
+      'DBOS.sleep',
+      'manager_ok.clear',
+      'pay_claim',
+    ]);
+
+    expect(traceOwners(traceGrammar(irFixture('approval_flow')), rows)).toEqual(
+      new Map([
+        [0, 'manager_ok'],
+        [1, 'manager_ok'],
+        [2, 'manager_ok'],
+        [3, 'manager_ok'],
+        [4, 'manager_ok'],
+        [5, 'pay_claim'],
+      ]),
+    );
+  });
+
+  it('gives a queue block the runs it started', () => {
+    const rows = trace([
+      'parse_pages',
+      QUEUED,
+      QUEUED,
+      QUEUED,
+      'DBOS.getResult',
+      'DBOS.getResult',
+      'DBOS.getResult',
+      'record_index',
+    ]);
+
+    expect(traceOwners(traceGrammar(QUEUE_FAN_OUT), rows)).toEqual(
+      new Map([
+        [0, 'parse_pages'],
+        [1, 'index_pages'],
+        [2, 'index_pages'],
+        [3, 'index_pages'],
+        [4, 'index_pages'],
+        [5, 'index_pages'],
+        [6, 'index_pages'],
+        [7, 'record_index'],
+      ]),
+    );
+  });
+
+  it('stops at the row the document cannot account for', () => {
+    // Nothing below a disagreement has a place in
+    // the document, so nothing below it has an
+    // owner either.
+    const rows = trace(['parse_pages', 'wandered_off', QUEUED, 'record_index']);
+
+    expect(traceOwners(traceGrammar(QUEUE_FAN_OUT), rows)).toEqual(
+      new Map([[0, 'parse_pages']]),
+    );
+  });
+
+  it('leaves out a row two blocks could equally claim', () => {
+    // Both ways out of the decision start with a
+    // wait on the clock, and both write the same
+    // row. Naming either one would be a guess.
+    const rows = trace(['slot_open', 'DBOS.sleep']);
+
+    expect(traceOwners(traceGrammar(EITHER_WAIT), rows)).toEqual(
+      new Map([[0, 'slot_open']]),
+    );
+  });
+
+  it('says nothing about a run that recorded nothing', () => {
+    expect(traceOwners(traceGrammar(STEP), [])).toEqual(new Map());
+  });
+
+  it('leaves matchTrace answering exactly as it did', () => {
+    const rows = trace(['parse_request', 'find_slot', 'twilio_chat']);
+
+    traceOwners(traceGrammar(STEP), rows);
+
+    expect(matchTrace(traceGrammar(STEP), rows, 3)).toEqual({ ok: true });
   });
 });
 

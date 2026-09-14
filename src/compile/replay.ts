@@ -331,12 +331,21 @@ export function replayBoundaries(
  * is a number somebody typed on a canvas and
  * nothing caps it, while the rows to match it
  * against are always few.
+ *
+ * Every leaf carries the block it came from.
+ * Required rather than optional, so a leaf added
+ * later cannot arrive without saying whose row it
+ * is — and some rows say so nowhere else: a wait
+ * on the clock writes `DBOS.sleep` and a park
+ * writes `DBOS.recv`, names with no block in them
+ * at all, and two waits in one document write the
+ * identical string.
  */
 type Shape =
-  | { kind: 'row'; name: string }
+  | { kind: 'row'; name: string; owner: string }
   /** `<prefix>[0]`, `[1]`, … for as many items as
    *  the list held, which no document says. */
-  | { kind: 'items'; prefix: string }
+  | { kind: 'items'; prefix: string; owner: string }
   /**
    * The other fan-out: one run started per item
    * and then one result waited on per run, the
@@ -349,7 +358,7 @@ type Shape =
    * into the same file as the block that starts
    * it.
    */
-  | { kind: 'queued'; name: string; step: string }
+  | { kind: 'queued'; name: string; step: string; owner: string }
   /** The run ends here. A way out wired to
    *  nothing returns, so nothing below it ran. */
   | { kind: 'stop' }
@@ -391,8 +400,8 @@ export type TraceMatch =
 const NO_ROWS: Shape = { kind: 'seq', items: [] };
 const STOP: Shape = { kind: 'stop' };
 
-function oneRow(name: string): Shape {
-  return { kind: 'row', name };
+function oneRow(name: string, owner: string): Shape {
+  return { kind: 'row', name, owner };
 }
 
 function sequence(items: readonly Shape[]): Shape {
@@ -412,8 +421,13 @@ function perhaps(shape: Shape): Shape {
  * The park itself: `recv` reserves two ids and
  * records under both, its own row and the durable
  * sleep that times it out.
+ *
+ * Built per wait rather than shared, because a
+ * shared one could not say which wait it was.
  */
-const PARK: Shape = sequence([oneRow('DBOS.recv'), oneRow('DBOS.sleep')]);
+function park(owner: string): Shape {
+  return sequence([oneRow('DBOS.recv', owner), oneRow('DBOS.sleep', owner)]);
+}
 
 /** What waiting on one started run records. The
  *  SDK names the row, not the block. */
@@ -549,13 +563,13 @@ function itemShape(
         // nothing.
         item.node.handler === undefined
           ? NO_ROWS
-          : oneRow(stepRow(item.node.id, rounds, [])),
+          : oneRow(stepRow(item.node.id, rounds, []), item.node.id),
         either(item.arms.map((arm) => armShape(workflow, arm, rounds))),
       ]);
 
     case 'approval':
       return sequence([
-        oneRow(stepRow(item.node.id, rounds, [{ kind: 'ask' }])),
+        oneRow(stepRow(item.node.id, rounds, [{ kind: 'ask' }]), item.node.id),
         waitShape(item.node.id, rounds, NO_ROWS),
         either(item.arms.map((arm) => armShape(workflow, arm, rounds))),
       ]);
@@ -620,11 +634,15 @@ function nodeShape(
     case 'apiCall':
     case 'transaction':
       return node.forEach === undefined
-        ? oneRow(stepRow(node.id, rounds, []))
-        : { kind: 'items', prefix: stepRow(node.id, rounds, []) };
+        ? oneRow(stepRow(node.id, rounds, []), node.id)
+        : {
+            kind: 'items',
+            prefix: stepRow(node.id, rounds, []),
+            owner: node.id,
+          };
 
     case 'emailSend':
-      return oneRow(stepRow(node.id, rounds, []));
+      return oneRow(stepRow(node.id, rounds, []), node.id);
 
     case 'queue':
       // Neither name carries the rounds around
@@ -638,11 +656,12 @@ function nodeShape(
         kind: 'queued',
         name: queuedWorkflowName(node.id, workflow),
         step: stepRow(node.id, [], []),
+        owner: node.id,
       };
 
     case 'durableWait':
       return node.config.source.kind === 'timer'
-        ? oneRow('DBOS.sleep')
+        ? oneRow('DBOS.sleep', node.id)
         : waitShape(node.id, rounds, resendShape(node, rounds, 1));
 
     default:
@@ -666,10 +685,10 @@ function waitShape(
   resends: Shape,
 ): Shape {
   return sequence([
-    oneRow(stepRow(nodeId, rounds, [{ kind: 'register' }])),
-    PARK,
+    oneRow(stepRow(nodeId, rounds, [{ kind: 'register' }]), nodeId),
+    park(nodeId),
     resends,
-    oneRow(stepRow(nodeId, rounds, [{ kind: 'clear' }])),
+    oneRow(stepRow(nodeId, rounds, [{ kind: 'clear' }]), nodeId),
   ]);
 }
 
@@ -692,8 +711,8 @@ function resendShape(
 
   return perhaps(
     sequence([
-      oneRow(stepRow(node.id, rounds, [{ kind: 'resend', count }])),
-      PARK,
+      oneRow(stepRow(node.id, rounds, [{ kind: 'resend', count }]), node.id),
+      park(node.id),
       resendShape(node, rounds, count + 1),
     ]),
   );
@@ -749,6 +768,36 @@ export function matchTrace(
 }
 
 /**
+ * Which block wrote each row of a recorded run.
+ *
+ * The same pass `matchTrace` makes, kept for its
+ * other answer. A name is not enough on its own:
+ * a wait on the clock writes `DBOS.sleep` and a
+ * park writes `DBOS.recv`, neither of which
+ * carries a block id, and two waits in one
+ * document write the identical string. Where the
+ * row fell is the only thing that can tell them
+ * apart, and that is what the walk knows.
+ *
+ * A row the walk cannot place is absent, and so is
+ * one two blocks could equally claim — a run that
+ * took one way out of a decision leaves no trace
+ * of which, so naming either would be a guess.
+ * Nothing below a disagreement is reached at all.
+ */
+export function traceOwners(
+  grammar: TraceGrammar,
+  rows: readonly RecordedRow[],
+): Map<number, string> {
+  const end = rows.reduce((past, row) => Math.max(past, row.functionId + 1), 0);
+  const walk = new Walk(rows, end);
+
+  walk.advance(grammar.root, new Set([0]));
+
+  return walk.owners;
+}
+
+/**
  * One pass over a recording, as the set of places
  * the grammar could have got to.
  *
@@ -765,6 +814,14 @@ class Walk {
   /** What could have stood at each place, for
    *  saying what went wrong. */
   readonly #wanted = new Map<number, Set<string>>();
+
+  /** Which block wrote the row at each place. */
+  readonly #owners = new Map<number, string>();
+
+  /** Places two blocks claimed, which stay claimed
+   *  once disputed: a third agreeing with the first
+   *  does not settle it. */
+  readonly #disputed = new Set<number>();
 
   constructor(rows: readonly RecordedRow[], end: number) {
     this.#end = end;
@@ -790,13 +847,13 @@ class Walk {
   advance(shape: Shape, from: ReadonlySet<number>): Set<number> {
     switch (shape.kind) {
       case 'row':
-        return this.#row(shape.name, from);
+        return this.#row(shape.name, shape.owner, from);
 
       case 'items':
-        return this.#items(shape.prefix, from);
+        return this.#items(shape.prefix, shape.owner, from);
 
       case 'queued':
-        return this.#queued(shape.name, from);
+        return this.#queued(shape.name, shape.owner, from);
 
       case 'stop':
         return this.#spent(from);
@@ -849,7 +906,14 @@ class Walk {
     };
   }
 
-  #row(name: string, from: ReadonlySet<number>): Set<number> {
+  /** Every place a block was confirmed to have
+   *  written, minus the ones more than one block
+   *  could claim. */
+  get owners(): Map<number, string> {
+    return new Map(this.#owners);
+  }
+
+  #row(name: string, owner: string, from: ReadonlySet<number>): Set<number> {
     const reached = new Set<number>();
 
     for (const at of from) {
@@ -859,13 +923,21 @@ class Walk {
       }
 
       this.#want(at, name);
-      if (this.#names[at] === name) reached.add(at + 1);
+
+      if (this.#names[at] === name) {
+        this.#own(at, owner);
+        reached.add(at + 1);
+      }
     }
 
     return reached;
   }
 
-  #items(prefix: string, from: ReadonlySet<number>): Set<number> {
+  #items(
+    prefix: string,
+    owner: string,
+    from: ReadonlySet<number>,
+  ): Set<number> {
     const reached = new Set<number>();
 
     for (const start of from) {
@@ -886,6 +958,7 @@ class Walk {
         this.#want(at, name);
         if (this.#names[at] !== name) break;
 
+        this.#own(at, owner);
         at += 1;
         reached.add(at);
       }
@@ -907,7 +980,7 @@ class Walk {
    * turn, and a place is reached if some number of
    * them accounts for the rows exactly.
    */
-  #queued(name: string, from: ReadonlySet<number>): Set<number> {
+  #queued(name: string, owner: string, from: ReadonlySet<number>): Set<number> {
     const reached = new Set<number>();
 
     for (const start of from) {
@@ -926,6 +999,7 @@ class Walk {
         this.#want(at, name);
         if (this.#names[at] !== name) break;
 
+        this.#own(at, owner);
         at += 1;
         reached.add(at);
 
@@ -941,6 +1015,10 @@ class Walk {
           this.#want(waited, RESULT);
           if (this.#names[waited] !== RESULT) break;
 
+          // The SDK names the row, but the block
+          // that started the run is the one
+          // waiting on it.
+          this.#own(waited, owner);
           waited += 1;
           reached.add(waited);
         }
@@ -1018,6 +1096,22 @@ class Walk {
     }
 
     return numbers;
+  }
+
+  #own(at: number, owner: string): void {
+    if (this.#disputed.has(at)) return;
+
+    const held = this.#owners.get(at);
+
+    if (held === undefined) {
+      this.#owners.set(at, owner);
+      return;
+    }
+
+    if (held === owner) return;
+
+    this.#owners.delete(at);
+    this.#disputed.add(at);
   }
 
   #want(at: number, name: string): void {

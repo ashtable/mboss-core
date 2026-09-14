@@ -54,6 +54,7 @@ import {
   starterId,
   starterNode,
   traceGrammar,
+  traceOwners,
   usePattern,
   withDecisionCases,
   withoutPositions,
@@ -246,6 +247,7 @@ const points: { offered: ReplayBoundary[]; unoffered: Unoffered[] } =
   replayBoundaries(ir, rows);
 const grammar: TraceGrammar = traceGrammar(ir);
 const verdict: TraceMatch = matchTrace(grammar, rows, 0);
+const wroteIt: Map<number, string> = traceOwners(grammar, rows);
 
 // The two halves the grammar is held between: what
 // the emitter planned to write, and the step names
@@ -335,6 +337,7 @@ void [
   regions,
   points,
   verdict,
+  wroteIt,
   emission,
   written,
   entry,

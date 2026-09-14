@@ -53,6 +53,7 @@ export {
   matchTrace,
   replayBoundaries,
   traceGrammar,
+  traceOwners,
   type RecordedRow,
   type ReplayBoundary,
   type TraceGrammar,
